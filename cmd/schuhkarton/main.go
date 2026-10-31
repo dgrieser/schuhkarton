@@ -319,12 +319,36 @@ func (r *runner) addr() string {
 
 // listen (re)binds the server; the old listener closes once the new one runs.
 func (r *runner) listen(addr string, cfg *config.Config) error {
+	r.mu.Lock()
+	old := r.ln
+	r.mu.Unlock()
+	// same port on another interface (127.0.0.1:8088 -> 0.0.0.0:8088): free it first
+	if old != nil && samePort(old.Addr().String(), addr) {
+		old.Close()
+		old = nil
+	}
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
+		if r.ln != nil && old == nil {
+			// back to the previous address
+			if back, berr := net.Listen("tcp", r.ln.Addr().String()); berr == nil {
+				r.serve(back, cfg)
+			}
+		}
 		return err
 	}
 	r.mu.Lock()
-	old := r.ln
+	r.ln = ln
+	r.mu.Unlock()
+	r.serve(ln, cfg)
+	if old != nil {
+		old.Close()
+	}
+	return nil
+}
+
+func (r *runner) serve(ln net.Listener, cfg *config.Config) {
+	r.mu.Lock()
 	r.ln = ln
 	r.mu.Unlock()
 	go func() {
@@ -338,10 +362,12 @@ func (r *runner) listen(addr string, cfg *config.Config) error {
 			log.Printf("server: %v", err)
 		}
 	}()
-	if old != nil {
-		old.Close()
-	}
-	return nil
+}
+
+func samePort(a, b string) bool {
+	_, pa, _ := net.SplitHostPort(a)
+	_, pb, _ := net.SplitHostPort(b)
+	return pa != "" && pa == pb
 }
 
 func (r *runner) start(cfg *config.Config) error {
