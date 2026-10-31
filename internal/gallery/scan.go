@@ -104,6 +104,7 @@ func (l *Library) Scan(ctx context.Context) error {
 	l.recluster()
 	l.phase.Store("bereit")
 	l.media.kick()
+	l.kickAI()
 	l.PurgeTrash()
 	return nil
 }

@@ -89,12 +89,23 @@ var seasons = []string{"", "winter", "winter", "fruhling", "fruhling", "fruhling
 
 type doc struct {
 	name, album, place, cat, date, cam, kw, desc, kind string
+	aiTags, aiDesc                                     string // AI tags (padded with spaces) and descriptions, both languages
+}
+
+func (d *doc) setAI(a *AIInfo) {
+	d.aiTags, d.aiDesc = "", ""
+	if a.ok() {
+		d.aiTags = " " + fold(strings.Join(append(append([]string(nil), a.TagsDe...), a.TagsEn...), " ")) + " "
+		d.aiDesc = fold(a.De + " " + a.En)
+	}
 }
 
 type searchIndex struct {
 	mu      sync.Mutex
 	ver     string
+	aiVer   int64
 	docs    map[string]*doc
+	tags    map[string]map[string]int // language -> AI tag -> photos
 	facets  []facet
 	builtAt time.Time
 }
@@ -142,7 +153,10 @@ func (l *Library) buildDoc(it *Item) *doc {
 	if it.Desc != "" {
 		kind += " text"
 	}
-	return &doc{
+	if l.IsDocument(it) {
+		kind += " dokument document"
+	}
+	d := &doc{
 		name:  fold(name),
 		album: fold(l.opt.Roots[it.Root].Name + "/" + it.Album),
 		place: fold(it.Place),
@@ -153,6 +167,17 @@ func (l *Library) buildDoc(it *Item) *doc {
 		desc:  fold(it.Desc),
 		kind:  kind,
 	}
+	d.setAI(l.AIOf(it))
+	return d
+}
+
+// updateAI puts a new description into the index without rebuilding it.
+func (si *searchIndex) updateAI(id string, a *AIInfo) {
+	si.mu.Lock()
+	defer si.mu.Unlock()
+	if d := si.docs[id]; d != nil {
+		d.setAI(a)
+	}
 }
 
 func (l *Library) index() *searchIndex {
@@ -161,15 +186,27 @@ func (l *Library) index() *searchIndex {
 	defer si.mu.Unlock()
 	items := l.Items()
 	ver := fmt.Sprintf("%d:%p", len(items), items)
-	if si.ver == ver {
+	aiVer := l.ai.ver.Load()
+	// new descriptions reach the docs right away (updateAI); the tag list
+	// for suggestions is refreshed at most once a minute
+	if si.ver == ver && (si.aiVer == aiVer || time.Since(si.builtAt) < time.Minute) {
 		return si
 	}
 	docs := make(map[string]*doc, len(items))
 	places, cats, cams, years := map[string]int{}, map[string]int{}, map[string]int{}, map[string]int{}
+	tags := map[string]map[string]int{"de": {}, "en": {}}
 	for _, it := range items {
 		docs[it.ID] = l.buildDoc(it)
 		if it.LivePhoto != "" {
 			continue
+		}
+		if a := l.AIOf(it); a != nil {
+			for _, t := range a.TagsDe {
+				tags["de"][t]++
+			}
+			for _, t := range a.TagsEn {
+				tags["en"][t]++
+			}
 		}
 		if it.Place != "" {
 			places[it.Place]++
@@ -197,7 +234,7 @@ func (l *Library) index() *searchIndex {
 	add(cams, "kamera", "kamera:")
 	add(years, "jahr", "jahr:")
 	sort.Slice(facets, func(a, b int) bool { return facets[a].Count > facets[b].Count })
-	si.docs, si.facets, si.ver, si.builtAt = docs, facets, ver, time.Now()
+	si.docs, si.facets, si.ver, si.builtAt, si.aiVer, si.tags = docs, facets, ver, time.Now(), aiVer, tags
 	return si
 }
 
@@ -245,6 +282,8 @@ var fieldAlias = map[string]string{
 	// English
 	"who": "person", "month": "month", "kind": "kind", "folder": "album", "category": "cat", "file": "name",
 	"weekday": "date", "day": "date", "season": "date", "time": "date",
+	// AI descriptions and tags
+	"ki": "ai", "ai": "ai", "beschreibung": "ai", "description": "ai",
 }
 
 // enWords maps English search words to the German words the index holds
@@ -294,8 +333,9 @@ func parseQuery(q string) []term {
 
 // Search finds items matching q. Plain words search everything; prefixes
 // (ort:, person:, jahr:, monat:, typ:, kamera:, album:, text:, datum:) narrow
-// the field, a leading "-" excludes. user's favorites match typ:favorit.
-func (l *Library) Search(q, user string) []Hit {
+// the field, a leading "-" excludes. user's favorites match typ:favorit;
+// lang picks the language of snippets from AI descriptions.
+func (l *Library) Search(q, user, lang string) []Hit {
 	terms := parseQuery(q)
 	if len(terms) == 0 {
 		return nil
@@ -395,6 +435,17 @@ func (l *Library) Search(q, user string) []Hit {
 		h := Hit{ID: it.ID, Score: score}
 		if snipWord != "" {
 			h.Snip = snippet(it.Desc, snipWord)
+			if h.Snip == "" && d.aiDesc != "" {
+				if a := l.AIOf(it); a != nil {
+					first, second := a.De, a.En
+					if lang == "en" {
+						first, second = second, first
+					}
+					if h.Snip = snippet(first, snipWord); h.Snip == "" {
+						h.Snip = snippet(second, snipWord)
+					}
+				}
+			}
 		}
 		hits = append(hits, h)
 	}
@@ -486,6 +537,11 @@ func matchTerm(d *doc, people string, it *Item, t term) (float64, string) {
 			return s, w[0]
 		}
 		return 0, ""
+	case "ai":
+		if s := aiScore(d, w); s > 0 {
+			return s + 1, firstIn(d.aiDesc, w)
+		}
+		return 0, ""
 	}
 	s := 0.0
 	var sw string
@@ -522,7 +578,42 @@ func matchTerm(d *doc, people string, it *Item, t term) (float64, string) {
 			}
 		}
 	}
+	// descriptions by the AI count less than what people sorted and wrote
+	if a := aiScore(d, w); a > 0 {
+		s += a
+		if sw == "" {
+			sw = firstIn(d.aiDesc, w)
+		}
+	}
 	return s, sw
+}
+
+// aiScore: a tag (whole word or word start) or a word of the AI description.
+func aiScore(d *doc, w []string) float64 {
+	for _, x := range w {
+		if strings.Contains(d.aiTags, " "+x+" ") {
+			return 3
+		}
+	}
+	if wordStart(d.aiTags, w) {
+		return 2
+	}
+	if wordStart(d.aiDesc, w) {
+		return 1.5
+	}
+	if contains(d.aiDesc, w) {
+		return 1
+	}
+	return 0
+}
+
+func firstIn(field string, w []string) string {
+	for _, x := range w {
+		if strings.Contains(field, x) {
+			return x
+		}
+	}
+	return ""
 }
 
 // snippet returns ~160 characters of text around the first match, with the
@@ -586,6 +677,19 @@ func (l *Library) Suggest(prefix, lang string) []facet {
 			weak = append(weak, f)
 		}
 	}
+	// AI tags in the viewer's language that several photos share
+	tl := "de"
+	if lang == "en" {
+		tl = "en"
+	}
+	var tagHits []facet
+	for tag, n := range si.tags[tl] {
+		if n >= 2 && strings.HasPrefix(fold(tag), p) {
+			tagHits = append(tagHits, facet{Type: "tag", Label: tag, Query: quoteIf(tag), Count: n})
+		}
+	}
+	sort.Slice(tagHits, func(a, b int) bool { return tagHits[a].Count > tagHits[b].Count })
+	out = append(out, tagHits[:min(len(tagHits), 4)]...)
 	months, words := monthsDE, dateWords
 	if lang == "en" {
 		months, words = monthsEN, dateWordsEN

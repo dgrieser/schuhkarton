@@ -25,6 +25,10 @@ func (l *Library) Start(ctx context.Context) {
 		}
 	}()
 	l.media.kick()
+	if l.aiJob.client != nil {
+		l.bg.Add(1)
+		go l.aiLoop(ctx)
+	}
 }
 
 func (m *mediaGen) kick() {

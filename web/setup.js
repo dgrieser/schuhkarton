@@ -38,6 +38,9 @@
   let importPath = '';
   const checks = new Map(); // folder path -> check result
   let faceTest = null;
+  let aiTest = null;      // last connection test
+  let aiModels = null;    // models offered by the service
+  let aiKeyField = null;  // what the key field shows: the key, ******** or $VARIABLE
   let backupCheck = null;
   let backupStatus = null;
   const admin = { name: '', pw: '', pw2: '' }; // first admin (install, or no admin yet)
@@ -53,6 +56,7 @@
       { id: 'fotos', title: t('Fotos'), render: renderFolders, ok: () => C.library.folders.length > 0 && C.library.folders.every((f) => { const c = checks.get(f.path); return !c || c.exists; }) },
       { id: 'speicher', title: t('Speicher'), render: renderStorage, ok: () => !!C.cache.dir },
       { id: 'gesichter', title: t('Gesichter'), render: renderFaces, ok: () => C.faces.mode !== 'remote' || !!C.faces.url },
+      { id: 'ki', title: t('KI'), render: renderAI, ok: () => C.ai.mode !== 'on' || (/^https?:\/\//.test(C.ai.url || '') && !!C.ai.model) },
       { id: 'sicherung', title: t('Sicherung'), render: renderBackup, ok: () => true },
       { id: 'zugriff', title: t('Zugriff'), render: renderAccess, ok: () => /:\d+$/.test(C.server.listen) },
       S.needAdmin ? { id: 'konto', title: t('Admin'), render: renderAdmin, ok: adminOK }
@@ -121,6 +125,8 @@
           ${lockNote('library.write_files')}
           <label class="field"><span>${t('Papierkorb nach so vielen Tagen leeren (0 = nie)')}</span>
             <input type="number" id="ftrash" min="0" max="3650" value="${C.library.trash_days ?? 30}" ${dis('library.trash_days')}>${lockNote('library.trash_days')}</label>
+          <label class="field"><span>${t('Ordner mit Dokumenten (Scans, Belege; standardmäßig ausgeblendet, kommagetrennt)')}</span>
+          <input id="fdocs" value="${esc((C.library.documents || []).join(', '))}" ${dis('library.documents')}>${lockNote('library.documents')}</label>
           <label class="field"><span>${t('Diese Datei- und Ordnernamen auslassen (Muster, kommagetrennt)')}</span>
           <input id="fexcl" value="${esc((C.library.exclude || []).join(', '))}" ${dis('library.exclude')}>${lockNote('library.exclude')}</label>
         </details>
@@ -162,6 +168,7 @@
     }
     const ex = $('#fexcl', el);
     ex.oninput = () => { C.library.exclude = ex.value.split(',').map((s) => s.trim()).filter(Boolean); };
+    $('#fdocs', el).oninput = (e) => { C.library.documents = e.target.value.split(',').map((x) => x.trim()).filter(Boolean); };
     $('#fmeta', el).onchange = (e) => { C.library.folder_meta = e.target.checked; };
     $('#fwrite', el).onchange = (e) => { C.library.write_files = e.target.checked; };
     $('#ftrash', el).oninput = (e) => { C.library.trash_days = Math.max(0, +e.target.value || 0); };
@@ -303,6 +310,115 @@
       faceTest = await api('/api/setup/faces', { url: C.faces.url, token: C.faces.token }).catch((e) => ({ ok: false, error: e.message }));
       showRes();
     };
+  }
+
+  // --- step 3b: AI descriptions ------------------------------------------------------
+  const MITTWALD = 'https://llm.aihosting.mittwald.de/v1';
+  const aiPreset = () => (C.ai.mode !== 'on' ? 'off' : (C.ai.url || MITTWALD).replace(/\/$/, '') === MITTWALD ? 'mittwald' : 'custom');
+  function renderAI(el) {
+    const preset = aiPreset();
+    if (aiKeyField === null) aiKeyField = C.ai.api_key_env ? `$${C.ai.api_key_env}` : (C.ai.api_key || '');
+    const langs = C.ai.languages || ['de', 'en'];
+    const models = aiModels || [];
+    const choice = (v, title, text) => `<label class="choice ${preset === v ? 'on' : ''}"><input type="radio" name="aim" value="${v}" ${preset === v ? 'checked' : ''} ${dis('ai.mode')}>
+      <b>${title}</b><span class="muted">${text}</span></label>`;
+    el.innerHTML = `
+      <section class="card">
+        <h2>${t('Fotos beschreiben lassen?')}</h2>
+        <p class="muted">${t('Ein KI-Modell schreibt zu jedem Foto eine kurze Beschreibung und Stichwörter, auf Deutsch und Englisch. Dann findet die Suche auch „Hund im Schnee“ oder „birthday cake“. Dafür wird jedes Foto verkleinert an den gewählten Dienst geschickt. Ohne KI funktioniert alles andere genauso.')}</p>
+        <div class="choices">
+          ${choice('off', t('Aus'), t('Keine Beschreibungen. Später jederzeit einschaltbar.'))}
+          ${choice('mittwald', t('mittwald AI hosting'), t('Gehostete Modelle in Deutschland, braucht einen API-Schlüssel.'))}
+          ${choice('custom', t('Eigener Dienst'), t('OpenAI-kompatible API, z.B. vLLM oder Ollama im eigenen Netz.'))}
+        </div>${lockNote('ai.mode')}
+      </section>
+      ${preset === 'off' ? '' : `<section class="card">
+        <h2>${t('Verbindung')}</h2>
+        ${preset === 'custom' ? `<label class="field"><span>${t('Adresse der API')}</span><input id="aurl" value="${esc(C.ai.url || '')}" placeholder="http://localhost:8000/v1" spellcheck="false" ${dis('ai.url')}>${lockNote('ai.url')}</label>` : ''}
+        <label class="field"><span>${t('API-Schlüssel')}${preset === 'custom' ? ` <span class="muted">(${t('falls nötig')})</span>` : ''}</span>
+          <div class="addrow"><input id="akey" type="password" autocomplete="off" spellcheck="false" value="${esc(aiKeyField)}" placeholder="${preset === 'mittwald' ? 'sk-…' : ''}" ${dis('ai.api_key')}>
+          ${S.aiKey?.mittwaldEnv && aiKeyField !== '$MITTWALD_LLM_API_KEY' ? `<button class="btn" id="aenv" title="${t('Den Schlüssel aus der Umgebungsvariablen nehmen; er wird dann nicht gespeichert.')}">$MITTWALD_LLM_API_KEY</button>` : ''}</div>
+          <span class="muted small">${t('Den Schlüssel selbst eintragen oder eine Umgebungsvariable wie {v}; dann bleibt er nur dort.', { v: '<code>$MITTWALD_LLM_API_KEY</code>' })}</span>
+          ${lockNote('ai.api_key')}</label>
+        <div class="row2">
+          <label class="field"><span>${t('Modell')}</span>
+            ${models.length ? `<select id="amodel" ${dis('ai.model')}>${[...new Set([C.ai.model, ...models])].filter(Boolean).map((m) => `<option ${m === C.ai.model ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select>`
+              : `<input id="amodel" value="${esc(C.ai.model || '')}" spellcheck="false" ${dis('ai.model')}>`}
+            ${lockNote('ai.model')}</label>
+          <label class="field"><span>${t('Gleichzeitige Anfragen')}</span><input type="number" id="awork" min="1" max="16" value="${C.ai.workers || 2}" ${dis('ai.workers')}></label>
+        </div>
+        <div class="field"><span>${t('Sprachen')}</span>
+          <div class="addrow">
+            <label class="check"><input type="checkbox" data-lang="de" ${langs.includes('de') ? 'checked' : ''} ${dis('ai.languages')}><span>${t('Deutsch')}</span></label>
+            <label class="check"><input type="checkbox" data-lang="en" ${langs.includes('en') ? 'checked' : ''} ${dis('ai.languages')}><span>${t('Englisch')}</span></label>
+          </div></div>
+        <div class="addrow"><button class="btn" id="amodels">${t('Modelle laden')}</button><button class="btn primary" id="atest">${t('Verbindung testen')}</button></div>
+        <div class="stat" id="ares"></div>
+        <p class="muted small">${t('Der Test schickt ein kleines gezeichnetes Bild, kein Foto. Für Bilder braucht es ein Modell, das Bilder versteht (z.B. {m}).', { m: '<code>Qwen3.8-27B-NVFP4</code>' })}</p>
+      </section>`}`;
+    for (const r of $$('input[name=aim]', el)) r.onchange = () => {
+      if (r.value === 'off') C.ai.mode = 'off';
+      else {
+        C.ai.mode = 'on';
+        if (r.value === 'mittwald') C.ai.url = MITTWALD;
+        else if ((C.ai.url || MITTWALD) === MITTWALD) C.ai.url = 'http://localhost:8000/v1';
+        C.ai.model ||= 'Qwen3.8-27B-NVFP4';
+      }
+      aiModels = null; aiTest = null;
+      renderAI(el);
+      validate();
+      if (C.ai.mode === 'on') loadModels(el, true);
+    };
+    if (preset === 'off') return;
+    const showRes = () => {
+      const r = aiTest, box = $('#ares', el);
+      if (!r || !box) return;
+      if (r.busy) { box.textContent = r.busy; return; }
+      const res = r.result || {};
+      if (res.answer) {
+        const a = res.answer, txt = LANG === 'en' ? (a.en || a.de) : (a.de || a.en);
+        const tags = (LANG === 'en' ? a.tagsEn : a.tagsDe) || a.tagsDe || a.tagsEn || [];
+        box.innerHTML = `<span class="good">${icon('check')}${t('Antwort in {s} s', { s: (res.ms / 1000).toFixed(1) })}${a.tokens ? ` · ${t('{n} Tokens', { n: num(a.tokens) })}` : ''}</span>
+          <div class="muted">„${esc(txt)}“</div><div class="chips">${tags.slice(0, 10).map((x) => `<span class="chip">${esc(x)}</span>`).join('')}</div>`;
+      } else if (res.error) {
+        box.innerHTML = `<span class="bad">${icon('warn')}${esc(t(res.error))}</span>${r.hasKey === false && preset === 'mittwald' ? `<div class="muted">${t('Kein API-Schlüssel angegeben.')}</div>` : ''}`;
+      } else if (res.models) {
+        box.innerHTML = `<span class="good">${icon('check')}${t('{n} Modelle gefunden', { n: res.models.length })}</span>`;
+      }
+    };
+    showRes();
+    const url = $('#aurl', el), key = $('#akey', el), model = $('#amodel', el);
+    if (url) url.oninput = () => { C.ai.url = url.value.trim(); aiModels = null; validate(); };
+    key.oninput = () => { aiKeyField = key.value.trim(); C.ai.api_key = aiKeyField; };
+    const envBtn = $('#aenv', el);
+    if (envBtn) envBtn.onclick = () => { aiKeyField = '$MITTWALD_LLM_API_KEY'; C.ai.api_key = aiKeyField; aiModels = null; renderAI(el); loadModels(el, true); };
+    model.oninput = model.onchange = () => { C.ai.model = model.value.trim(); validate(); };
+    $('#awork', el).oninput = (e) => { C.ai.workers = Math.max(1, Math.min(16, +e.target.value || 1)); };
+    for (const c of $$('[data-lang]', el)) c.onchange = () => {
+      const l = $$('[data-lang]', el).filter((x) => x.checked).map((x) => x.dataset.lang);
+      if (!l.length) { c.checked = true; return; }
+      C.ai.languages = l;
+    };
+    $('#amodels', el).onclick = () => loadModels(el, false);
+    $('#atest', el).onclick = async () => {
+      aiTest = { busy: t('Das Modell beschreibt ein Testbild …') };
+      showRes();
+      aiTest = await api('/api/setup/ai', { url: C.ai.url, key: aiKeyField, model: C.ai.model, describe: true }).catch((e) => ({ result: { error: e.message } }));
+      if (aiTest.result?.models?.length) aiModels = aiTest.result.models;
+      const keep = aiTest;
+      renderAI(el);
+      aiTest = keep;
+      showRes();
+    };
+  }
+  async function loadModels(el, quiet) {
+    const r = await api('/api/setup/ai', { url: C.ai.url, key: aiKeyField ?? '', model: C.ai.model, describe: false }).catch((e) => ({ result: { error: e.message } }));
+    if (r.result?.models?.length) {
+      aiModels = r.result.models;
+      if (!aiModels.includes(C.ai.model) && aiModels.includes('Qwen3.8-27B-NVFP4')) C.ai.model = 'Qwen3.8-27B-NVFP4';
+    }
+    if (!quiet || !r.result?.models) aiTest = r;
+    if (STEPS[step]?.id === 'ki') { renderAI(el); validate(); }
   }
 
   // --- step 4: backup ---------------------------------------------------------------
@@ -560,6 +676,7 @@
           ${row(t('Cache'), esc(C.cache.dir) + (importPath ? `<br><span class="muted">${t('übernimmt {x}', { x: esc(importPath) })}</span>` : ''))}
           ${row(t('Vorschauen'), [C.cache.previews ? t('große vorab') : t('große bei Bedarf'), C.media.video_previews ? t('animierte Videos') : t('Videos ohne Animation'), C.media.transcode ? t('HEVC umwandeln') : ''].filter(Boolean).join(' · '))}
           ${row(t('Gesichter'), C.faces.mode === 'off' ? t('aus') : C.faces.mode === 'remote' ? `${t('Container')} ${esc(C.faces.url)}` : t('Python auf diesem Rechner'))}
+          ${row(t('KI'), C.ai.mode !== 'on' ? t('aus') : `${esc(aiPreset() === 'mittwald' ? 'mittwald AI hosting' : C.ai.url)} · ${esc(C.ai.model)} · ${(C.ai.languages || []).join(', ')}`)}
           ${row(t('Sicherung'), C.backup.dir ? `${esc(C.backup.dir)} <span class="muted">${{ '1h': t('stündlich'), '24h': t('täglich'), '168h': t('wöchentlich'), '0': t('auf Knopfdruck') }[C.backup.interval] || esc(C.backup.interval)}</span>` : t('aus'))}
           ${row(t('Adresse'), esc(C.server.listen) + (tokenMode === 'off' ? ` · ${t('ohne Schlüssel')}` : tokenMode === 'new' ? ` · ${t('neuer Schlüssel')}` : ''))}
           ${row(t('Konten'), [S.needAdmin ? `${t('Admin')}: ${esc(admin.name)}` : '', C.access.anonymous ? t('ansehen ohne Konto') : t('nur mit Konto'), C.access.register ? t('Registrieren mit Freigabe') : t('Konten nur durch Admins')].filter(Boolean).join(' · '))}
@@ -631,6 +748,7 @@
     C.library.folders ||= [];
     C.library.exclude ||= [];
     C.access ||= { anonymous: true, register: true };
+    C.ai ||= { mode: 'off', url: MITTWALD, model: 'Qwen3.8-27B-NVFP4', workers: 2, languages: ['de', 'en'] };
     buildSteps();
     if (S.mode === 'settings') {
       $('#title').textContent = t('Einstellungen');
