@@ -37,6 +37,10 @@ build-all: ## Cross-compile every release target (CGO off) into dist/
 snapshot: ## GoReleaser snapshot build (no publishing)
 	$(GORELEASER) release --snapshot --clean
 
+.PHONY: release
+release: ## Publish the release for the current tag (needs GITHUB_TOKEN)
+	$(GORELEASER) release --clean
+
 .PHONY: faces-image
 faces-image: ## Build the face detection container (schuhkarton-faces)
 	docker build -f Dockerfile.faces -t schuhkarton-faces .

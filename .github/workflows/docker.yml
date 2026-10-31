@@ -15,7 +15,7 @@ permissions:
 jobs:
   image:
     name: Build and push schuhkarton-faces
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, ubuntu]
     steps:
       - uses: actions/checkout@v4
 
@@ -49,5 +49,3 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: VERSION=${{ github.ref_type == 'tag' && github.ref_name || 'dev' }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
