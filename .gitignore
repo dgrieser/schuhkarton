@@ -1,0 +1,4 @@
+/schuhkarton
+/dist/
+*.test
+/coverage.out

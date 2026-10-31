@@ -1,0 +1,513 @@
+package gallery
+
+import (
+	"fmt"
+	"path"
+	"regexp"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+	"unicode"
+	"unicode/utf8"
+)
+
+// fold lowercases and strips accents so "Lübbecke" matches "lubbecke".
+func fold(s string) string {
+	f, _ := foldMap(s)
+	return f
+}
+
+var foldTable = map[rune]string{
+	'ä': "a", 'á': "a", 'à': "a", 'â': "a", 'ã': "a", 'å': "a", 'æ': "ae",
+	'ö': "o", 'ó': "o", 'ò': "o", 'ô': "o", 'õ': "o", 'ø': "o", 'œ': "oe",
+	'ü': "u", 'ú': "u", 'ù': "u", 'û': "u",
+	'é': "e", 'è': "e", 'ê': "e", 'ë': "e",
+	'í': "i", 'ì': "i", 'î': "i", 'ï': "i",
+	'ç': "c", 'ñ': "n", 'ß': "ss", 'ý': "y", 'ÿ': "y", 'š': "s", 'ž': "z", 'č': "c", 'ł': "l",
+}
+
+// foldMap folds s and returns, for every byte of the result, the byte offset
+// in s it came from.
+func foldMap(s string) (string, []int) {
+	var b strings.Builder
+	b.Grow(len(s))
+	idx := make([]int, 0, len(s))
+	for i, r := range s {
+		r = unicode.ToLower(r)
+		if rep, ok := foldTable[r]; ok {
+			b.WriteString(rep)
+			for range len(rep) {
+				idx = append(idx, i)
+			}
+			continue
+		}
+		if unicode.IsSpace(r) {
+			r = ' '
+		}
+		n := utf8.RuneLen(r)
+		if n < 0 {
+			continue
+		}
+		b.WriteRune(r)
+		for range n {
+			idx = append(idx, i)
+		}
+	}
+	return b.String(), idx
+}
+
+// germanVariants turns "ue" into "u" etc., so "luebbecke" finds "Lübbecke".
+func germanVariants(tok string) []string {
+	out := []string{tok}
+	if r := strings.NewReplacer("ae", "a", "oe", "o", "ue", "u").Replace(tok); r != tok {
+		out = append(out, r)
+	}
+	return out
+}
+
+var spaces = regexp.MustCompile(`\s+`)
+
+type doc struct {
+	name, album, place, cat, date, cam, kw, desc, kind string
+}
+
+type searchIndex struct {
+	mu      sync.Mutex
+	ver     string
+	docs    map[string]*doc
+	facets  []facet
+	builtAt time.Time
+}
+
+type facet struct {
+	Type  string `json:"type"`
+	Label string `json:"label"`
+	Query string `json:"query"`
+	Count int    `json:"count"`
+	f     string
+}
+
+var seasons = []string{"", "winter", "winter", "fruhling", "fruhling", "fruhling", "sommer", "sommer", "sommer", "herbst", "herbst", "herbst", "winter"}
+
+func (l *Library) buildDoc(it *Item) *doc {
+	t := time.Unix(it.Taken, 0).UTC()
+	date := fmt.Sprintf("%d %s %s %s %02d.%02d.%d %d-%02d-%02d %s", t.Year(), fold(monthsDE[t.Month()]), seasons[t.Month()],
+		fold(weekdaysDE[t.Weekday()]), t.Day(), int(t.Month()), t.Year(), t.Year(), int(t.Month()), t.Day(), map[bool]string{true: "wochenende"}[t.Weekday() == 0 || t.Weekday() == 6])
+	if t.Month() == 12 && t.Day() >= 24 && t.Day() <= 26 {
+		date += " weihnachten"
+	}
+	if (t.Month() == 12 && t.Day() == 31) || (t.Month() == 1 && t.Day() == 1) {
+		date += " silvester neujahr"
+	}
+	kind := "foto bild"
+	if it.Kind == Video {
+		kind = "video film"
+	}
+	if it.LiveVideo != "" {
+		kind += " live"
+	}
+	name := strings.ToLower(path.Base(it.Rel))
+	if strings.Contains(name, "screenshot") || strings.Contains(name, "bildschirmfoto") {
+		kind += " screenshot"
+	}
+	if it.Aspect > 2.2 || (it.Aspect > 0 && it.Aspect < 0.45) {
+		kind += " panorama"
+	}
+	if strings.Contains(strings.ToLower(it.Lens), "front") {
+		kind += " selfie"
+	}
+	if it.GPS {
+		kind += " gps"
+	}
+	return &doc{
+		name:  fold(name),
+		album: fold(l.opt.Roots[it.Root].Name + "/" + it.Album),
+		place: fold(it.Place),
+		cat:   fold(it.Category),
+		date:  date,
+		cam:   fold(it.Make + " " + it.Model + " " + it.Lens),
+		kw:    fold(strings.Join(it.Keywords, " ")),
+		desc:  fold(it.Desc),
+		kind:  kind,
+	}
+}
+
+func (l *Library) index() *searchIndex {
+	si := &l.search
+	si.mu.Lock()
+	defer si.mu.Unlock()
+	items := l.Items()
+	ver := fmt.Sprintf("%d:%p", len(items), items)
+	if si.ver == ver {
+		return si
+	}
+	docs := make(map[string]*doc, len(items))
+	places, cats, cams, years := map[string]int{}, map[string]int{}, map[string]int{}, map[string]int{}
+	for _, it := range items {
+		docs[it.ID] = l.buildDoc(it)
+		if it.LivePhoto != "" {
+			continue
+		}
+		if it.Place != "" {
+			places[it.Place]++
+		}
+		if it.Category != "" {
+			cats[it.Category]++
+		}
+		if c := strings.TrimSpace(it.Make + " " + it.Model); c != "" {
+			cams[c]++
+		}
+		years[strconv.Itoa(time.Unix(it.Taken, 0).UTC().Year())]++
+	}
+	var facets []facet
+	add := func(m map[string]int, typ, prefix string) {
+		for k, n := range m {
+			q := k
+			if strings.ContainsRune(k, ' ') {
+				q = `"` + k + `"`
+			}
+			facets = append(facets, facet{Type: typ, Label: k, Query: prefix + q, Count: n, f: fold(k)})
+		}
+	}
+	add(places, "ort", "ort:")
+	add(cats, "kategorie", "")
+	add(cams, "kamera", "kamera:")
+	add(years, "jahr", "jahr:")
+	sort.Slice(facets, func(a, b int) bool { return facets[a].Count > facets[b].Count })
+	si.docs, si.facets, si.ver, si.builtAt = docs, facets, ver, time.Now()
+	return si
+}
+
+// Hit is one search result.
+type Hit struct {
+	ID    string  `json:"id"`
+	Score float64 `json:"score"`
+	Snip  string  `json:"snip,omitempty"`
+}
+
+type term struct {
+	field string
+	words []string // alternatives
+	neg   bool
+}
+
+func tokenize(q string) []string {
+	var out []string
+	var cur strings.Builder
+	inQ := false
+	for _, r := range q {
+		switch {
+		case r == '"':
+			inQ = !inQ
+		case unicode.IsSpace(r) && !inQ:
+			if cur.Len() > 0 {
+				out = append(out, cur.String())
+				cur.Reset()
+			}
+		default:
+			cur.WriteRune(r)
+		}
+	}
+	if cur.Len() > 0 {
+		out = append(out, cur.String())
+	}
+	return out
+}
+
+var fieldAlias = map[string]string{
+	"ort": "place", "place": "place", "person": "person", "wer": "person", "jahr": "year", "year": "year",
+	"monat": "month", "typ": "kind", "type": "kind", "kamera": "cam", "camera": "cam", "album": "album",
+	"ordner": "album", "text": "desc", "datum": "date", "date": "date", "kategorie": "cat", "datei": "name",
+}
+
+func parseQuery(q string) []term {
+	var terms []term
+	for _, tok := range tokenize(q) {
+		t := term{}
+		if strings.HasPrefix(tok, "-") && len(tok) > 1 {
+			t.neg, tok = true, tok[1:]
+		}
+		if i := strings.IndexByte(tok, ':'); i > 0 {
+			if f, ok := fieldAlias[strings.ToLower(tok[:i])]; ok {
+				t.field, tok = f, tok[i+1:]
+			}
+		}
+		w := fold(strings.TrimSpace(tok))
+		if w == "" {
+			continue
+		}
+		if t.field == "month" {
+			if n := atoi(w); n >= 1 && n <= 12 {
+				w = fold(monthsDE[n])
+			}
+		}
+		t.words = germanVariants(w)
+		terms = append(terms, t)
+	}
+	return terms
+}
+
+// Search finds items matching q. Plain words search everything; prefixes
+// (ort:, person:, jahr:, monat:, typ:, kamera:, album:, text:, datum:) narrow
+// the field, a leading "-" excludes.
+func (l *Library) Search(q string) []Hit {
+	terms := parseQuery(q)
+	if len(terms) == 0 {
+		return nil
+	}
+	si := l.index()
+	// people names per item (people change without a rescan)
+	people := map[string]string{}
+	for _, p := range l.People() {
+		if p.Name == "" {
+			continue
+		}
+		fn := fold(p.Name)
+		for _, id := range p.Items {
+			people[id] += " " + fn
+		}
+	}
+	var hits []Hit
+	for _, it := range l.Items() {
+		if it.LivePhoto != "" {
+			continue
+		}
+		d := si.docs[it.ID]
+		if d == nil {
+			continue
+		}
+		score, ok := 0.0, true
+		var snipWord string
+		for _, t := range terms {
+			s, sw := matchTerm(d, people[it.ID], it, t)
+			if t.neg {
+				if s > 0 {
+					ok = false
+					break
+				}
+				continue
+			}
+			if s == 0 {
+				ok = false
+				break
+			}
+			score += s
+			if sw != "" && snipWord == "" {
+				snipWord = sw
+			}
+		}
+		if !ok {
+			continue
+		}
+		h := Hit{ID: it.ID, Score: score}
+		if snipWord != "" {
+			h.Snip = snippet(it.Desc, snipWord)
+		}
+		hits = append(hits, h)
+	}
+	sort.SliceStable(hits, func(a, b int) bool { return hits[a].Score > hits[b].Score })
+	return hits
+}
+
+func contains(field string, words []string) bool {
+	for _, w := range words {
+		if strings.Contains(field, w) {
+			return true
+		}
+	}
+	return false
+}
+
+// wordStart rewards matches at the beginning of a word.
+func wordStart(field string, words []string) bool {
+	for _, w := range words {
+		for i := 0; ; {
+			j := strings.Index(field[i:], w)
+			if j < 0 {
+				break
+			}
+			j += i
+			if j == 0 || !unicode.IsLetter(rune(field[j-1])) {
+				return true
+			}
+			i = j + 1
+		}
+	}
+	return false
+}
+
+func matchTerm(d *doc, people string, it *Item, t term) (float64, string) {
+	w := t.words
+	switch t.field {
+	case "place":
+		if contains(d.place, w) {
+			return 10, ""
+		}
+		return 0, ""
+	case "person":
+		if contains(people, w) {
+			return 10, ""
+		}
+		return 0, ""
+	case "year":
+		if strconv.Itoa(time.Unix(it.Taken, 0).UTC().Year()) == w[0] {
+			return 5, ""
+		}
+		return 0, ""
+	case "month", "date":
+		if contains(d.date, w) {
+			return 5, ""
+		}
+		return 0, ""
+	case "kind":
+		if contains(d.kind, w) {
+			return 5, ""
+		}
+		return 0, ""
+	case "cam":
+		if contains(d.cam, w) {
+			return 5, ""
+		}
+		return 0, ""
+	case "album":
+		if contains(d.album, w) {
+			return 6, ""
+		}
+		return 0, ""
+	case "cat":
+		if contains(d.cat, w) || contains(d.kw, w) {
+			return 6, ""
+		}
+		return 0, ""
+	case "name":
+		if contains(d.name, w) {
+			return 5, ""
+		}
+		return 0, ""
+	case "desc":
+		if contains(d.desc, w) {
+			s := 3.0
+			if wordStart(d.desc, w) {
+				s += 1
+			}
+			return s, w[0]
+		}
+		return 0, ""
+	}
+	s := 0.0
+	var sw string
+	if contains(d.place, w) {
+		s += 10
+	}
+	if contains(people, w) {
+		s += 10
+	}
+	if contains(d.cat, w) || contains(d.kw, w) {
+		s += 7
+	}
+	if contains(d.album, w) {
+		s += 4
+	}
+	if wordStart(d.date, w) || contains(d.kind, w) {
+		s += 4
+	}
+	if contains(d.cam, w) {
+		s += 3
+	}
+	if contains(d.name, w) {
+		s += 3
+	}
+	if contains(d.desc, w) {
+		s += 2
+		if wordStart(d.desc, w) {
+			s += 1
+		}
+		for _, x := range w {
+			if strings.Contains(d.desc, x) {
+				sw = x
+				break
+			}
+		}
+	}
+	return s, sw
+}
+
+// snippet returns ~160 characters of text around the first match, with the
+// match wrapped in \x01 ... \x02.
+func snippet(text, word string) string {
+	f, idx := foldMap(text)
+	j := strings.Index(f, word)
+	if j < 0 || j >= len(idx) {
+		return ""
+	}
+	start, end := idx[j], len(text)
+	if e := j + len(word); e < len(idx) {
+		end = idx[e]
+	}
+	from := max(0, start-70)
+	to := min(len(text), end+90)
+	for from > 0 && !utf8.RuneStart(text[from]) {
+		from--
+	}
+	for to < len(text) && !utf8.RuneStart(text[to]) {
+		to++
+	}
+	out := spaces.ReplaceAllString(text[from:start], " ") + "\x01" + text[start:end] + "\x02" + spaces.ReplaceAllString(text[end:to], " ")
+	out = strings.TrimSpace(out)
+	if from > 0 {
+		out = "… " + out
+	}
+	if to < len(text) {
+		out += " …"
+	}
+	return out
+}
+
+// Suggest returns places, people, categories, cameras and years starting
+// with (or containing) the prefix.
+func (l *Library) Suggest(prefix string) []facet {
+	p := fold(strings.TrimSpace(prefix))
+	if p == "" {
+		return nil
+	}
+	si := l.index()
+	var out, weak []facet
+	for _, per := range l.People() {
+		if per.Name == "" {
+			continue
+		}
+		fn := fold(per.Name)
+		f := facet{Type: "person", Label: per.Name, Query: "person:" + quoteIf(per.Name), Count: per.Count}
+		if strings.HasPrefix(fn, p) {
+			out = append(out, f)
+		} else if strings.Contains(fn, p) {
+			weak = append(weak, f)
+		}
+	}
+	for _, f := range si.facets {
+		if strings.HasPrefix(f.f, p) {
+			out = append(out, f)
+		} else if strings.Contains(f.f, " "+p) || (len(p) > 2 && strings.Contains(f.f, p)) {
+			weak = append(weak, f)
+		}
+	}
+	for m := 1; m <= 12; m++ {
+		if strings.HasPrefix(fold(monthsDE[m]), p) {
+			out = append(out, facet{Type: "monat", Label: monthsDE[m], Query: "monat:" + strings.ToLower(monthsDE[m])})
+		}
+	}
+	out = append(out, weak...)
+	if len(out) > 12 {
+		out = out[:12]
+	}
+	return out
+}
+
+func quoteIf(s string) string {
+	if strings.ContainsRune(s, ' ') {
+		return `"` + s + `"`
+	}
+	return s
+}
