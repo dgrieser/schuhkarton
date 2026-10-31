@@ -63,6 +63,12 @@
     if (me.title) { $('#title').textContent = me.title; document.title = `${me.title} – ${t('Anmelden')}`; }
     if (me.role && me.role !== 'anon') { location.href = next; return; }
     const alt = $('#alt');
+    if (me.needAdmin) {
+      const n = document.createElement('p');
+      n.className = 'login-note';
+      n.textContent = t('Es gibt noch kein Admin-Konto. Den Einrichtungslink öffnen, den schuhkarton beim Start ausgibt (…/setup?token=…); dort wird ein neues oder ein hier registriertes Konto zum Admin.');
+      $('#form').before(n);
+    }
     if (me.anonymous && me.keyOK) alt.innerHTML = `<a href="${next.replace(/"/g, '')}">${t('Ohne Konto weiter ansehen')}</a>`;
     else if (me.anonymous) alt.textContent = t('Ohne Konto ansehen: den Link mit Zugangsschlüssel öffnen.');
     draw();

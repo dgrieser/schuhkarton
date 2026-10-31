@@ -169,3 +169,41 @@ func TestSafeNext(t *testing.T) {
 		}
 	}
 }
+
+func TestSetupClaimsRegisteredAccount(t *testing.T) {
+	dir := t.TempDir()
+	users, _ := auth.Open(filepath.Join(dir, "users.json"))
+	users.Create("Eva", "eva-passwort", auth.RoleUser, true) // registered at /login, no admin yet
+	cfg := config.Defaults()
+	cfg.SetPath(filepath.Join(dir, "config.yaml"))
+	cfg.Library.Folders = []config.Folder{{Name: "B", Path: t.TempDir()}}
+	applied := make(chan bool, 1)
+	h := NewSetup(SetupOptions{Token: "tok", Users: users, Config: func() *config.Config { return cfg }, Listen: func() string { return "127.0.0.1:1" },
+		Apply: func(ctx context.Context, p Plan, progress func(Progress)) (string, error) {
+			applied <- true
+			return "/", nil
+		}}).Handler()
+	save := func(pw string) map[string]any {
+		body, _ := json.Marshal(map[string]any{"config": cfg, "tokenMode": "keep", "admin": map[string]string{"name": "eva", "password": pw}})
+		r := httptest.NewRequest("POST", "/api/setup/save", strings.NewReader(string(body)))
+		r.AddCookie(&http.Cookie{Name: setupCookie, Value: "tok"})
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		var res map[string]any
+		json.Unmarshal(w.Body.Bytes(), &res)
+		return res
+	}
+	if res := save("falsch-falsch"); res["ok"] == true {
+		t.Fatalf("wrong password accepted: %v", res)
+	}
+	if users.HasAdmin() {
+		t.Fatal("admin without the right password")
+	}
+	if res := save("eva-passwort"); res["ok"] != true {
+		t.Fatalf("claim: %v", res)
+	}
+	<-applied
+	if u, _ := users.Get("Eva"); !u.IsAdmin() {
+		t.Fatalf("Eva is not admin: %+v", u)
+	}
+}

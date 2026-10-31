@@ -209,6 +209,10 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 	if id.user.IsAdmin() && s.users != nil {
 		res["pendingUsers"] = s.users.Pending()
 	}
+	if s.users != nil && !s.users.HasAdmin() {
+		// the login page explains how the first admin is made
+		res["needAdmin"] = true
+	}
 	writeJSON(w, r, res)
 }
 

@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
+	"errors"
 	"io/fs"
 	"net"
 	"net/http"
@@ -326,7 +327,16 @@ func (s *Setup) save(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, r, map[string]any{"ok": false, "error": "Bitte zuerst ein Admin-Konto anlegen"})
 			return
 		}
-		if err := s.o.Users.Create(p.Admin.Name, p.Admin.Password, auth.RoleAdmin, false); err != nil {
+		err := s.o.Users.Create(p.Admin.Name, p.Admin.Password, auth.RoleAdmin, false)
+		if errors.Is(err, auth.ErrExists) {
+			// registered at /login already: the right password makes it the admin
+			if cerr := s.o.Users.ClaimAdmin(p.Admin.Name, p.Admin.Password); cerr != nil {
+				err = errors.New("Dieses Konto gibt es schon. Mit seinem Passwort wird es zum Admin; das Passwort stimmt nicht.")
+			} else {
+				err = nil
+			}
+		}
+		if err != nil {
 			writeJSON(w, r, map[string]any{"ok": false, "error": err.Error()})
 			return
 		}

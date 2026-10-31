@@ -475,6 +475,31 @@ func (s *Store) ChangePassword(name, old, pw, keep string) error {
 	return s.save()
 }
 
+// ClaimAdmin makes an existing account an active admin once its password is
+// confirmed. The setup link uses it while there is no admin yet, for
+// somebody who registered at /login before opening the link.
+func (s *Store) ClaimAdmin(name, password string) error {
+	s.mu.Lock()
+	s.refresh()
+	u := s.users[fold(name)]
+	hash := dummyHash
+	if u != nil {
+		hash = u.Hash
+	}
+	s.mu.Unlock()
+	if ok := VerifyPassword(hash, password); !ok || u == nil {
+		return ErrBadLogin
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	u = s.users[fold(name)]
+	if u == nil {
+		return ErrBadLogin
+	}
+	u.Role, u.Pending, u.Disabled = RoleAdmin, false, false
+	return s.save()
+}
+
 // --- sessions -------------------------------------------------------------------
 
 // Login checks name and password and starts a session. It returns the

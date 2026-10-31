@@ -104,3 +104,21 @@ func TestRateLimit(t *testing.T) {
 		t.Fatalf("other client: %v", err)
 	}
 }
+
+func TestClaimAdmin(t *testing.T) {
+	s, _ := Open(filepath.Join(t.TempDir(), "users.json"))
+	s.Create("Dora", "dora-pass", RoleUser, true)
+	if err := s.ClaimAdmin("dora", "falsch-pass"); err != ErrBadLogin {
+		t.Fatalf("wrong password: %v", err)
+	}
+	if err := s.ClaimAdmin("nobody", "dora-pass"); err != ErrBadLogin {
+		t.Fatalf("unknown: %v", err)
+	}
+	if err := s.ClaimAdmin("dora", "dora-pass"); err != nil {
+		t.Fatal(err)
+	}
+	u, _ := s.Get("Dora")
+	if !u.IsAdmin() {
+		t.Fatalf("not an active admin: %+v", u)
+	}
+}

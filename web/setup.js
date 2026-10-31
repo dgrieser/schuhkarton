@@ -443,7 +443,7 @@
             <label class="field"><span>${t('Passwort')}</span><input id="apw" type="password" autocomplete="new-password" value="${esc(admin.pw)}"></label>
             <label class="field"><span>${t('Passwort wiederholen')}</span><input id="apw2" type="password" autocomplete="new-password" value="${esc(admin.pw2)}"></label>
           </div>
-          <p class="muted small">${t('Mindestens 8 Zeichen.')} <span id="ahint"></span></p>
+          <p class="muted small">${t('Mindestens 8 Zeichen.')} ${t('Schon auf der Anmeldeseite registriert? Denselben Namen und dasselbe Passwort eingeben, dann wird dieses Konto zum Admin.')} <span id="ahint"></span></p>
         </form>
       </section>`;
     const upd = () => {

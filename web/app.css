@@ -856,3 +856,5 @@ body:not([data-role="admin"]):not([data-role="user"]) [data-need="user"] { displ
   .acc-pending::before { content: attr(data-n); font-size: 12px; font-weight: 700; }
   .side-tools #langBtn { width: 38px; padding: 0; justify-content: center; }
 }
+.login-note { margin: 0 0 12px; padding: 12px 14px; border-radius: 14px; font-size: 14px; line-height: 1.45;
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface)); border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line)); }
