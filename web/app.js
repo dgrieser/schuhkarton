@@ -430,7 +430,9 @@
     // activate selects (selection mode, check, modifier keys) or opens the tile
     activate(a, e) {
       const id = a.dataset.id;
-      if (S.selecting || e.target.closest('.check') || e.ctrlKey || e.metaKey || e.shiftKey) {
+      // the check circle selects with a mouse; on touch only a long press starts selecting
+      const touch = e.pointerType ? e.pointerType === 'touch' : isTouch;
+      if (S.selecting || (e.target.closest('.check') && !touch) || e.ctrlKey || e.metaKey || e.shiftKey) {
         if (e.shiftKey && this.lastSel !== undefined) {
           const i0 = this.index.get(this.lastSel), i1 = this.index.get(id);
           const [lo, hi] = i0 < i1 ? [i0, i1] : [i1, i0];

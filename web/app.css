@@ -503,8 +503,11 @@ body.has-scrubber .view { padding-right: 64px; }
 @media (hover: none) {
   .v-nav { opacity: .85; background: rgba(20, 20, 20, .35); }
   .tile .check { width: 28px; height: 28px; }
+  /* touch: no hidden check circle to hit by accident; a long press starts selecting */
+  body:not(.selecting) .tile .check { display: none; }
   .sec-head .selall { opacity: 1; }
   .sec-head .selall span { display: none; }
+  body:not(.selecting) .sec-head .selall { display: none; }
   .scrubber { width: 44px; }
   .scrubber .tip { opacity: 1; }
   .nav a { padding: 12px; }
@@ -914,3 +917,5 @@ select.sel, .setup .user select, .setup #nrole, .adm-shift select {
   .search .field { padding-left: 10px; gap: 8px; }
 }
 .v-info .ai-redo { background: none; border: 0; padding: 0; margin-top: 6px; color: var(--muted); font: inherit; font-size: 12.5px; cursor: pointer; text-decoration: underline; }
+/* a Live Photo video that does not match its photo shows with black bars, not over the photo's edges */
+.v-media .live-v { background: #000; object-fit: contain; }

@@ -139,6 +139,16 @@ func (l *Library) Rotate(ids []string, deg int, by string) (EditResult, error) {
 		l.rekey(it, oldKey, deg)
 		changed = append(changed, it)
 		res.Changed++
+		// a Live Photo's video turns along, or it would play sideways over the photo
+		if it.LiveVideo != "" {
+			if lv := l.Get(it.LiveVideo); lv != nil {
+				if err := l.rotateVideo(lv, deg); err != nil {
+					res.warn("%s: %v", path.Base(lv.Rel), err)
+				} else {
+					changed = append(changed, lv)
+				}
+			}
+		}
 	}
 	if err := l.saveEdits(); err != nil {
 		return res, err
@@ -148,3 +158,46 @@ func (l *Library) Rotate(ids []string, deg int, by string) (EditResult, error) {
 }
 
 func nowUnix() int64 { return time.Now().Unix() }
+
+// rotateVideo turns a video by deg clockwise through the rotation of its
+// QuickTime track header, which browsers and ffmpeg honour. Thumbnails,
+// previews and transcodes are made again from the turned file.
+func (l *Library) rotateVideo(it *Item, deg int) error {
+	if !l.opt.WriteFiles || l.opt.ExifTool == "" {
+		return errors.New("Live-Video bleibt ungedreht: Änderungen werden nicht in Dateien geschrieben")
+	}
+	out, err := exifToolCmd(l.opt.ExifTool, "-s3", "-n", "-Rotation", l.Path(it)).Output()
+	if err != nil {
+		return fmt.Errorf("Drehung nicht lesbar: %v", err)
+	}
+	cur := atoi(strings.TrimSpace(string(out)))
+	next := ((cur+deg)%360 + 360) % 360
+	if err := l.writeTags(it, []string{fmt.Sprintf("-Rotation=%d", next)}); err != nil {
+		return err
+	}
+	oldKey := it.key
+	st, serr := os.Stat(l.Path(it))
+	if serr == nil && st.Size() == it.Size && st.ModTime().Unix() == it.MTime {
+		// same size within the same second: move the time on, so the cache key changes
+		t := st.ModTime().Add(time.Second)
+		if os.Chtimes(l.Path(it), t, t) == nil {
+			st, serr = os.Stat(l.Path(it))
+		}
+	}
+	l.mu.Lock()
+	if serr == nil {
+		it.Size, it.MTime = st.Size(), st.ModTime().Unix()
+	}
+	if deg != 180 {
+		it.W, it.H = it.H, it.W
+		if it.Aspect > 0 {
+			it.Aspect = 1 / it.Aspect
+		}
+	}
+	it.key = l.keyOf(it)
+	l.mu.Unlock()
+	if it.key != oldKey {
+		l.removeDerivatives(oldKey, 0) // the poster and previews show the old turn
+	}
+	return nil
+}
