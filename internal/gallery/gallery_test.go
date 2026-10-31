@@ -153,7 +153,7 @@ func TestSearchOrWithinField(t *testing.T) {
 	l.setItems([]*Item{mk("a", "2018/06 Juni Lübbecke/a.jpg", 2018), mk("b", "2019/06 Juni Dresden/b.jpg", 2019), mk("c", "2019/06 Juni Lübbecke/c.jpg", 2019)})
 	ids := func(q string) string {
 		var out []string
-		for _, h := range l.Search(q, "") {
+		for _, h := range l.Search(q, "", "") {
 			out = append(out, h.ID)
 		}
 		sort.Strings(out)
@@ -167,5 +167,24 @@ func TestSearchOrWithinField(t *testing.T) {
 	}
 	if got := ids("lübbecke -jahr:2018"); got != "c" {
 		t.Errorf("exclusion: %q", got)
+	}
+}
+
+func TestIsDocument(t *testing.T) {
+	l := &Library{opt: Options{Roots: []Root{{Name: "Bilder", Path: "/x"}, {Name: "Scans", Path: "/y"}}}}
+	cases := map[*Item]bool{
+		{Root: 0, Rel: "Dokumente/2019/02 Februar Rechnung/a.jpg"}: true,
+		{Root: 0, Rel: "2019/06 Juni Lübbecke/a.jpg"}:              false,
+		{Root: 1, Rel: "a.jpg"}:                                    true, // the root itself
+		{Root: 0, Rel: "dokumente/b.png"}:                          true, // case does not matter
+	}
+	for it, want := range cases {
+		if got := l.IsDocument(it); got != want {
+			t.Errorf("%s: %v, want %v", it.Rel, got, want)
+		}
+	}
+	l.opt.DocFolders = []string{}
+	if l.IsDocument(&Item{Rel: "Dokumente/a.jpg"}) {
+		t.Error("an empty list must switch documents off")
 	}
 }

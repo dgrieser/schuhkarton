@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
@@ -27,6 +28,7 @@ type Config struct {
 	Cache   Cache   `yaml:"cache" json:"cache"`
 	Media   Media   `yaml:"media" json:"media"`
 	Faces   Faces   `yaml:"faces" json:"faces"`
+	AI      AI      `yaml:"ai" json:"ai"`
 	UI      UI      `yaml:"ui" json:"ui"`
 	Backup  Backup  `yaml:"backup" json:"backup"`
 	Worker  Worker  `yaml:"worker" json:"worker"`
@@ -83,6 +85,9 @@ type Library struct {
 	// TrashDays empties deleted files from the trash after this many days
 	// (0: only by hand).
 	TrashDays int `yaml:"trash_days" json:"trash_days"`
+	// Documents names folders whose files count as documents (scans,
+	// receipts): galleries hide them unless documents are switched on.
+	Documents []string `yaml:"documents" json:"documents"`
 }
 
 // Cache is where everything derived lives.
@@ -122,6 +127,44 @@ type Faces struct {
 	ModelsDir string `yaml:"models_dir" json:"models_dir"`
 }
 
+// AI describes photos with a vision language model behind an
+// OpenAI-compatible API (mittwald AI hosting, vLLM, Ollama, …): a short
+// description and tags in German and English that the search finds. Off by
+// default: photos are sent (downscaled) to that service.
+type AI struct {
+	// Mode is "off" or "on".
+	Mode string `yaml:"mode" json:"mode"`
+	// URL is the API base, e.g. https://llm.aihosting.mittwald.de/v1.
+	URL string `yaml:"url" json:"url"`
+	// APIKey is the key itself; APIKeyEnv names an environment variable
+	// that holds it instead (e.g. MITTWALD_LLM_API_KEY). Local servers need
+	// neither.
+	APIKey    string `yaml:"api_key" json:"api_key"`
+	APIKeyEnv string `yaml:"api_key_env" json:"api_key_env"`
+	Model     string `yaml:"model" json:"model"`
+	Workers   int    `yaml:"workers" json:"workers"`
+	// Languages of descriptions and tags: de, en.
+	Languages []string `yaml:"languages" json:"languages"`
+	// ImageSize is the long edge of the image that is sent.
+	ImageSize int `yaml:"image_size" json:"image_size"`
+	// Thinking lets reasoning models think first (slower, more tokens).
+	Thinking bool `yaml:"thinking" json:"thinking"`
+}
+
+// MittwaldAIURL is the OpenAI-compatible endpoint of mittwald AI hosting.
+const MittwaldAIURL = "https://llm.aihosting.mittwald.de/v1"
+
+// Key returns the API key, from the environment when APIKeyEnv is set.
+func (a AI) Key() string {
+	if a.APIKey != "" {
+		return a.APIKey
+	}
+	if a.APIKeyEnv != "" {
+		return os.Getenv(strings.TrimPrefix(a.APIKeyEnv, "$"))
+	}
+	return ""
+}
+
 // UI is the look of the web app.
 type UI struct {
 	Title string `yaml:"title" json:"title"`
@@ -158,6 +201,7 @@ func Defaults() *Config {
 		Library: Library{
 			Exclude:    []string{"_Duplikate", ".*", "@eaDir", "#recycle", "$RECYCLE.BIN", "System Volume Information", "*.tmp"},
 			FolderMeta: true, WriteFiles: true, TrashDays: 30,
+			Documents: []string{"Dokumente", "Documents", "Scans", "Belege"},
 		},
 		Cache: Cache{Dir: DefaultCacheDir()},
 		Media: Media{
@@ -165,6 +209,7 @@ func Defaults() *Config {
 			VideoPreviews: true, VideoPreviewSize: 240, Transcode: true,
 		},
 		Faces: Faces{Mode: "off", Workers: max(1, runtime.NumCPU()/4), MinScore: 0.86, ClusterThreshold: 0.48, NamedThreshold: 0.42},
+		AI:    AI{Mode: "off", URL: MittwaldAIURL, Model: "Qwen3.8-27B-NVFP4", Workers: 2, Languages: []string{"de", "en"}, ImageSize: 1024},
 		UI: UI{Title: "Schuhkarton", Theme: "system", Language: "auto",
 			MapTiles: "https://tile.openstreetmap.org/{z}/{x}/{y}.png", MapAttribution: "© OpenStreetMap"},
 		Backup: Backup{Interval: "24h", Originals: true, Cache: true, Config: true},
@@ -222,6 +267,26 @@ func (c *Config) normalize() {
 	c.Server.Listen = cmpOr(c.Server.Listen, d.Server.Listen)
 	c.Server.Token = cmpOr(c.Server.Token, "auto")
 	c.Faces.Mode = cmpOr(strings.ToLower(c.Faces.Mode), "off")
+	c.AI.Mode = cmpOr(strings.ToLower(c.AI.Mode), "off")
+	c.AI.URL = strings.TrimRight(cmpOr(strings.TrimSpace(c.AI.URL), d.AI.URL), "/")
+	c.AI.Model = cmpOr(strings.TrimSpace(c.AI.Model), d.AI.Model)
+	c.AI.APIKeyEnv = strings.TrimPrefix(strings.TrimSpace(c.AI.APIKeyEnv), "$")
+	if c.AI.Workers <= 0 {
+		c.AI.Workers = d.AI.Workers
+	}
+	if c.AI.ImageSize < 256 || c.AI.ImageSize > 4096 {
+		c.AI.ImageSize = d.AI.ImageSize
+	}
+	var langs []string
+	for _, l := range c.AI.Languages {
+		if l = strings.ToLower(strings.TrimSpace(l)); (l == "de" || l == "en") && !slices.Contains(langs, l) {
+			langs = append(langs, l)
+		}
+	}
+	if len(langs) == 0 {
+		langs = d.AI.Languages
+	}
+	c.AI.Languages = langs
 	c.UI.Title = cmpOr(c.UI.Title, d.UI.Title)
 	c.UI.Theme = cmpOr(c.UI.Theme, d.UI.Theme)
 	c.UI.Language = strings.ToLower(cmpOr(c.UI.Language, d.UI.Language))
@@ -289,6 +354,15 @@ func (c *Config) Validate() error {
 		if !filepath.IsAbs(f.Path) {
 			errs = append(errs, fmt.Sprintf("Ordner %q: Pfad muss absolut sein", f.Path))
 		}
+	}
+	switch c.AI.Mode {
+	case "off":
+	case "on":
+		if !strings.HasPrefix(c.AI.URL, "http://") && !strings.HasPrefix(c.AI.URL, "https://") {
+			errs = append(errs, fmt.Sprintf("ai.url %q: http(s)://… erwartet", c.AI.URL))
+		}
+	default:
+		errs = append(errs, fmt.Sprintf("ai.mode %q: off oder on", c.AI.Mode))
 	}
 	switch c.Faces.Mode {
 	case "off", "local":
@@ -391,6 +465,8 @@ func (c *Config) Clone() *Config {
 	n := *c
 	n.Library.Folders = append([]Folder(nil), c.Library.Folders...)
 	n.Library.Exclude = append([]string(nil), c.Library.Exclude...)
+	n.Library.Documents = append([]string(nil), c.Library.Documents...)
+	n.AI.Languages = append([]string(nil), c.AI.Languages...)
 	n.locked = c.LockedKeys()
 	return &n
 }
@@ -437,5 +513,6 @@ func (c *Config) Masked() *Config {
 		return "********"
 	}
 	n.Server.Token, n.Faces.Token, n.Worker.Token = mask(n.Server.Token), mask(n.Faces.Token), mask(n.Worker.Token)
+	n.AI.APIKey = mask(n.AI.APIKey)
 	return n
 }

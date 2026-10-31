@@ -170,7 +170,7 @@ func (s *Server) config(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, r, map[string]any{
 		"title": c.UI.Title, "theme": c.UI.Theme, "mapTiles": c.UI.MapTiles, "mapAttribution": c.UI.MapAttribution,
-		"faces": c.Faces.Mode, "videoPreviews": c.Media.VideoPreviews, "transcode": c.Media.Transcode,
+		"faces": c.Faces.Mode, "videoPreviews": c.Media.VideoPreviews, "transcode": c.Media.Transcode, "ai": c.AI.Mode,
 		"version": version.String(), "folders": len(c.Library.Folders),
 		"writeFiles": c.Library.WriteFiles, "trashDays": c.Library.TrashDays,
 	})
@@ -225,6 +225,7 @@ type compactItem struct {
 	X      bool     `json:"x,omitempty"`
 	Pp     []string `json:"pp,omitempty"`
 	Approx bool     `json:"ap,omitempty"`
+	Doc    bool     `json:"dc,omitempty"`
 }
 
 func (s *Server) items(w http.ResponseWriter, r *http.Request) {
@@ -237,7 +238,8 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 		}
 		c := compactItem{ID: it.ID, K: uint8(it.Kind), T: it.Taken, A: round(it.Aspect, 3), V: it.Key()[:8],
 			P: it.Place, Al: s.lib.AlbumOf(it), C: it.Category, D: round(it.Duration, 1),
-			F: s.lib.IsFav(user, it), X: it.Desc != "", Approx: it.TakenSrc == "folder" || it.TakenSrc == "mtime"}
+			F: s.lib.IsFav(user, it), X: it.Desc != "", Approx: it.TakenSrc == "folder" || it.TakenSrc == "mtime",
+			Doc: s.lib.IsDocument(it)}
 		if it.GPS {
 			c.La, c.Lo = round(it.Lat, 5), round(it.Lon, 5)
 		}
@@ -293,6 +295,9 @@ func (s *Server) item(w http.ResponseWriter, r *http.Request) {
 	if ed := s.lib.EditedFields(it); len(ed) > 0 {
 		res["edited"] = ed
 	}
+	if a := s.lib.AIOf(it); a != nil {
+		res["ai"] = map[string]any{"de": a.De, "en": a.En, "tagsDe": a.TagsDe, "tagsEn": a.TagsEn, "people": a.People, "model": a.Model}
+	}
 	if it.LiveVideo != "" {
 		if lv := s.lib.Get(it.LiveVideo); lv != nil {
 			res["liveV"] = lv.Key()[:8]
@@ -305,7 +310,7 @@ func (s *Server) item(w http.ResponseWriter, r *http.Request) {
 func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query().Get("q")
 	t0 := time.Now()
-	hits := s.lib.Search(q, userName(r))
+	hits := s.lib.Search(q, userName(r), r.URL.Query().Get("lang"))
 	if len(hits) > 20000 {
 		hits = hits[:20000]
 	}

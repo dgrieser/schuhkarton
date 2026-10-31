@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"os"
 	"runtime"
 	"strings"
 	"sync"
@@ -105,6 +106,7 @@ func (s *Setup) Handler() http.Handler {
 	mux.HandleFunc("POST /api/setup/folder", s.guard(s.folder))
 	mux.HandleFunc("POST /api/setup/cache", s.guard(s.cache))
 	mux.HandleFunc("POST /api/setup/faces", s.guard(s.faces))
+	mux.HandleFunc("POST /api/setup/ai", s.guard(s.aiTest))
 	mux.HandleFunc("POST /api/setup/save", s.guard(s.save))
 	mux.HandleFunc("GET /api/setup/progress", s.guard(s.progress))
 	if s.o.Install {
@@ -200,6 +202,9 @@ func (s *Setup) state(w http.ResponseWriter, r *http.Request) {
 	if view.Faces.Token != "" {
 		view.Faces.Token = "********"
 	}
+	if view.AI.APIKey != "" {
+		view.AI.APIKey = "********"
+	}
 	view.Worker.Token = ""
 	var known []string
 	for _, f := range c.Library.Folders {
@@ -222,7 +227,10 @@ func (s *Setup) state(w http.ResponseWriter, r *http.Request) {
 		"lan":        lanAddrs(),
 		"accessLink": s.accessLink(),
 		"needAdmin":  s.needAdmin(),
-		"me":         userName(r),
+		// whether a key is there (never the key), and well-known variables that hold one
+		"aiKey": map[string]any{"set": c.AI.Key() != "", "env": c.AI.APIKeyEnv,
+			"mittwaldEnv": os.Getenv("MITTWALD_LLM_API_KEY") != ""},
+		"me": userName(r),
 	})
 }
 
@@ -293,6 +301,38 @@ func (s *Setup) faces(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, r, res)
 }
 
+// aiTest lists the models of an AI service and, with describe, lets the
+// chosen model describe a small drawn test picture.
+func (s *Setup) aiTest(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		URL      string `json:"url"`
+		Key      string `json:"key"`
+		Model    string `json:"model"`
+		Describe bool   `json:"describe"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	cur := s.o.Config().AI
+	key := strings.TrimSpace(req.Key)
+	switch {
+	case key == "********":
+		key = cur.Key()
+	case strings.HasPrefix(key, "$"):
+		key = os.Getenv(strings.Trim(key, "${}"))
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
+	defer cancel()
+	url := strings.TrimRight(strings.TrimSpace(req.URL), "/")
+	if url == "" {
+		url = config.MittwaldAIURL
+	}
+	res := gallery.TestAI(ctx, gallery.AIOptions{URL: url, Key: key, Model: strings.TrimSpace(req.Model),
+		Languages: cur.Languages, ImageSize: cur.ImageSize}, req.Describe)
+	writeJSON(w, r, map[string]any{"result": res, "hasKey": key != ""})
+}
+
 func (s *Setup) save(w http.ResponseWriter, r *http.Request) {
 	var p Plan
 	if err := readJSON(r, &p); err != nil || p.Config == nil {
@@ -313,6 +353,9 @@ func (s *Setup) save(w http.ResponseWriter, r *http.Request) {
 	}
 	if p.Config.Faces.Token == "********" {
 		next.Faces.Token = cur.Faces.Token
+	}
+	if p.Config.AI.APIKey == "********" && cur.Locked("ai.api_key") == "" {
+		next.AI.APIKey = cur.AI.APIKey
 	}
 	if err := next.Validate(); err != nil {
 		writeJSON(w, r, map[string]any{"ok": false, "error": err.Error()})
@@ -382,6 +425,11 @@ func merge(cur, in *config.Config) *config.Config {
 	set("library.folder_meta", func() { n.Library.FolderMeta = in.Library.FolderMeta })
 	set("library.write_files", func() { n.Library.WriteFiles = in.Library.WriteFiles })
 	set("library.trash_days", func() { n.Library.TrashDays = in.Library.TrashDays })
+	set("library.documents", func() {
+		if in.Library.Documents != nil {
+			n.Library.Documents = in.Library.Documents
+		}
+	})
 	set("cache.dir", func() { n.Cache.Dir = config.ExpandHome(strings.TrimSpace(in.Cache.Dir)) })
 	set("cache.previews", func() { n.Cache.Previews = in.Cache.Previews })
 	set("media.workers", func() { n.Media.Workers = in.Media.Workers })
@@ -394,6 +442,25 @@ func merge(cur, in *config.Config) *config.Config {
 	set("faces.url", func() { n.Faces.URL = strings.TrimSpace(in.Faces.URL) })
 	set("faces.token", func() { n.Faces.Token = strings.TrimSpace(in.Faces.Token) })
 	set("faces.workers", func() { n.Faces.Workers = in.Faces.Workers })
+	set("ai.mode", func() { n.AI.Mode = in.AI.Mode })
+	set("ai.url", func() { n.AI.URL = strings.TrimRight(strings.TrimSpace(in.AI.URL), "/") })
+	set("ai.model", func() { n.AI.Model = strings.TrimSpace(in.AI.Model) })
+	set("ai.workers", func() { n.AI.Workers = in.AI.Workers })
+	set("ai.languages", func() { n.AI.Languages = in.AI.Languages })
+	// the key field takes the key itself or $VARIABLE (the key stays in the environment)
+	if cur.Locked("ai.api_key") == "" && cur.Locked("ai.api_key_env") == "" {
+		k := strings.TrimSpace(in.AI.APIKey)
+		switch {
+		case k == "********":
+		case strings.HasPrefix(k, "$"):
+			n.AI.APIKey, n.AI.APIKeyEnv = "", strings.Trim(k, "${}")
+		default:
+			n.AI.APIKey = k
+			if k != "" || in.AI.APIKeyEnv == "" {
+				n.AI.APIKeyEnv = ""
+			}
+		}
+	}
 	set("server.listen", func() { n.Server.Listen = strings.TrimSpace(in.Server.Listen) })
 	set("server.public_url", func() { n.Server.PublicURL = strings.TrimRight(strings.TrimSpace(in.Server.PublicURL), "/") })
 	set("backup.dir", func() { n.Backup.Dir = config.ExpandHome(strings.TrimSpace(in.Backup.Dir)) })

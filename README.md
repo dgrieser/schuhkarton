@@ -25,6 +25,9 @@ or another one.
   face boxes with naming, Live Photos, favorites and download.
 - **Videos:** animated previews made from short snippets of each video, and
   on-the-fly H.264 for browsers that cannot play HEVC.
+- **Descriptions (optional):** an AI model (mittwald AI hosting, vLLM,
+  Ollama) describes every photo in German and English and adds tags, so the
+  search finds "Hund im Schnee" or "birthday cake".
 - **People:** YuNet detection and SFace recognition, clustered into groups. Give
   groups names; equal names merge them. "Nicht diese Person" removes a single
   face from a group.
@@ -128,6 +131,15 @@ schuhkarton ~/Bilder Urlaub=/mnt/nas/Urlaub
 schuhkarton index -previews /mnt/nas/Bilder   # build the whole cache once, then exit
 ```
 
+## Photos, videos and documents
+
+Files below folders named in `library.documents` (Dokumente, Documents,
+Scans, Belege) are documents. Galleries show photos and videos; three
+switches above every gallery add documents or hide photos or videos, in any
+mix, remembered per device. A search that hits hidden documents says so and
+offers to show them; `typ:dokument` (`type:document`), `kategorie:` and
+`album:Dokumente` always include them. *Alben* shows everything.
+
 ## Editing (admins)
 
 Admins see extra buttons in the viewer (also keys **E** edit, **R** rotate,
@@ -149,6 +161,36 @@ and `Category`; rotation as EXIF orientation for JPEG and TIFF). Off, they
 stay in the cache (`edits.json`) only. Formats exiftool cannot rotate (HEIC,
 PNG, …) keep the rotation in the cache either way. Favorites, names of
 people and cached previews follow moved and edited files.
+
+## Image descriptions (optional)
+
+An AI model can describe every photo: one or two sentences and 8–20 tags,
+in German and English (for example "Ein Hund spielt im Schnee" with *hund,
+schnee, winter* and *dog, snow, winter*). The search then also finds words
+that appear in no folder name or metadata, in both languages; the tags show
+under *Beschreibung* in the details and are suggested while typing. `ki:` or
+`ai:` searches only there (`ki:geburtstag`).
+
+It is off by default, because every photo is sent, downscaled to 1024 px,
+to the chosen service. *Einstellungen → KI* sets it up:
+
+- **mittwald AI hosting** (OpenAI-compatible, hosted in Germany) with an API
+  key and a model that understands images, e.g. `Qwen3.8-27B-NVFP4`.
+- **Own service**: any OpenAI-compatible API, e.g. vLLM
+  (`http://host:8000/v1`) or Ollama (`http://host:11434/v1`), with a
+  vision model; no key needed.
+
+The key can be entered, or given as `$MITTWALD_LLM_API_KEY` (any variable
+name): then only the name is stored and the key stays in the environment.
+*Modelle laden* lists the models of the service, and *Verbindung testen* lets
+the model describe a small drawn picture (no photo).
+
+Descriptions are made in the background after the thumbnails, newest photos
+first, a few at a time (`ai.workers`); the sidebar shows the progress. They
+live in `ai.json` in the cache and follow moved and edited photos. A wrong
+key or model stops the job with a message in the sidebar; a busy service
+pauses it. Admins can have single photos or a selection described again.
+Names of people are never asked for or stored.
 
 ## Face recognition container
 
@@ -201,6 +243,7 @@ library:
   folder_meta: true           # read date, place and category from folder names like 2019/06 Juni Ort
   write_files: true           # write admin edits into the files (exiftool); false: cache only
   trash_days: 30              # empty the trash after this many days; 0: never
+  documents: [Dokumente, Documents, Scans, Belege]  # folders whose files are documents
 cache:
   dir: ~/.cache/schuhkarton
   previews: false             # true: large previews in advance (slow network shares)
@@ -224,6 +267,16 @@ faces:
   named_threshold: 0.42       # similarity to join a named person
   python: ""                  # local
   models_dir: ""              # local
+ai:                           # image descriptions by a vision model (optional)
+  mode: off                   # off or on
+  url: https://llm.aihosting.mittwald.de/v1   # any OpenAI-compatible API (vLLM, Ollama: http://host:11434/v1)
+  api_key: ""                 # the key itself, or:
+  api_key_env: ""             # the name of a variable holding it, e.g. MITTWALD_LLM_API_KEY
+  model: Qwen3.8-27B-NVFP4    # a model that understands images
+  workers: 2                  # requests at the same time
+  languages: [de, en]
+  image_size: 1024            # long edge of the image sent
+  thinking: false             # let reasoning models think first (slower)
 ui:
   title: Schuhkarton
   theme: system               # default for new devices: system, light, dark
@@ -308,7 +361,7 @@ make faces-image  # build the face container locally
 |---|---|
 | `cmd/schuhkarton` | commands (serve, index, worker, doctor, config, models), the runner that swaps setup and gallery |
 | `internal/config` | YAML, `SCHUHKARTON_*` variables, flags, locked keys |
-| `internal/gallery` | scanning, metadata (exiftool), dates and places, thumbnails (pure Go incl. HEIC/AVIF), video previews, face backends (container, local), clustering, search and filters, cache import |
+| `internal/gallery` | AI descriptions (OpenAI-compatible client), scanning, metadata (exiftool), dates and places, thumbnails (pure Go incl. HEIC/AVIF), video previews, face backends (container, local), clustering, search and filters, cache import |
 | `internal/auth` | accounts, sessions, password hashes, login rate limit |
 | `internal/server` | JSON API, media, sign-in and permissions, ZIP, setup and settings API |
 | `internal/setup` | folder and tool checks, folder picker, model download |

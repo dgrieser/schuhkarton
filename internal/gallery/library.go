@@ -61,8 +61,11 @@ type Options struct {
 	WriteFiles bool
 	// TrashDays: deleted files leave the trash after this many days (0: never).
 	TrashDays int
+	// DocFolders: files below folders with these names are documents.
+	DocFolders []string
 
 	Faces FaceOptions
+	AI    AIOptions // descriptions by a vision language model; empty Model: off
 }
 
 // FaceOptions configure face detection.
@@ -161,7 +164,14 @@ type Status struct {
 	FaceErr     string `json:"faceError,omitempty"`
 	Scanned     int64  `json:"scanned"`
 	Errors      int64  `json:"errors"`
-	Version     int64  `json:"version"`
+	// AI descriptions: mode off|on, progress, and why the job stopped.
+	AIMode   string `json:"aiMode"`
+	AIDone   int64  `json:"aiDone"`
+	AITodo   int64  `json:"aiTodo"`
+	AIFail   int64  `json:"aiFail"`
+	AITokens int64  `json:"aiTokens,omitempty"`
+	AIError  string `json:"aiError,omitempty"`
+	Version  int64  `json:"version"`
 }
 
 // Library holds the index and the background workers.
@@ -186,6 +196,8 @@ type Library struct {
 
 	people *peopleStore
 	search searchIndex
+	ai     aiStore
+	aiJob  aiState
 
 	opMu    sync.Mutex           // one admin operation (edit, rotate, move, trash) at a time
 	editMu  sync.Mutex           // guards edits
@@ -240,6 +252,11 @@ func Open(opt Options) (*Library, error) {
 		l.faces = newRemoteFaces(opt.Faces.URL, opt.Faces.Token)
 	}
 	l.media = newMediaGen(l)
+	l.loadAI()
+	if opt.AI.Model != "" && opt.AI.URL != "" {
+		l.aiJob.client = newAIClient(opt.AI)
+		l.aiJob.wake = make(chan struct{}, 1)
+	}
 	l.people = newPeopleStore(filepath.Join(opt.CacheDir, "people.json"), opt.Faces.ClusterThreshold, opt.Faces.NamedThreshold)
 	l.loadEdits()
 	l.loadTrash()
@@ -262,6 +279,9 @@ func (l *Library) Close() {
 		l.logf("background jobs still running, closing anyway")
 	}
 	l.saveIndex()
+	if err := l.saveAI(); err != nil {
+		l.logf("ai.json: %v", err)
+	}
 	if l.local != nil {
 		l.local.Close()
 	}
@@ -378,6 +398,12 @@ func (l *Library) Status() Status {
 		}
 	}
 	s.People = l.people.count()
+	s.AIMode = "off"
+	if l.aiJob.client != nil {
+		s.AIMode = "on"
+		s.AIDone, s.AITodo, s.AIFail, s.AITokens = l.aiJob.done.Load(), l.aiJob.todo.Load(), l.aiJob.fail.Load(), l.aiJob.tokens.Load()
+		s.AIError, _ = l.aiJob.err.Load().(string)
+	}
 	return s
 }
 
@@ -634,6 +660,7 @@ func (l *Library) RenameKeys(pairs map[string]string) error {
 	if len(pairs) == 0 {
 		return nil
 	}
+	l.renameAI(pairs)
 	l.favMu.Lock()
 	defer l.favMu.Unlock()
 	changed := false

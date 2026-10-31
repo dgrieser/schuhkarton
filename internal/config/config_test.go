@@ -54,3 +54,23 @@ func TestValidate(t *testing.T) {
 		t.Error("bad rescan must fail")
 	}
 }
+
+func TestAIKey(t *testing.T) {
+	t.Setenv("SK_TEST_AI_KEY", "secret-from-env")
+	c := Defaults()
+	if c.AI.Mode != "off" || c.AI.URL != MittwaldAIURL || c.AI.Key() != "" {
+		t.Fatalf("defaults: %+v", c.AI)
+	}
+	c.AI.APIKeyEnv = "SK_TEST_AI_KEY"
+	if c.AI.Key() != "secret-from-env" {
+		t.Fatal("key from the environment")
+	}
+	c.AI.APIKey = "direct"
+	if c.AI.Key() != "direct" || c.Masked().AI.APIKey != "********" {
+		t.Fatal("direct key wins and is masked")
+	}
+	c.AI.Mode, c.AI.URL = "on", "ftp://x"
+	if c.Validate() == nil {
+		t.Fatal("ai.url must be http(s)")
+	}
+}

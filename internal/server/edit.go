@@ -21,6 +21,23 @@ func (s *Server) adminRoutes(mux *http.ServeMux, admin func(http.HandlerFunc) ht
 	mux.HandleFunc("GET /api/admin/folders", admin(s.adminFolders))
 	mux.HandleFunc("POST /api/admin/folders", admin(s.adminMkdir))
 	mux.HandleFunc("POST /api/admin/move", admin(s.adminMove))
+	mux.HandleFunc("POST /api/admin/describe", admin(s.adminDescribe))
+}
+
+// adminDescribe drops the AI descriptions of ids so they are made again.
+func (s *Server) adminDescribe(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		IDs []string `json:"ids"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if s.cfg.AI.Mode != "on" {
+		writeJSON(w, r, map[string]any{"ok": false, "error": "Bildbeschreibungen sind ausgeschaltet"})
+		return
+	}
+	writeJSON(w, r, map[string]any{"ok": true, "changed": s.lib.Redescribe(req.IDs)})
 }
 
 // adminResult answers with what an operation did and the new library version.

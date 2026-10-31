@@ -320,6 +320,18 @@
     refreshAfter();
   }
 
+  // AI descriptions: forget them so the background job writes new ones
+  const aiOn = () => S.config.ai === 'on';
+  async function redescribe(ids) {
+    if (!admin() || !ids.length) return;
+    if (!aiOn()) { toast(t('Bildbeschreibungen sind ausgeschaltet')); return; }
+    const r = await call('/api/admin/describe', { ids });
+    if (!r) return;
+    toast(r.changed === 1 ? t('Wird neu beschrieben') : t('{n} Elemente werden neu beschrieben', { n: num(r.changed) }));
+    if (ids.length > 1) SK.endSelection();
+  }
+  SK.redescribe = redescribe;
+
   function rotateMenu(anchor, ids) {
     menu(anchor, [
       { icon: 'rotl', label: t('90° nach links'), run: () => rotate(ids, 270) },
@@ -450,6 +462,7 @@
       { icon: 'rotate', label: t('90° nach rechts'), run: () => rotate(cur(), 90) },
     ] : []),
     { icon: 'move', label: t('Verschieben'), run: () => moveDialog(cur()) },
+    ...(aiOn() ? [{ icon: 'spark', label: t('Neu beschreiben (KI)'), run: () => redescribe(cur()) }] : []),
     { icon: 'trash', label: t('In den Papierkorb'), danger: true, run: () => remove(cur()) },
   ]);
   $('#vEdit').onclick = (e) => (phone() ? vMenu(e.currentTarget) : editDialog(cur()));
@@ -464,9 +477,10 @@
     <button class="btn" id="selEdit" data-need="admin" title="${esc(t('Datum, Ort, Kategorie, Position'))}">${icon('edit')}<span>${esc(t('Bearbeiten'))}</span></button>
     <button class="btn" id="selRot" data-need="admin" title="${esc(t('Drehen'))}">${icon('rotate')}<span>${esc(t('Drehen'))}</span></button>
     <button class="btn" id="selMove" data-need="admin" title="${esc(t('In einen anderen Ordner'))}">${icon('move')}<span>${esc(t('Verschieben'))}</span></button>
+    <button class="btn" id="selAI" data-need="admin" hidden title="${esc(t('Beschreibungen neu schreiben lassen (KI)'))}">${icon('spark')}<span>${esc(t('Beschreiben'))}</span></button>
     <button class="btn adm-del" id="selDel" data-need="admin" title="${esc(t('In den Papierkorb'))}">${icon('trash')}<span>${esc(t('Löschen'))}</span></button>`);
   // short labels for the phone toolbar
-  const SHORT = { selFav: t('Favorit'), selZip: t('Laden'), selEdit: t('Ändern'), selRot: t('Drehen'), selMove: t('Ablegen'), selDel: t('Löschen') };
+  const SHORT = { selFav: t('Favorit'), selZip: t('Laden'), selEdit: t('Ändern'), selRot: t('Drehen'), selMove: t('Ablegen'), selAI: t('KI'), selDel: t('Löschen') };
   for (const [id, label] of Object.entries(SHORT)) $(`#${id}`)?.insertAdjacentHTML('beforeend', `<span class="s">${esc(label)}</span>`);
   const selected = () => [...S.sel];
   const needSel = (fn) => () => { const ids = selected(); if (!ids.length) { toast(t('Erst Elemente auswählen')); return; } fn(ids); };
@@ -474,6 +488,11 @@
   $('#selRot').onclick = (e) => { const ids = selected(); if (ids.length) rotateMenu(e.currentTarget, ids); else toast(t('Erst Elemente auswählen')); };
   $('#selMove').onclick = needSel(moveDialog);
   $('#selDel').onclick = needSel(remove);
+  $('#selAI').onclick = needSel(redescribe);
+  // the AI button only when descriptions are on (the config arrives after start)
+  const showAI = () => { if ($('#selAI')) $('#selAI').hidden = !aiOn(); };
+  showAI();
+  if ($('#selbar')) new MutationObserver(showAI).observe($('#selbar'), { attributes: true, attributeFilter: ['hidden'] });
 
   // ---------------------------------------------------------------------------
   // keys: E edit, R rotate (Shift+R left), Del delete — in the viewer and for a selection

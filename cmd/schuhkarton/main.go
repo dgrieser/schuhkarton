@@ -18,6 +18,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -114,6 +115,7 @@ var flagKeys = map[string]string{
 	"cache": "cache.dir", "exclude": "library.exclude", "rescan": "library.rescan",
 	"workers": "media.workers", "exiftool": "media.exiftool", "ffmpeg": "media.ffmpeg",
 	"faces": "faces.mode", "faces-url": "faces.url", "faces-token": "faces.token",
+	"ai": "ai.mode", "ai-url": "ai.url", "ai-model": "ai.model",
 	"python": "faces.python", "models": "faces.models_dir", "previews": "cache.previews",
 }
 
@@ -131,6 +133,9 @@ var flagHelp = map[string]string{
 	"faces":       "Gesichtserkennung: off, remote (Container) oder local (Python hier)",
 	"faces-url":   "Adresse des Gesichtserkennungs-Containers, z.B. http://nas:8089",
 	"faces-token": "Token des Containers",
+	"ai":          "Bildbeschreibungen durch ein KI-Modell: off oder on (Schlüssel über SCHUHKARTON_AI_API_KEY oder ai.api_key_env)",
+	"ai-url":      "Adresse der OpenAI-kompatiblen API, z.B. https://llm.aihosting.mittwald.de/v1 oder http://localhost:8000/v1",
+	"ai-model":    "Modell für Bildbeschreibungen, z.B. Qwen3.8-27B-NVFP4",
 	"python":      "Python mit OpenCV für faces=local",
 	"models":      "Ordner mit den Gesichtsmodellen für faces=local",
 	"previews":    "große Vorschauen vorab erzeugen (true/false; gut für langsame Netzlaufwerke)",
@@ -211,12 +216,23 @@ func libOptions(cfg *config.Config) gallery.Options {
 		Previews: cfg.Cache.Previews, VideoPreviews: cfg.Media.VideoPreviews, VideoPreviewSize: cfg.Media.VideoPreviewSize,
 		Transcode:     cfg.Media.Transcode,
 		IgnoreFolders: !cfg.Library.FolderMeta, WriteFiles: cfg.Library.WriteFiles, TrashDays: cfg.Library.TrashDays,
+		DocFolders: cfg.Library.Documents,
 		Faces: gallery.FaceOptions{
 			Mode: cfg.Faces.Mode, URL: cfg.Faces.URL, Token: cfg.Faces.Token, Workers: cfg.Faces.Workers,
 			MinScore: cfg.Faces.MinScore, ClusterThreshold: cfg.Faces.ClusterThreshold, NamedThreshold: cfg.Faces.NamedThreshold,
 			Python: python, ModelsDir: cfg.Faces.ModelsDir,
 		},
+		AI: aiOptions(cfg),
 	}
+}
+
+// aiOptions: descriptions only with ai.mode on.
+func aiOptions(cfg *config.Config) gallery.AIOptions {
+	if cfg.AI.Mode != "on" {
+		return gallery.AIOptions{}
+	}
+	return gallery.AIOptions{URL: cfg.AI.URL, Key: cfg.AI.Key(), Model: cfg.AI.Model, Workers: cfg.AI.Workers,
+		Languages: cfg.AI.Languages, ImageSize: cfg.AI.ImageSize, Thinking: cfg.AI.Thinking}
 }
 
 func runServe(cmd string, args []string) error {
@@ -733,6 +749,24 @@ func runDoctor(args []string) error {
 		i := p.Probe()
 		p.Close()
 		fmt.Printf("  Python %s: Erkennung %v, Zuordnung %v %s %s\n", i.Python, i.Detection, i.Recognition, strings.Join(i.Missing, ", "), i.Error)
+	}
+	fmt.Printf("\nBildbeschreibungen: %s\n", cfg.AI.Mode)
+	if cfg.AI.Mode == "on" {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		key := "kein Schlüssel"
+		if cfg.AI.Key() != "" {
+			key = "Schlüssel gesetzt"
+		} else if cfg.AI.APIKeyEnv != "" {
+			key = "$" + cfg.AI.APIKeyEnv + " ist leer"
+		}
+		t := gallery.TestAI(ctx, aiOptions(cfg), false)
+		if t.Error != "" {
+			fmt.Printf("  %s (%s): %s\n", cfg.AI.URL, key, t.Error)
+		} else {
+			fmt.Printf("  %s (%s): %d Modelle, %s %s\n", cfg.AI.URL, key, len(t.Models), cfg.AI.Model,
+				map[bool]string{true: "vorhanden", false: "NICHT in der Liste"}[slices.Contains(t.Models, cfg.AI.Model)])
+		}
 	}
 	return nil
 }

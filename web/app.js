@@ -74,7 +74,7 @@
     size: 220,
     group: store.get('group', 'month'),
     animate: store.get('animate', false),
-    kind: 'all',
+    kinds: new Set(['photo', 'video']), // what galleries show: photo, video, doc
     sel: new Set(), selecting: false,
     gallery: null,
   };
@@ -91,9 +91,20 @@
   const previewURL = (it) => (it.k === 2 ? `/t/${it.id}/p.mp4?v=${it.v}` : it.lv ? `/t/${it.lv}/p.mp4?v=${it.lk}` : '');
   const faceURL = (item, idx) => `/f/${item}/${idx}`;
 
+  // Documents (items in folders like "Dokumente", library.documents) are a kind
+  // of their own: hidden by default, any mix of photos, videos and documents.
+  const KINDS = ['photo', 'video', 'doc'];
+  {
+    const saved = store.get('kinds', null);
+    if (Array.isArray(saved) && saved.some((k) => KINDS.includes(k))) S.kinds = new Set(saved.filter((k) => KINDS.includes(k)));
+  }
+  const kindOf = (it) => (it.dc ? 'doc' : it.k === 2 ? 'video' : 'photo');
+  const shown = (it) => S.kinds.has(kindOf(it));
+
   async function loadItems() {
     const res = await api('/api/items');
     S.items = res.items;
+    for (const it of S.items) it.dc = !!it.dc; // the server knows the document folders
     S.byId = new Map(S.items.map((it) => [it.id, it]));
     S.version = res.version;
     S.loadedAt = Date.now();
@@ -111,8 +122,9 @@
   }
 
   function updateCounts() {
-    const c = { all: S.items.length, videos: 0, favs: 0, gps: 0, places: new Set(), people: S.people.filter((p) => p.name).length || S.people.length };
+    const c = { all: S.items.filter(shown).length, videos: 0, favs: 0, gps: 0, places: new Set(), people: S.people.filter((p) => p.name).length || S.people.length };
     for (const it of S.items) {
+      if (!shown(it)) continue;
       if (it.k === 2) c.videos++;
       if (it.f) c.favs++;
       if (it.la !== undefined) c.gps++;
@@ -177,7 +189,7 @@
         }
         const tile = e.target.closest('.tile');
         if (!tile) return;
-        press = { id: e.pointerId, x: e.clientX, y: e.clientY, tile, sy: this.scrollPos() };
+        press = { id: e.pointerId, x: e.clientX, y: e.clientY, tile, sy: this.scrollPos(), t: Date.now() };
         longT = setTimeout(() => {
           const p = press;
           longT = 0;
@@ -216,7 +228,15 @@
       // releases are watched on the window: the tile under the finger may be gone by then
       const up = (e) => {
         if (!pts.delete(e.pointerId)) return;
+        const p = press;
         cancelLong();
+        // a short, still tap opens the tile right away: on some phones the click after
+        // closing the viewer never arrives, so the first tap was lost
+        if (e.type === 'pointerup' && p && p.id === e.pointerId && !pts.size && p.tile.isConnected &&
+            Date.now() - p.t < 500 && Math.abs(this.scrollPos() - p.sy) <= 2 && !Viewer.open_) {
+          this.swallowClick();
+          this.activate(p.tile, e);
+        }
         if (p0 && pts.size < 2) { p0 = null; saveSize(); Scrub.attach(this); }
       };
       const onScroll = () => { if (press) cancelLong(); };
@@ -380,6 +400,14 @@
       return a;
     }
 
+    // swallowClick drops the click that follows a tap handled on pointerup, wherever it lands
+    swallowClick() {
+      const stop = (ev) => { ev.preventDefault(); ev.stopPropagation(); done(); };
+      const done = () => { clearTimeout(timer); removeEventListener('click', stop, true); };
+      const timer = setTimeout(done, 700);
+      addEventListener('click', stop, true);
+    }
+
     click(e) {
       const sa = e.target.closest('[data-selall]');
       if (sa) {
@@ -396,6 +424,11 @@
       if (!a) return;
       e.preventDefault();
       if (this.suppressClick) { this.suppressClick = false; return; }
+      this.activate(a, e);
+    }
+
+    // activate selects (selection mode, check, modifier keys) or opens the tile
+    activate(a, e) {
       const id = a.dataset.id;
       if (S.selecting || e.target.closest('.check') || e.ctrlKey || e.metaKey || e.shiftKey) {
         if (e.shiftKey && this.lastSel !== undefined) {
@@ -789,6 +822,18 @@
           text = text.replace(new RegExp(`(${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi'), '<mark>$1</mark>');
         }
       }
+      // AI description in the viewer's language (the other one as fallback)
+      const ai = d.ai || null;
+      let aiText = '', aiTags = [];
+      if (ai) {
+        aiText = esc(LANG === 'en' ? (ai.en || ai.de) : (ai.de || ai.en));
+        aiTags = (LANG === 'en' ? (ai.tagsEn?.length ? ai.tagsEn : ai.tagsDe) : (ai.tagsDe?.length ? ai.tagsDe : ai.tagsEn)) || [];
+        if (q) {
+          for (const w of q.split(/\s+/).filter((x) => x.length > 2 && !x.includes(':'))) {
+            aiText = aiText.replace(new RegExp(`(${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi'), '<mark>$1</mark>');
+          }
+        }
+      }
       const faces = (d.faces || []).map((f) => {
         const per = f.person ? S.peopleById.get(f.person) : null;
         const name = f.name || (per ? t('Unbenannt') : t('Unbekannt'));
@@ -803,6 +848,10 @@
           ${d.gps ? `<div class="muted">${d.lat.toFixed(5)}, ${d.lon.toFixed(5)}${d.alt ? ` · ${Math.round(d.alt)} m` : ''}</div>` : ''}</div></div>
           ${d.gps ? '<div class="minimap" id="vMap"></div>' : ''}` : ''}
         ${faces ? `<h3>${t('Personen')}</h3><div class="faces">${faces}</div>` : ''}
+        ${ai ? `<h3>${t('Beschreibung')} <span class="ai-badge" title="${t('Von einem KI-Modell geschrieben')}">${t('KI')}</span></h3>
+          ${aiText ? `<div class="ai-desc">${aiText}</div>` : ''}
+          ${aiTags.length ? `<div class="chips">${aiTags.map((k) => `<a class="chip" href="#/suche/${encodeURIComponent(k)}">${esc(k)}</a>`).join('')}</div>` : ''}
+          ${Account.can('admin') && S.config.ai === 'on' ? `<button class="link ai-redo" data-redesc>${t('Neu beschreiben')}</button>` : ''}` : ''}
         ${d.desc ? `<h3>${t('Text im Bild')}</h3><div class="text">${text}</div>` : ''}
         ${d.keywords?.length || d.category ? `<h3>${t('Stichwörter')}</h3><div class="chips">${[d.category, ...(d.keywords || [])].filter((v, i, a) => v && a.indexOf(v) === i).map((k) => `<a class="chip" href="#/suche/${encodeURIComponent(k)}">${icon('tag')}${esc(k)}</a>`).join('')}</div>` : ''}
         ${camera || shot ? `<h3>${t('Kamera')}</h3><div class="kv">${icon('camera')}<div>${esc(camera || t('Unbekannt'))}${d.lens ? `<div class="muted">${esc(d.lens)}</div>` : ''}${shot ? `<div class="muted">${esc(shot)}</div>` : ''}</div></div>` : ''}
@@ -815,6 +864,7 @@
         tileLayer().addTo(mm);
         L.circleMarker([d.lat, d.lon], { radius: 7, color: '#fff', weight: 2, fillColor: '#f3b549', fillOpacity: 1 }).addTo(mm);
       }
+      $('[data-redesc]', p)?.addEventListener('click', () => window.SK?.redescribe?.([it.id]));
       for (const a of $$('[data-face]', p)) {
         a.onclick = (e) => {
           const f = d.faces[+a.dataset.face];
@@ -1119,6 +1169,46 @@
     };
     V.stage.addEventListener('pointerup', end);
     V.stage.addEventListener('pointercancel', end);
+
+    // Videos keep their own controls (tap to play, seek bar). A sideways swipe on the
+    // picture still goes to the neighbours and a swipe down closes, also while playing;
+    // touches on the control bar at the bottom are left alone.
+    let vs = null;
+    const vreset = (animate) => {
+      if (animate) V.animateZoom();
+      V.media.style.transform = '';
+      V.media.style.opacity = '';
+    };
+    V.stage.addEventListener('pointerdown', (e) => {
+      const v = e.target.closest('video[controls]');
+      vs = null;
+      if (!v || e.pointerType === 'mouse') return;
+      if (e.clientY > v.getBoundingClientRect().bottom - 72) return;
+      vs = { id: e.pointerId, x: e.clientX, y: e.clientY, dir: '' };
+    });
+    V.stage.addEventListener('pointermove', (e) => {
+      if (!vs || e.pointerId !== vs.id) return;
+      const dx = e.clientX - vs.x, dy = e.clientY - vs.y;
+      if (!vs.dir && Math.abs(dx) > 12 && Math.abs(dx) > 1.5 * Math.abs(dy)) vs.dir = 'x';
+      else if (!vs.dir && dy > 16 && dy > 1.5 * Math.abs(dx)) vs.dir = 'y';
+      if (vs.dir === 'x') V.media.style.transform = `translateX(${dx}px)`;
+      else if (vs.dir === 'y') {
+        V.media.style.transform = `translateY(${Math.max(0, dy) * 0.6}px)`;
+        V.media.style.opacity = String(1 - Math.min(0.6, Math.max(0, dy) / 600));
+      }
+    });
+    const vend = (e) => {
+      if (!vs || e.pointerId !== vs.id) return;
+      const g = vs;
+      vs = null;
+      if (!g.dir) return;
+      const dx = e.clientX - g.x, dy = e.clientY - g.y;
+      if (e.type === 'pointerup' && g.dir === 'x' && Math.abs(dx) > 70) { vreset(); V.step(dx < 0 ? 1 : -1); }
+      else if (e.type === 'pointerup' && g.dir === 'y' && dy > 120) { vreset(); V.close(); }
+      else vreset(true);
+    };
+    V.stage.addEventListener('pointerup', vend);
+    V.stage.addEventListener('pointercancel', vend);
   }
 
   // ---------------------------------------------------------------------------
@@ -1159,7 +1249,7 @@
   {
     const q = $('#q'), box = $('#suggest');
     let opts = [], on = -1;
-    const TYPES = { ort: 'Ort', person: 'Person', kategorie: 'Kategorie', kamera: 'Kamera', jahr: 'Jahr', monat: 'Monat', wochentag: 'Wochentag', jahreszeit: 'Jahreszeit', tageszeit: 'Tageszeit' };
+    const TYPES = { ort: 'Ort', person: 'Person', kategorie: 'Kategorie', kamera: 'Kamera', jahr: 'Jahr', monat: 'Monat', wochentag: 'Wochentag', jahreszeit: 'Jahreszeit', tageszeit: 'Tageszeit', tag: 'Stichwort' };
     const SYNTAX = EN ? ['place:', 'person:', 'year:2019', 'month:june', 'type:video', 'type:selfie', 'text:', '-word'] : ['ort:', 'person:', 'jahr:2019', 'monat:juni', 'typ:video', 'typ:selfie', 'text:', '-wort'];
     const draw = () => {
       if (!q.value.trim()) {
@@ -1427,7 +1517,8 @@
   function galleryTools(opts = {}) {
     const lay = (k, title) => `<button data-lay="${k}" class="${S.layout === k ? 'on' : ''}" title="${t(title)}">${icon(k)}</button>`;
     return `
-      ${opts.kinds ? `<div class="seg" data-kinds>${[['all', 'Alle'], ['photo', 'Fotos'], ['video', 'Videos']].map(([k, l]) => `<button data-kind="${k}" class="${S.kind === k ? 'on' : ''}">${t(l)}</button>`).join('')}</div>` : ''}
+      ${opts.kinds ? `<div class="kindset" data-kinds role="group" aria-label="${t('Anzeigen')}">${[['photo', 'Fotos', 'photos'], ['video', 'Videos', 'video'], ['doc', 'Dokumente', 'file']].map(([k, l, ic]) =>
+        `<button data-kind="${k}" class="${S.kinds.has(k) ? 'on' : ''}" aria-pressed="${S.kinds.has(k)}" title="${t('{x} zeigen oder ausblenden', { x: t(l) })}">${icon(ic)}<span>${t(l)}</span></button>`).join('')}</div>` : ''}
       ${opts.group !== false ? `<select class="sel" data-group title="${t('Gruppieren')}">
         ${[['year', 'Jahre'], ['month', 'Monate'], ['day', 'Tage']].map(([k, l]) => `<option value="${k}" ${S.group === k ? 'selected' : ''}>${t(l)}</option>`).join('')}</select>` : ''}
       <div class="seg lay-seg">${lay('rows', 'Reihen')}${lay('grid', 'Raster')}${lay('masonry', 'Mosaik')}</div>
@@ -1457,7 +1548,17 @@
     const gr = $('[data-group]', root);
     if (gr) gr.onchange = () => setView(g, 'group', gr.value);
     for (const b of $$('[data-anim]', root)) b.onclick = () => setView(g, 'animate', !S.animate);
-    for (const b of $$('[data-kind]', root)) b.onclick = () => { S.kind = b.dataset.kind; $$('[data-kind]', root).forEach((x) => x.classList.toggle('on', x === b)); onKind?.(); };
+    for (const b of $$('[data-kind]', root)) b.onclick = () => {
+      const k = b.dataset.kind;
+      if (S.kinds.has(k)) {
+        if (S.kinds.size === 1) { toast(t('Mindestens eine Art bleibt sichtbar')); return; }
+        S.kinds.delete(k);
+      } else S.kinds.add(k);
+      store.set('kinds', [...S.kinds]);
+      for (const x of $$('[data-kind]', root)) { const on = S.kinds.has(x.dataset.kind); x.classList.toggle('on', on); x.setAttribute('aria-pressed', on); }
+      updateCounts();
+      onKind?.();
+    };
     const vm = $('[data-vmenu]', root);
     if (vm) vm.onclick = (e) => { e.stopPropagation(); ViewMenu.el ? ViewMenu.close() : ViewMenu.open(g, !!gr); };
   }
@@ -1490,13 +1591,16 @@
       document.removeEventListener('pointerdown', this.off, true);
     },
   };
-  const byKind = (items) => (S.kind === 'photo' ? items.filter((it) => it.k === 1) : S.kind === 'video' ? items.filter((it) => it.k === 2) : items);
+  const byKind = (items) => items.filter(shown);
 
   function galleryView(view, { title, sub = '', items, group = S.group, kinds = false, before = '', snips = null, autoplay = false, scrub = true, emptyText = t('Keine Fotos gefunden.'), tools = {} }) {
-    view.innerHTML = `<div class="head"><div><h1>${title}</h1><div class="sub">${sub}</div></div><div class="tools">${galleryTools({ kinds, ...tools })}</div></div>${before}<div data-g></div>`;
+    // sub may be a function of the shown items, so it follows the kind switches
+    const subOf = (list) => (typeof sub === 'function' ? sub(list) : sub);
+    view.innerHTML = `<div class="head"><div><h1>${title}</h1><div class="sub">${subOf(kinds ? byKind(items) : items)}</div></div><div class="tools">${galleryTools({ kinds, ...tools })}</div></div>${before}<div data-g></div>`;
     const host = $('[data-g]', view);
     const make = () => {
       const list = kinds ? byKind(items) : items;
+      if (typeof sub === 'function') $('.head .sub', view).innerHTML = subOf(list);
       if (!list.length) { host.innerHTML = `<div class="empty">${icon('photos')}<h2>${t('Nichts hier')}</h2><p>${emptyText}</p></div>`; return; }
       host.innerHTML = '';
       S.gallery?.destroy();
@@ -1515,6 +1619,7 @@
     const m = day.getMonth(), d = day.getDate(), y = day.getFullYear();
     const by = new Map();
     for (const it of S.items) {
+      if (!shown(it)) continue;
       const dd = dt(it.t);
       if (dd.getUTCMonth() === m && dd.getUTCDate() === d && dd.getUTCFullYear() < y) {
         const k = dd.getUTCFullYear();
@@ -1537,9 +1642,8 @@
         const c = bestCover(m.items);
         return `<a class="memory" href="#/erinnerungen" data-yr="${m.yr}"><img src="${thumbURL(c)}" alt="" loading="lazy"><b>${pl(m.ago, 'Vor einem Jahr', 'Vor {n} Jahren')}</b><span>${pl(m.items.length, '{n} Foto', '{n} Fotos')} · ${m.yr}</span></a>`;
       }).join('')}</div>` : '';
-      const total = S.items.length;
       galleryView(view, {
-        title: t('Fotos'), sub: total ? `${pl(total, '{n} Element', '{n} Elemente')} · ${years(S.items[S.items.length - 1].t, S.items[0].t)}` : t('Wird eingelesen …'),
+        title: t('Fotos'), sub: (list) => (list.length ? `${pl(list.length, '{n} Element', '{n} Elemente')} · ${years(list[list.length - 1].t, list[0].t)}` : S.items.length ? '' : t('Wird eingelesen …')),
         items: S.items, kinds: true, before: strip, emptyText: t('Die Ordner werden noch eingelesen.'),
       });
       for (const a of $$('.memory', view)) a.onclick = (e) => { e.preventDefault(); const m = mem.find((x) => x.yr === +a.dataset.yr); Viewer.open(m.items, 0); };
@@ -1556,7 +1660,7 @@
         return;
       }
       const items = S.items.filter((it) => it.f);
-      galleryView(view, { title: t('Favoriten'), sub: pl(items.length, '{n} Favorit', '{n} Favoriten'), items, emptyText: t('Mit dem Herz in der Ansicht markieren.') });
+      galleryView(view, { title: t('Favoriten'), sub: (list) => pl(list.length, '{n} Favorit', '{n} Favoriten'), items, kinds: true, emptyText: t('Mit dem Herz in der Ansicht markieren.') });
     },
 
     erinnerungen(view) {
@@ -1592,7 +1696,7 @@
     suche(view, q) {
       $('#q').value = q;
       view.innerHTML = `<div class="head compact"><div><h1>${t('Suche')}</h1><div class="sub">${t('„{q}“ …', { q: esc(q) })}</div></div></div>`;
-      api(`/api/search?q=${encodeURIComponent(q)}`).then((res) => {
+      api(`/api/search?q=${encodeURIComponent(q)}&lang=${LANG}`).then((res) => {
         if (route.view !== 'suche' || route.arg !== q) return;
         const snips = new Map();
         let items = [];
@@ -1613,10 +1717,13 @@
           ...places.map((p) => `<a class="chip" href="#/ort/${encodeURIComponent(p)}">${icon('pin')}${esc(p)}</a>`)].join('');
         const active = parsed.filters.map((f, i) => `<button class="chip" data-rmf="${i}" title="${t('Filter entfernen')}">${f.neg ? `${t('ohne')} ` : ''}${esc(filterLabel(f))}${icon('x')}</button>`)
           .concat(parsed.words.length ? [`<button class="chip" data-rmw title="${t('Suchwörter entfernen')}">${t('„{q}“', { q: esc(parsed.words.join(' ')) })}${icon('x')}</button>`] : []).join('');
+        // asking for documents shows them; otherwise the kind switches apply, with a hint
+        const docQuery = /(^|\s)(typ|type):(dokument|document)|(^|\s)(kategorie|category):|(^|\s)(album|ordner|folder):\S*(dokument|document|scan|beleg)/i.test(q);
+        const hiddenDocs = !docQuery && !S.kinds.has('doc') ? items.filter((it) => it.dc).length : 0;
         galleryView(view, {
-          title: t('Suche'), sub: `${pl(items.length, '{n} Treffer', '{n} Treffer')}${snips.size ? ` · ${t('{n} mit Text im Bild', { n: num(snips.size) })}` : ''}<span class="hide-m"> · ${res.ms ?? 0} ms</span>`,
-          items, group: sort === 'date' ? S.group : 'none', snips, scrub: sort === 'date',
-          before: `<div class="active-filters">${active}<button class="chip" data-addf>${icon('sliders')}<span class="hide-m">${parsed.filters.length ? t('Filter ändern') : t('Filter hinzufügen')}</span><span class="only-m">${t('Filter')}</span></button>
+          title: t('Suche'), sub: (list) => `${pl(list.length, '{n} Treffer', '{n} Treffer')}${snips.size ? ` · ${t('{n} mit Text im Bild', { n: num(list.filter((it) => snips.has(it.id)).length) })}` : ''}<span class="hide-m"> · ${res.ms ?? 0} ms</span>`,
+          items, kinds: !docQuery, group: sort === 'date' ? S.group : 'none', snips, scrub: sort === 'date',
+          before: `<div class="active-filters">${active}${hiddenDocs ? `<button class="chip docs-hint" data-showdocs>${icon('file')}${pl(hiddenDocs, '{n} Dokument ausgeblendet', '{n} Dokumente ausgeblendet')} · ${t('zeigen')}</button>` : ''}<button class="chip" data-addf>${icon('sliders')}<span class="hide-m">${parsed.filters.length ? t('Filter ändern') : t('Filter hinzufügen')}</span><span class="only-m">${t('Filter')}</span></button>
             ${parsed.filters.length + parsed.words.length > 1 ? `<button class="chip" data-clear>${t('Alle entfernen')}</button>` : ''}</div>
             ${jump ? `<div class="chips" style="margin-bottom:14px">${jump}</div>` : ''}`,
           emptyText: t('Andere Schreibweise, weniger Wörter oder weniger Filter probieren.'), tools: { group: false },
@@ -1629,6 +1736,7 @@
         $('[data-rmw]', view)?.addEventListener('click', () => { parsed.words = []; runQuery(buildQ(parsed)); });
         $('[data-clear]', view)?.addEventListener('click', () => runQuery(''));
         $('[data-addf]', view).onclick = () => Filter.open();
+        $('[data-showdocs]', view)?.addEventListener('click', () => { S.kinds.add('doc'); store.set('kinds', [...S.kinds]); updateCounts(); rerender(); });
         if (route.item) onRoute();
       }).catch((e) => { view.innerHTML = `<div class="empty"><h2>${t('Suche fehlgeschlagen')}</h2><p>${esc(e.message)}</p></div>`; });
     },
@@ -1779,7 +1887,7 @@
     },
 
     karte(view) {
-      const gps = S.items.filter((it) => it.la !== undefined);
+      const gps = S.items.filter((it) => it.la !== undefined && shown(it));
       view.innerHTML = `<div class="head"><div><h1>${t('Karte')}</h1><div class="sub">${t('{a} mit Ortsangabe', { a: pl(gps.length, '{n} Element', '{n} Elemente') })}</div></div></div>
         <div class="mapwrap"><div class="map" id="map"></div><div class="map-side"><header id="mapHead"></header><div class="list" id="mapList"></div></div></div>`;
       if (!window.L) { $('#map', view).innerHTML = `<div class="empty">${t('Karte konnte nicht geladen werden (keine Internetverbindung?).')}</div>`; return; }
@@ -1860,6 +1968,10 @@
       bar(t('Vorschaubilder'), s.thumbs + s.posters, s.photos + s.videos + liveVideos, s.thumbFail || 0);
       bar(t('Video-Vorschauen'), s.previews, s.videos + liveVideos, s.previewFail || 0);
       if (s.faceDetection && s.faceTodo) bar(t('Gesichter'), s.faces, s.faceTodo);
+      if (s.aiMode === 'on') {
+        if (!s.aiError) bar(t('Beschreibungen'), s.aiDone, s.aiTodo, s.aiFail || 0);
+        else if (Account.can('admin')) rows.push(`<div class="row"><span class="bad" title="${esc(t(s.aiError))}">${t('Beschreibungen angehalten')}: ${esc(t(s.aiError))}</span></div>`);
+      }
       const bk = res.backup;
       if (bk?.running) { busy = true; rows.push(`<div class="row"><span>${t('Sicherung')}: ${esc(t(bk.phase || ''))} · ${t('{n} kopiert', { n: num(bk.copied) })}</span></div>`); }
       if (!rows.length) rows.push(`<div class="row"><span>${pl(s.photos, '{n} Foto', '{n} Fotos')} · ${pl(s.videos, '{n} Video', '{n} Videos')}${s.people ? ` · ${pl(s.people, '{n} Person', '{n} Personen')}` : ''}</span>${missing ? `<span class="faint" title="${t('Diese Dateien lassen sich nicht lesen')}">${num(missing)} ${t('ohne Vorschau')}</span>` : ''}</div>`);
