@@ -22,6 +22,7 @@ import (
 // Config is the whole configuration.
 type Config struct {
 	Server  Server  `yaml:"server" json:"server"`
+	Access  Access  `yaml:"access" json:"access"`
 	Library Library `yaml:"library" json:"library"`
 	Cache   Cache   `yaml:"cache" json:"cache"`
 	Media   Media   `yaml:"media" json:"media"`
@@ -48,6 +49,16 @@ type Server struct {
 	TLSKey    string `yaml:"tls_key" json:"tls_key"`
 }
 
+// Access decides who may do what. Admins manage settings, accounts and the
+// photos; accounts personalise (favorites, names of people).
+type Access struct {
+	// Anonymous lets people without an account look at and download the
+	// photos (still behind server.token on a network address).
+	Anonymous bool `yaml:"anonymous" json:"anonymous"`
+	// Register lets anybody create an account; it waits for an admin.
+	Register bool `yaml:"register" json:"register"`
+}
+
 // Folder is one photo folder.
 type Folder struct {
 	Name string `yaml:"name" json:"name"`
@@ -62,6 +73,16 @@ type Library struct {
 	// Rescan reads the folders again at this interval, e.g. "1h"; empty or
 	// "0" only at start.
 	Rescan string `yaml:"rescan" json:"rescan"`
+	// FolderMeta reads date, place and category from folder names like
+	// "2019/06 Juni Lübbecke" (a heuristic; Schuhkarton never requires or
+	// creates such a layout).
+	FolderMeta bool `yaml:"folder_meta" json:"folder_meta"`
+	// WriteFiles writes edits by admins (date, place, GPS, text, rotation)
+	// into the files with exiftool; false keeps them in the cache only.
+	WriteFiles bool `yaml:"write_files" json:"write_files"`
+	// TrashDays empties deleted files from the trash after this many days
+	// (0: only by hand).
+	TrashDays int `yaml:"trash_days" json:"trash_days"`
 }
 
 // Cache is where everything derived lives.
@@ -103,8 +124,10 @@ type Faces struct {
 
 // UI is the look of the web app.
 type UI struct {
-	Title          string `yaml:"title" json:"title"`
-	Theme          string `yaml:"theme" json:"theme"` // system, light, dark: the default until a viewer picks one
+	Title string `yaml:"title" json:"title"`
+	Theme string `yaml:"theme" json:"theme"` // system, light, dark: the default until a viewer picks one
+	// Language of the pages: auto (the browser's), de or en; viewers can switch.
+	Language       string `yaml:"language" json:"language"`
 	MapTiles       string `yaml:"map_tiles" json:"map_tiles"`
 	MapAttribution string `yaml:"map_attribution" json:"map_attribution"`
 }
@@ -131,8 +154,10 @@ type Worker struct {
 func Defaults() *Config {
 	return &Config{
 		Server: Server{Listen: "127.0.0.1:8088", Token: "auto"},
+		Access: Access{Anonymous: true, Register: true},
 		Library: Library{
-			Exclude: []string{"_Duplikate", ".*", "@eaDir", "#recycle", "$RECYCLE.BIN", "System Volume Information", "*.tmp"},
+			Exclude:    []string{"_Duplikate", ".*", "@eaDir", "#recycle", "$RECYCLE.BIN", "System Volume Information", "*.tmp"},
+			FolderMeta: true, WriteFiles: true, TrashDays: 30,
 		},
 		Cache: Cache{Dir: DefaultCacheDir()},
 		Media: Media{
@@ -140,7 +165,7 @@ func Defaults() *Config {
 			VideoPreviews: true, VideoPreviewSize: 240, Transcode: true,
 		},
 		Faces: Faces{Mode: "off", Workers: max(1, runtime.NumCPU()/4), MinScore: 0.86, ClusterThreshold: 0.48, NamedThreshold: 0.42},
-		UI: UI{Title: "Schuhkarton", Theme: "system",
+		UI: UI{Title: "Schuhkarton", Theme: "system", Language: "auto",
 			MapTiles: "https://tile.openstreetmap.org/{z}/{x}/{y}.png", MapAttribution: "© OpenStreetMap"},
 		Backup: Backup{Interval: "24h", Originals: true, Cache: true, Config: true},
 		Worker: Worker{Listen: "0.0.0.0:8089", Workers: max(1, runtime.NumCPU()/2)},
@@ -199,6 +224,7 @@ func (c *Config) normalize() {
 	c.Faces.Mode = cmpOr(strings.ToLower(c.Faces.Mode), "off")
 	c.UI.Title = cmpOr(c.UI.Title, d.UI.Title)
 	c.UI.Theme = cmpOr(c.UI.Theme, d.UI.Theme)
+	c.UI.Language = strings.ToLower(cmpOr(c.UI.Language, d.UI.Language))
 	c.UI.MapTiles = cmpOr(c.UI.MapTiles, d.UI.MapTiles)
 	if c.Media.Workers <= 0 {
 		c.Media.Workers = d.Media.Workers
@@ -273,6 +299,9 @@ func (c *Config) Validate() error {
 	default:
 		errs = append(errs, fmt.Sprintf("faces.mode %q: off, remote oder local", c.Faces.Mode))
 	}
+	if c.Library.TrashDays < 0 {
+		errs = append(errs, "library.trash_days darf nicht negativ sein")
+	}
 	if c.Library.Rescan != "" && c.Library.Rescan != "0" {
 		if _, err := time.ParseDuration(c.Library.Rescan); err != nil {
 			errs = append(errs, fmt.Sprintf("library.rescan %q: %v", c.Library.Rescan, err))
@@ -295,6 +324,11 @@ func (c *Config) Validate() error {
 				errs = append(errs, fmt.Sprintf("backup.interval %q: %v", c.Backup.Interval, err))
 			}
 		}
+	}
+	switch c.UI.Language {
+	case "auto", "de", "en":
+	default:
+		errs = append(errs, fmt.Sprintf("ui.language %q: auto, de oder en", c.UI.Language))
 	}
 	if (c.Server.TLSCert == "") != (c.Server.TLSKey == "") {
 		errs = append(errs, "server.tls_cert und server.tls_key nur zusammen")

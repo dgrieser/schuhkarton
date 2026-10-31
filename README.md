@@ -31,6 +31,12 @@ or another one.
 - **Backup:** copies photos, cache and settings to a folder (a USB disk or a
   share) in the background. It only adds and updates; nothing in the backup is
   ever deleted.
+- **Accounts:** viewing works without an account (optional). With an account,
+  people keep their own favorites and name faces. Anybody can register; an
+  admin approves new accounts or creates them. Admins also manage the
+  settings and the photos.
+- German and English (the browser's language, switchable in the sidebar); the
+  search syntax works in both (`ort:`/`place:`, `monat:juni`/`month:june`).
 - Light, dark or system theme. Pinch the grid to resize it, long press to
   select, download a selection as a ZIP.
 
@@ -74,11 +80,46 @@ The setup page walks through:
    `docker run` command to copy, a token and a connection test.
 4. **Backup:** the folder, how often, and what to back up.
 5. **Access:** this computer only or the whole home network, with an access
-   key or without, plus the title and the default theme.
-6. **Summary:** saves the settings and opens the gallery.
+   key or without; whether people may look without an account and whether
+   they may register; the title and the default theme.
+6. **Admin:** the first admin account (name and password).
+7. **Summary:** saves the settings, signs the admin in and opens the gallery.
 
-Later, the same pages are available under **Einstellungen** in the sidebar.
-Saving there restarts the gallery in place.
+Later, the same pages are available to admins under **Einstellungen** in the
+sidebar, with a **Benutzer** page instead of the admin step. Saving there
+restarts the gallery in place.
+
+## Accounts
+
+| Who | May |
+|---|---|
+| Without an account | look at and download photos, when *Ohne Konto ansehen* (`access.anonymous`) is on |
+| Account (`user`) | also set their own favorites and name people |
+| Admin | also change settings, approve and manage accounts, rescan, back up, and edit photos |
+
+Anybody can create an account on the sign-in page (`/login`) when
+`access.register` is on; it stays pending until an admin approves it
+(*Einstellungen → Benutzer*, where admins also create accounts, change roles,
+lock accounts and set passwords). Everybody with an account changes their own
+password in the sidebar.
+
+The access key (`server.token`) only applies to viewers without an account;
+signed-in people do not need it. Accounts live in `users.json` next to
+`config.yaml` (argon2id password hashes, mode 0600); sessions last 90 days
+from the last visit. Repeated wrong passwords from one address are slowed
+down.
+
+Updating from a version without accounts: the gallery keeps running as
+before and prints a one-time link to create the first admin; the favorites
+everybody shared so far become that admin's favorites. On the command line:
+
+```sh
+schuhkarton user add Anna admin   # asks for the password
+schuhkarton user list
+schuhkarton user approve Ben
+schuhkarton user passwd Anna      # the way back in after a lost password
+schuhkarton user role Ben admin | disable Ben | enable Ben | del Ben
+```
 
 Folders given on the command line skip the setup:
 
@@ -86,6 +127,28 @@ Folders given on the command line skip the setup:
 schuhkarton ~/Bilder Urlaub=/mnt/nas/Urlaub
 schuhkarton index -previews /mnt/nas/Bilder   # build the whole cache once, then exit
 ```
+
+## Editing (admins)
+
+Admins see extra buttons in the viewer (also keys **E** edit, **R** rotate,
+**Del** delete) and in the selection bar:
+
+- **Edit:** date and time, place, position on the map, category and the
+  picture text. For a selection: set the same values, or shift the date (a
+  camera with a wrong clock). Changed fields are marked.
+- **Rotate** photos by 90°.
+- **Move** to any folder of the library, or a new one. Live Photos move with
+  their video; names that are taken get " (2)".
+- **Delete** moves files to the trash (`<folder>/.schuhkarton-papierkorb/`),
+  with undo. *Papierkorb* in the sidebar restores them or deletes them for
+  good; the trash empties itself after `library.trash_days`.
+
+With `library.write_files` on (the default), edits are also written into the
+files with exiftool (dates, GPS, `XMP-dc:Description`, `XMP-photoshop:City`
+and `Category`; rotation as EXIF orientation for JPEG and TIFF). Off, they
+stay in the cache (`edits.json`) only. Formats exiftool cannot rotate (HEIC,
+PNG, …) keep the rotation in the cache either way. Favorites, names of
+people and cached previews follow moved and edited files.
 
 ## Face recognition container
 
@@ -123,15 +186,21 @@ page. `schuhkarton config` prints the effective configuration, and
 ```yaml
 server:
   listen: 127.0.0.1:8088      # 0.0.0.0:8088 for the home network
-  token: auto                 # auto: required only on a network address; off; or the key itself
+  token: auto                 # viewers without an account: auto (key needed only on a network address), off, or the key itself
   public_url: ""              # e.g. https://fotos.example.org behind a reverse proxy
   tls_cert: ""                # with tls_key: serve HTTPS directly
   tls_key: ""
+access:
+  anonymous: true             # look and download without an account
+  register: true              # anybody may create an account; an admin approves it
 library:
   folders:
     - {name: Bilder, path: /home/me/Bilder}
   exclude: [_Duplikate, .*, "@eaDir", "#recycle", "$RECYCLE.BIN", System Volume Information, "*.tmp"]
   rescan: ""                  # e.g. 1h; empty: only at start
+  folder_meta: true           # read date, place and category from folder names like 2019/06 Juni Ort
+  write_files: true           # write admin edits into the files (exiftool); false: cache only
+  trash_days: 30              # empty the trash after this many days; 0: never
 cache:
   dir: ~/.cache/schuhkarton
   previews: false             # true: large previews in advance (slow network shares)
@@ -158,6 +227,7 @@ faces:
 ui:
   title: Schuhkarton
   theme: system               # default for new devices: system, light, dark
+  language: auto              # default for new devices: auto (the browser's), de, en
   map_tiles: https://tile.openstreetmap.org/{z}/{x}/{y}.png
   map_attribution: © OpenStreetMap
 backup:
@@ -179,7 +249,8 @@ Thumbnail sizes apply to new thumbnails; to rebuild all of them, delete
 
 The backup folder holds `originals/<folder name>/…`, `cache/…` (index,
 thumbnails, video previews, faces, people, favorites), `config/config.yaml`
-(it contains tokens: keep the backup private) and
+and `config/users.json` (they contain tokens and password hashes: keep the
+backup private) and
 `schuhkarton-backup.json` (the last run). Files that are new or differ in size
 or time are copied; browser transcodes are left out because they can be made
 again.
@@ -190,14 +261,21 @@ when the folder names are the same.
 
 ## Data
 
-Originals are only read, never changed. Everything derived lives in the cache:
+Originals change only when an admin edits, rotates, moves or deletes them
+(see [Editing](#editing-admins)). Everything derived lives in the cache:
 `index.gob.gz`, `thumbs/` (thumbnails, previews, video previews, transcodes),
-`faces/` (crops), `people.json` (names), `favorites.json`, `token`. One process
-per cache; a second one refuses to start.
+`faces/` (crops), `people.json` (names), `favorites.json` (per account),
+`edits.json` (admin edits), `trash.json`, `token`. One process per cache; a second one refuses to start. Accounts are
+not in the cache but in `users.json` next to the settings.
 
-Folder conventions understood: `<Jahr>/<MM Monat Ort>/` gives the place, and
+Any folder layout works; Schuhkarton never sorts or renames files on its own.
+With `library.folder_meta` on (the default) it also reads folder names:
+`<Jahr>/<MM Monat Ort>/` gives the place, and
 `<Sammlung>/<Jahr>/<MM Monat Kategorie>/` a category. When a camera date
 disagrees with such a folder, the folder wins (cameras with reset clocks).
+Edits by an admin always win over folder names and metadata. Without a
+folder value, `XMP-photoshop:City` and `XMP-photoshop:Category` in the file
+give place and category.
 
 ## Release
 
@@ -231,7 +309,8 @@ make faces-image  # build the face container locally
 | `cmd/schuhkarton` | commands (serve, index, worker, doctor, config, models), the runner that swaps setup and gallery |
 | `internal/config` | YAML, `SCHUHKARTON_*` variables, flags, locked keys |
 | `internal/gallery` | scanning, metadata (exiftool), dates and places, thumbnails (pure Go incl. HEIC/AVIF), video previews, face backends (container, local), clustering, search and filters, cache import |
-| `internal/server` | JSON API, media, token auth, ZIP, setup and settings API |
+| `internal/auth` | accounts, sessions, password hashes, login rate limit |
+| `internal/server` | JSON API, media, sign-in and permissions, ZIP, setup and settings API |
 | `internal/setup` | folder and tool checks, folder picker, model download |
 | `internal/backup` | background backup |
 | `internal/worker`, `internal/helper` | face recognition service and its Python helper |

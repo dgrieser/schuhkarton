@@ -4,9 +4,9 @@ package server
 
 import (
 	"archive/zip"
+	"bytes"
 	"compress/gzip"
 	"context"
-	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dgrieser/schuhkarton/internal/auth"
 	"github.com/dgrieser/schuhkarton/internal/backup"
 	"github.com/dgrieser/schuhkarton/internal/config"
 	"github.com/dgrieser/schuhkarton/internal/gallery"
@@ -37,6 +38,7 @@ type Options struct {
 	WebDir string         // serve the UI from this folder instead of the embedded copy
 	Setup  http.Handler   // settings page and its API (/setup, /api/setup/)
 	Backup *backup.Runner // nil without a backup folder
+	Users  *auth.Store    // accounts and sessions
 }
 
 // Server serves one library.
@@ -44,6 +46,7 @@ type Server struct {
 	lib    *gallery.Library
 	backup *backup.Runner
 	cfg    *config.Config
+	users  *auth.Store
 	token  string
 	ctx    context.Context
 	files  fs.FS // UI files: embedded, or a folder during development
@@ -51,7 +54,7 @@ type Server struct {
 
 // New creates the HTTP handler.
 func New(ctx context.Context, o Options) http.Handler {
-	s := &Server{lib: o.Lib, backup: o.Backup, cfg: o.Config, token: o.Token, ctx: ctx, files: UIFiles(o.WebDir)}
+	s := &Server{lib: o.Lib, backup: o.Backup, cfg: o.Config, users: o.Users, token: o.Token, ctx: ctx, files: UIFiles(o.WebDir)}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", s.page)
 	mux.Handle("GET /assets/", http.StripPrefix("/assets/", assetHandler(s.files)))
@@ -66,22 +69,24 @@ func New(ctx context.Context, o Options) http.Handler {
 	mux.HandleFunc("GET /api/places", s.places)
 	mux.HandleFunc("GET /api/albums", s.albums)
 	mux.HandleFunc("GET /api/people", s.people)
-	mux.HandleFunc("POST /api/people/{id}", s.namePerson)
-	mux.HandleFunc("POST /api/face/{id}/{idx}", s.labelFace)
-	mux.HandleFunc("POST /api/fav", s.fav)
-	mux.HandleFunc("POST /api/rescan", s.rescan)
+	mux.HandleFunc("POST /api/people/{id}", s.requireUser(s.namePerson))
+	mux.HandleFunc("POST /api/face/{id}/{idx}", s.requireUser(s.labelFace))
+	mux.HandleFunc("POST /api/fav", s.requireUser(s.fav))
+	mux.HandleFunc("POST /api/rescan", s.requireAdmin(s.rescan))
 	mux.HandleFunc("POST /api/zip", s.zip)
 	mux.HandleFunc("GET /api/backup", s.backupStatus)
-	mux.HandleFunc("POST /api/backup/run", s.backupRun)
+	mux.HandleFunc("POST /api/backup/run", s.requireAdmin(s.backupRun))
 	mux.HandleFunc("GET /t/{id}/{variant}", s.thumb)
 	mux.HandleFunc("GET /f/{id}/{idx}", s.face)
 	mux.HandleFunc("GET /o/{id}", s.original)
 	mux.HandleFunc("GET /v/{id}", s.video)
+	s.accountRoutes(mux)
+	s.adminRoutes(mux, s.requireAdmin)
 	if o.Setup != nil {
 		mux.Handle("/setup", o.Setup)
 		mux.Handle("/api/setup/", o.Setup)
 	}
-	return s.auth(mux)
+	return s.gate(mux)
 }
 
 // UIFiles returns the embedded UI, or dir during development.
@@ -90,42 +95,6 @@ func UIFiles(dir string) fs.FS {
 		return os.DirFS(dir)
 	}
 	return web.FS
-}
-
-// --- auth ---------------------------------------------------------------------
-
-const cookieName = "schuhkarton"
-
-func (s *Server) auth(next http.Handler) http.Handler {
-	if s.token == "" {
-		return next
-	}
-	ok := func(v string) bool { return subtle.ConstantTimeCompare([]byte(v), []byte(s.token)) == 1 }
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if t := r.URL.Query().Get("t"); t != "" && ok(t) {
-			http.SetCookie(w, &http.Cookie{Name: cookieName, Value: s.token, Path: "/", HttpOnly: true,
-				SameSite: http.SameSiteLaxMode, MaxAge: 365 * 24 * 3600})
-			q := r.URL.Query()
-			q.Del("t")
-			u := *r.URL
-			u.RawQuery = q.Encode()
-			http.Redirect(w, r, u.String(), http.StatusFound)
-			return
-		}
-		if c, err := r.Cookie(cookieName); err == nil && ok(c.Value) {
-			next.ServeHTTP(w, r)
-			return
-		}
-		if r.URL.Path == "/healthz" || strings.HasPrefix(r.URL.Path, "/assets/") {
-			next.ServeHTTP(w, r)
-			return
-		}
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.WriteHeader(http.StatusUnauthorized)
-		fmt.Fprint(w, `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width">`+
-			`<title>Schuhkarton</title><body style="font:16px system-ui;padding:2rem;background:#111;color:#eee">`+
-			`<h1>Schuhkarton</h1><p>Bitte den vollständigen Link mit <code>?t=…</code> öffnen. Er steht in der Ausgabe von <code>schuhkarton</code> und auf der Einstellungsseite.</p>`)
-	})
 }
 
 // --- helpers ------------------------------------------------------------------
@@ -166,9 +135,19 @@ func (s *Server) page(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	b = withLang(b, s.cfg.UI.Language)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Write(b)
+}
+
+// withLang tells the page the configured default language (auto, de, en);
+// a viewer's own choice in the browser wins.
+func withLang(page []byte, lang string) []byte {
+	if lang == "" {
+		lang = "auto"
+	}
+	return bytes.Replace(page, []byte(`<html lang="de"`), []byte(`<html lang="de" data-lang="`+lang+`"`), 1)
 }
 
 func assetHandler(files fs.FS) http.Handler {
@@ -184,16 +163,22 @@ func assetHandler(files fs.FS) http.Handler {
 // config tells the UI what it needs to know about this installation.
 func (s *Server) config(w http.ResponseWriter, r *http.Request) {
 	c := s.cfg
+	if id := identityOf(r); id.user == nil && !(c.Access.Anonymous && id.keyOK) {
+		// the login page only needs the look
+		writeJSON(w, r, map[string]any{"title": c.UI.Title, "theme": c.UI.Theme})
+		return
+	}
 	writeJSON(w, r, map[string]any{
 		"title": c.UI.Title, "theme": c.UI.Theme, "mapTiles": c.UI.MapTiles, "mapAttribution": c.UI.MapAttribution,
 		"faces": c.Faces.Mode, "videoPreviews": c.Media.VideoPreviews, "transcode": c.Media.Transcode,
 		"version": version.String(), "folders": len(c.Library.Folders),
+		"writeFiles": c.Library.WriteFiles, "trashDays": c.Library.TrashDays,
 	})
 }
 
 // facets lists what the filter panel offers: years, places, cameras, categories.
 func (s *Server) facets(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, r, s.lib.Facets())
+	writeJSON(w, r, s.lib.Facets(r.URL.Query().Get("lang")))
 }
 
 func (s *Server) backupStatus(w http.ResponseWriter, r *http.Request) {
@@ -243,6 +228,7 @@ type compactItem struct {
 }
 
 func (s *Server) items(w http.ResponseWriter, r *http.Request) {
+	user := userName(r)
 	items := s.lib.Items()
 	out := make([]compactItem, 0, len(items))
 	for _, it := range items {
@@ -251,7 +237,7 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 		}
 		c := compactItem{ID: it.ID, K: uint8(it.Kind), T: it.Taken, A: round(it.Aspect, 3), V: it.Key()[:8],
 			P: it.Place, Al: s.lib.AlbumOf(it), C: it.Category, D: round(it.Duration, 1),
-			F: s.lib.IsFav(it), X: it.Desc != "", Approx: it.TakenSrc == "folder" || it.TakenSrc == "mtime"}
+			F: s.lib.IsFav(user, it), X: it.Desc != "", Approx: it.TakenSrc == "folder" || it.TakenSrc == "mtime"}
 		if it.GPS {
 			c.La, c.Lo = round(it.Lat, 5), round(it.Lon, 5)
 		}
@@ -302,7 +288,10 @@ func (s *Server) item(w http.ResponseWriter, r *http.Request) {
 		"fnumber": it.FNumber, "exposure": it.Exposure, "iso": it.ISO, "focal": it.Focal,
 		"duration": it.Duration, "codec": it.Codec, "ext": ext,
 		"desc": it.Desc, "keywords": it.Keywords, "place": it.Place, "category": it.Category,
-		"live": it.LiveVideo, "fav": s.lib.IsFav(it), "faces": faces, "v": it.Key()[:8],
+		"live": it.LiveVideo, "fav": s.lib.IsFav(userName(r), it), "faces": faces, "v": it.Key()[:8],
+	}
+	if ed := s.lib.EditedFields(it); len(ed) > 0 {
+		res["edited"] = ed
 	}
 	if it.LiveVideo != "" {
 		if lv := s.lib.Get(it.LiveVideo); lv != nil {
@@ -316,7 +305,7 @@ func (s *Server) item(w http.ResponseWriter, r *http.Request) {
 func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query().Get("q")
 	t0 := time.Now()
-	hits := s.lib.Search(q)
+	hits := s.lib.Search(q, userName(r))
 	if len(hits) > 20000 {
 		hits = hits[:20000]
 	}
@@ -324,7 +313,7 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) suggest(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, r, s.lib.Suggest(r.URL.Query().Get("q")))
+	writeJSON(w, r, s.lib.Suggest(r.URL.Query().Get("q"), r.URL.Query().Get("lang")))
 }
 
 func (s *Server) places(w http.ResponseWriter, r *http.Request) { writeJSON(w, r, s.lib.Places()) }
@@ -376,7 +365,7 @@ func (s *Server) fav(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := s.lib.SetFav(req.IDs, req.On); err != nil {
+	if err := s.lib.SetFav(userName(r), req.IDs, req.On); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

@@ -170,10 +170,7 @@ func (l *Library) makePhotoThumbs(it *Item, want string) error {
 		img, err = decodeFile(src)
 	}
 	if err == nil {
-		o := it.Orient
-		if !needsOrient(src) {
-			o = 1
-		}
+		o := l.displayOrient(it, src)
 		// scaling is rotation-invariant here, so scale first and rotate the small result
 		b := img.Bounds()
 		w, h := b.Dx(), b.Dy()
@@ -200,12 +197,34 @@ func (l *Library) makePhotoThumbs(it *Item, want string) error {
 		}
 		w, h, herr := l.local.Thumb(src, outs)
 		if herr == nil {
+			if it.Rot == 90 || it.Rot == 270 {
+				w, h = h, w
+			}
 			l.setAspect(it, w, h)
-			return nil
+			return l.turnOutputs(it, sp, lp)
 		}
 		l.logf("helper %s: %v", it.Rel, herr)
 	}
-	return l.ffmpegImage(src, sp, lp, both)
+	if err := l.ffmpegImage(src, sp, lp, both); err != nil {
+		return err
+	}
+	return l.turnOutputs(it, sp, lp)
+}
+
+// turnOutputs applies an admin rotation to thumbnails made by the helper or
+// ffmpeg (they only know the file's own orientation).
+func (l *Library) turnOutputs(it *Item, paths ...string) error {
+	if it.Rot == 0 {
+		return nil
+	}
+	for _, p := range paths {
+		if exists(p) {
+			if err := rotateJPEGFile(p, p, it.Rot); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (l *Library) setAspect(it *Item, w, h int) {

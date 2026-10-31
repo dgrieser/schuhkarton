@@ -66,6 +66,8 @@ func (l *Library) generate(ctx context.Context) {
 		}
 	}
 	l.cnt.thumbs.Store(nThumb)
+	l.cnt.thumbFail.Store(0)
+	l.cnt.previewFail.Store(0)
 	l.cnt.posters.Store(nPoster)
 	l.cnt.previews.Store(nPrev)
 	l.cnt.faces.Store(nFace)
@@ -102,6 +104,7 @@ func (l *Library) generate(ctx context.Context) {
 	run(thumbs, w, func(it *Item) {
 		if _, err := l.Ensure(ctx, it, VarSmall); err != nil {
 			l.logf("thumbnail %s: %v", it.Rel, err)
+			l.cnt.thumbFail.Add(1)
 			return
 		}
 		if l.opt.Previews && it.Kind == Photo {
@@ -116,6 +119,7 @@ func (l *Library) generate(ctx context.Context) {
 	run(previews, max(1, w/3), func(it *Item) {
 		if _, err := l.Ensure(ctx, it, VarPreview); err != nil {
 			l.logf("preview %s: %v", it.Rel, err)
+			l.cnt.previewFail.Add(1)
 			return
 		}
 		l.cnt.previews.Add(1)

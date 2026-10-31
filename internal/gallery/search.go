@@ -116,7 +116,7 @@ func (l *Library) buildDoc(it *Item) *doc {
 	}
 	date := fmt.Sprintf("%d %s %s %s %s %02d.%02d.%d %d-%02d-%02d", t.Year(), fold(monthsDE[t.Month()]), seasons[t.Month()],
 		fold(weekdaysDE[t.Weekday()]), daykind, t.Day(), int(t.Month()), t.Year(), t.Year(), int(t.Month()), t.Day())
-	if it.TakenSrc == "exif" || (it.TakenSrc == "name" && t.Hour()+t.Minute()+t.Second() != 12) {
+	if it.TakenSrc == "exif" || it.TakenSrc == "edit" || (it.TakenSrc == "name" && t.Hour()+t.Minute()+t.Second() != 12) {
 		date += " " + timeOfDay(t.Hour())
 	}
 	kind := "foto bild"
@@ -242,6 +242,24 @@ var fieldAlias = map[string]string{
 	"monat": "month", "typ": "kind", "type": "kind", "kamera": "cam", "camera": "cam", "album": "album",
 	"wochentag": "date", "tag": "date", "jahreszeit": "date", "tageszeit": "date", "zeit": "date",
 	"ordner": "album", "text": "desc", "datum": "date", "date": "date", "kategorie": "cat", "datei": "name",
+	// English
+	"who": "person", "month": "month", "kind": "kind", "folder": "album", "category": "cat", "file": "name",
+	"weekday": "date", "day": "date", "season": "date", "time": "date",
+}
+
+// enWords maps English search words to the German words the index holds
+// (folded). They are added as alternatives, so "summer" also finds the
+// word itself in picture texts.
+var enWords = map[string]string{
+	"january": "januar", "february": "februar", "march": "marz", "may": "mai", "june": "juni", "july": "juli",
+	"october": "oktober", "december": "dezember",
+	"spring": "fruhling", "summer": "sommer", "autumn": "herbst", "fall": "herbst",
+	"monday": "montag", "tuesday": "dienstag", "wednesday": "mittwoch", "thursday": "donnerstag", "friday": "freitag",
+	"saturday": "samstag", "sunday": "sonntag", "weekend": "wochenende", "weekday": "werktag", "workday": "werktag",
+	"morning": "morgens", "noon": "mittags", "midday": "mittags", "afternoon": "nachmittags", "evening": "abends", "night": "nachts",
+	"photo": "foto", "photos": "foto", "picture": "bild", "pictures": "bild", "videos": "video", "movie": "film",
+	"favorite": "favorit", "favorites": "favorit", "favourite": "favorit", "favourites": "favorit", "location": "gps",
+	"selfies": "selfie", "screenshots": "screenshot", "panoramas": "panorama",
 }
 
 func parseQuery(q string) []term {
@@ -266,6 +284,9 @@ func parseQuery(q string) []term {
 			}
 		}
 		t.words = germanVariants(w)
+		if de, ok := enWords[w]; ok {
+			t.words = append(t.words, de)
+		}
 		terms = append(terms, t)
 	}
 	return terms
@@ -273,8 +294,8 @@ func parseQuery(q string) []term {
 
 // Search finds items matching q. Plain words search everything; prefixes
 // (ort:, person:, jahr:, monat:, typ:, kamera:, album:, text:, datum:) narrow
-// the field, a leading "-" excludes.
-func (l *Library) Search(q string) []Hit {
+// the field, a leading "-" excludes. user's favorites match typ:favorit.
+func (l *Library) Search(q, user string) []Hit {
 	terms := parseQuery(q)
 	if len(terms) == 0 {
 		return nil
@@ -313,7 +334,7 @@ func (l *Library) Search(q string) []Hit {
 		score, ok := 0.0, true
 		var snipWord string
 		extra := ""
-		if l.IsFav(it) {
+		if l.IsFav(user, it) {
 			extra = " favorit favoriten"
 		}
 		match := func(t term) (float64, string) {
@@ -537,7 +558,9 @@ func snippet(text, word string) string {
 
 // Suggest returns places, people, categories, cameras and years starting
 // with (or containing) the prefix.
-func (l *Library) Suggest(prefix string) []facet {
+// Suggest completes a search word: people, places, categories, cameras,
+// years and date words. lang "en" suggests English words and syntax.
+func (l *Library) Suggest(prefix, lang string) []facet {
 	p := fold(strings.TrimSpace(prefix))
 	if p == "" {
 		return nil
@@ -563,12 +586,16 @@ func (l *Library) Suggest(prefix string) []facet {
 			weak = append(weak, f)
 		}
 	}
+	months, words := monthsDE, dateWords
+	if lang == "en" {
+		months, words = monthsEN, dateWordsEN
+	}
 	for m := 1; m <= 12; m++ {
-		if strings.HasPrefix(fold(monthsDE[m]), p) {
-			out = append(out, facet{Type: "monat", Label: monthsDE[m], Query: "monat:" + strings.ToLower(monthsDE[m])})
+		if strings.HasPrefix(fold(months[m]), p) {
+			out = append(out, facet{Type: "monat", Label: months[m], Query: localize("monat:", lang) + strings.ToLower(months[m])})
 		}
 	}
-	for _, d := range dateWords {
+	for _, d := range words {
 		if strings.HasPrefix(fold(d.label), p) {
 			out = append(out, facet{Type: d.typ, Label: d.label, Query: d.query})
 		}
@@ -577,7 +604,50 @@ func (l *Library) Suggest(prefix string) []facet {
 	if len(out) > 12 {
 		out = out[:12]
 	}
+	for i := range out {
+		out[i].Query = localizeQuery(out[i].Query, lang)
+	}
 	return out
+}
+
+var monthsEN = []string{"", "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"}
+
+var dateWordsEN = []struct{ typ, label, query string }{
+	{"wochentag", "Monday", "weekday:monday"}, {"wochentag", "Tuesday", "weekday:tuesday"},
+	{"wochentag", "Wednesday", "weekday:wednesday"}, {"wochentag", "Thursday", "weekday:thursday"},
+	{"wochentag", "Friday", "weekday:friday"}, {"wochentag", "Saturday", "weekday:saturday"},
+	{"wochentag", "Sunday", "weekday:sunday"}, {"wochentag", "Weekend", "day:weekend"},
+	{"wochentag", "Workday", "day:workday"},
+	{"jahreszeit", "Spring", "season:spring"}, {"jahreszeit", "Summer", "season:summer"},
+	{"jahreszeit", "Autumn", "season:autumn"}, {"jahreszeit", "Winter", "season:winter"},
+	{"tageszeit", "Morning", "time:morning"}, {"tageszeit", "Noon", "time:noon"},
+	{"tageszeit", "Afternoon", "time:afternoon"}, {"tageszeit", "Evening", "time:evening"},
+	{"tageszeit", "Night", "time:night"},
+}
+
+// prefixEN translates the German field prefixes of generated queries.
+var prefixEN = map[string]string{"ort:": "place:", "kamera:": "camera:", "jahr:": "year:", "monat:": "month:", "kategorie:": "category:"}
+
+func localize(prefix, lang string) string {
+	if lang == "en" {
+		if p, ok := prefixEN[prefix]; ok {
+			return p
+		}
+	}
+	return prefix
+}
+
+// localizeQuery rewrites a generated query ("ort:Lübbecke") for lang.
+func localizeQuery(q, lang string) string {
+	if lang != "en" {
+		return q
+	}
+	if i := strings.IndexByte(q, ':'); i > 0 {
+		if p, ok := prefixEN[q[:i+1]]; ok {
+			return p + q[i+1:]
+		}
+	}
+	return q
 }
 
 var dateWords = []struct{ typ, label, query string }{
@@ -610,10 +680,11 @@ type Facets struct {
 
 // Facets returns the values the filter panel offers, most items first
 // (years newest first).
-func (l *Library) Facets() Facets {
+func (l *Library) Facets(lang string) Facets {
 	si := l.index()
 	var f Facets
 	for _, x := range si.facets {
+		x.Query = localizeQuery(x.Query, lang)
 		switch x.Type {
 		case "jahr":
 			f.Years = append(f.Years, x)

@@ -55,6 +55,13 @@ type Options struct {
 	VideoPreviewSize int  // their short edge
 	Transcode        bool // H.264 for browsers that cannot play the original
 
+	// IgnoreFolders: no date, place or category from folder names.
+	IgnoreFolders bool
+	// WriteFiles: admin edits are written into the files (exiftool).
+	WriteFiles bool
+	// TrashDays: deleted files leave the trash after this many days (0: never).
+	TrashDays int
+
 	Faces FaceOptions
 }
 
@@ -111,8 +118,12 @@ type Item struct {
 	Keywords []string
 
 	Album    string // folder relative to the root
-	Place    string // place from a "MM Monat Ort" folder
-	Category string // category from a collection like Dokumente/<Jahr>/<MM Monat Kategorie>
+	Place    string // place from a "MM Monat Ort" folder, XMP City or an edit
+	Category string // category from a collection like Dokumente/<Jahr>/<MM Monat Kategorie>, XMP or an edit
+
+	MetaPlace    string // XMP-photoshop:City
+	MetaCategory string // XMP-photoshop:Category
+	Rot          int    // extra clockwise rotation by an admin (0, 90, 180, 270), applied to thumbnails
 
 	LiveVideo string // photo: id of the Live Photo video
 	LivePhoto string // video: id of the photo it belongs to (hidden in grids)
@@ -137,16 +148,20 @@ type Status struct {
 	Thumbs   int64  `json:"thumbs"`
 	Posters  int64  `json:"posters"`
 	Previews int64  `json:"previews"`
-	Faces    int64  `json:"faces"`
-	FaceTodo int64  `json:"faceTodo"`
-	People   int    `json:"people"`
-	FaceMode string `json:"faceMode"`
-	FaceOK   bool   `json:"faceDetection"`
-	FaceRec  bool   `json:"faceRecognition"`
-	FaceErr  string `json:"faceError,omitempty"`
-	Scanned  int64  `json:"scanned"`
-	Errors   int64  `json:"errors"`
-	Version  int64  `json:"version"`
+	// ThumbFail and PreviewFail count files whose thumbnail or video preview
+	// could not be made (broken files); the UI counts them as done.
+	ThumbFail   int64  `json:"thumbFail"`
+	PreviewFail int64  `json:"previewFail"`
+	Faces       int64  `json:"faces"`
+	FaceTodo    int64  `json:"faceTodo"`
+	People      int    `json:"people"`
+	FaceMode    string `json:"faceMode"`
+	FaceOK      bool   `json:"faceDetection"`
+	FaceRec     bool   `json:"faceRecognition"`
+	FaceErr     string `json:"faceError,omitempty"`
+	Scanned     int64  `json:"scanned"`
+	Errors      int64  `json:"errors"`
+	Version     int64  `json:"version"`
 }
 
 // Library holds the index and the background workers.
@@ -162,14 +177,21 @@ type Library struct {
 
 	cnt struct {
 		meta, metaTodo, thumbs, posters, previews, faces, faceTodo, scanned, errors atomic.Int64
+		thumbFail, previewFail                                                      atomic.Int64 // files without a thumbnail / preview (broken)
 	}
 	phase atomic.Value // string
 
 	favMu sync.Mutex
-	favs  map[string]bool // root name + "/" + rel
+	favs  map[string]map[string]bool // user -> root name + "/" + rel
 
 	people *peopleStore
 	search searchIndex
+
+	opMu    sync.Mutex           // one admin operation (edit, rotate, move, trash) at a time
+	editMu  sync.Mutex           // guards edits
+	edits   map[string]*Override // root name + "/" + rel -> admin edits
+	trashMu sync.Mutex
+	trash   []*TrashEntry
 
 	faces faceBackend  // nil when face detection is off
 	local *helper.Pool // Python helper for formats Go cannot decode (mode local)
@@ -207,7 +229,7 @@ func Open(opt Options) (*Library, error) {
 	if err != nil {
 		return nil, fmt.Errorf("der Cache %s wird schon von einem anderen schuhkarton-Prozess benutzt", opt.CacheDir)
 	}
-	l := &Library{opt: opt, byID: map[string]*Item{}, favs: map[string]bool{}, lock: lf}
+	l := &Library{opt: opt, byID: map[string]*Item{}, favs: map[string]map[string]bool{}, lock: lf}
 	l.phase.Store("bereit")
 	switch opt.Faces.Mode {
 	case "local":
@@ -219,6 +241,8 @@ func Open(opt Options) (*Library, error) {
 	}
 	l.media = newMediaGen(l)
 	l.people = newPeopleStore(filepath.Join(opt.CacheDir, "people.json"), opt.Faces.ClusterThreshold, opt.Faces.NamedThreshold)
+	l.loadEdits()
+	l.loadTrash()
 	l.loadIndex()
 	l.loadFavs()
 	l.recluster()
@@ -328,17 +352,19 @@ func (l *Library) RootName(it *Item) string { return l.opt.Roots[it.Root].Name }
 // Status returns progress counters.
 func (l *Library) Status() Status {
 	s := Status{
-		Phase:    l.phase.Load().(string),
-		Meta:     l.cnt.meta.Load(),
-		MetaTodo: l.cnt.metaTodo.Load(),
-		Thumbs:   l.cnt.thumbs.Load(),
-		Posters:  l.cnt.posters.Load(),
-		Previews: l.cnt.previews.Load(),
-		Faces:    l.cnt.faces.Load(),
-		FaceTodo: l.cnt.faceTodo.Load(),
-		Scanned:  l.cnt.scanned.Load(),
-		Errors:   l.cnt.errors.Load(),
-		Version:  l.Version(),
+		Phase:       l.phase.Load().(string),
+		Meta:        l.cnt.meta.Load(),
+		MetaTodo:    l.cnt.metaTodo.Load(),
+		Thumbs:      l.cnt.thumbs.Load(),
+		Posters:     l.cnt.posters.Load(),
+		Previews:    l.cnt.previews.Load(),
+		ThumbFail:   l.cnt.thumbFail.Load(),
+		PreviewFail: l.cnt.previewFail.Load(),
+		Faces:       l.cnt.faces.Load(),
+		FaceTodo:    l.cnt.faceTodo.Load(),
+		Scanned:     l.cnt.scanned.Load(),
+		Errors:      l.cnt.errors.Load(),
+		Version:     l.Version(),
 	}
 	fs := l.FaceStatus()
 	s.FaceMode, s.FaceOK, s.FaceRec, s.FaceErr = fs.Mode, fs.Detection, fs.Recognition, fs.Error
@@ -363,6 +389,16 @@ func itemID(root, rel string) string {
 func itemKey(root, rel string, size, mtime int64) string {
 	h := sha1.Sum(fmt.Appendf(nil, "%s\x00%s\x00%d\x00%d", root, rel, size, mtime))
 	return hex.EncodeToString(h[:10])
+}
+
+// keyOf is the cache key of an item: its file version plus an admin rotation.
+func (l *Library) keyOf(it *Item) string {
+	k := itemKey(l.opt.Roots[it.Root].Name, it.Rel, it.Size, it.MTime)
+	if it.Rot != 0 {
+		h := sha1.Sum(fmt.Appendf(nil, "%s\x00rot%d", k, it.Rot))
+		k = hex.EncodeToString(h[:10])
+	}
+	return k
 }
 
 func (l *Library) loadIndex() {
@@ -400,7 +436,7 @@ func (l *Library) loadIndex() {
 
 func (l *Library) setItems(items []*Item) {
 	for _, it := range items {
-		it.key = itemKey(l.opt.Roots[it.Root].Name, it.Rel, it.Size, it.MTime)
+		it.key = l.keyOf(it)
 	}
 	sort.SliceStable(items, func(a, b int) bool {
 		if items[a].Taken != items[b].Taken {
@@ -457,49 +493,166 @@ func (l *Library) markDirty() {
 
 // --- favorites ---------------------------------------------------------------
 
+// Favorites belong to an account. favorites.json maps user names to item keys
+// (root name + "/" + rel). The file of older versions held one list for
+// everybody; it is kept under the empty user name until an admin claims it.
+
 func (l *Library) favKey(it *Item) string { return l.opt.Roots[it.Root].Name + "/" + it.Rel }
+
+type favFile struct {
+	Version int                 `json:"version"`
+	Users   map[string][]string `json:"users"`
+}
 
 func (l *Library) loadFavs() {
 	b, err := os.ReadFile(filepath.Join(l.opt.CacheDir, "favorites.json"))
 	if err != nil {
 		return
 	}
-	var keys []string
-	if json.Unmarshal(b, &keys) == nil {
-		for _, k := range keys {
-			l.favs[k] = true
+	var legacy []string
+	if json.Unmarshal(b, &legacy) == nil {
+		set := map[string]bool{}
+		for _, k := range legacy {
+			set[k] = true
+		}
+		l.favs[""] = set
+		return
+	}
+	var f favFile
+	if json.Unmarshal(b, &f) == nil {
+		for u, keys := range f.Users {
+			set := map[string]bool{}
+			for _, k := range keys {
+				set[k] = true
+			}
+			l.favs[u] = set
 		}
 	}
 }
 
-// IsFav reports whether an item is a favorite.
-func (l *Library) IsFav(it *Item) bool {
-	l.favMu.Lock()
-	defer l.favMu.Unlock()
-	return l.favs[l.favKey(it)]
+// saveFavs writes favorites.json; the caller holds favMu.
+func (l *Library) saveFavs() error {
+	f := favFile{Version: 2, Users: map[string][]string{}}
+	for u, set := range l.favs {
+		if len(set) == 0 {
+			continue
+		}
+		keys := make([]string, 0, len(set))
+		for k := range set {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		f.Users[u] = keys
+	}
+	b, _ := json.MarshalIndent(f, "", " ")
+	return writeFileAtomic(filepath.Join(l.opt.CacheDir, "favorites.json"), b)
 }
 
-// SetFav marks or unmarks favorites.
-func (l *Library) SetFav(ids []string, on bool) error {
+// IsFav reports whether an item is one of user's favorites. Without an
+// account ("") nothing is a favorite.
+func (l *Library) IsFav(user string, it *Item) bool {
+	if user == "" {
+		return false
+	}
 	l.favMu.Lock()
+	defer l.favMu.Unlock()
+	return l.favs[user][l.favKey(it)]
+}
+
+// FavCount returns how many favorites user has.
+func (l *Library) FavCount(user string) int {
+	l.favMu.Lock()
+	defer l.favMu.Unlock()
+	return len(l.favs[user])
+}
+
+// SetFav marks or unmarks favorites of user.
+func (l *Library) SetFav(user string, ids []string, on bool) error {
+	if user == "" {
+		return errors.New("favorites need an account")
+	}
+	l.favMu.Lock()
+	defer l.favMu.Unlock()
+	set := l.favs[user]
+	if set == nil {
+		set = map[string]bool{}
+		l.favs[user] = set
+	}
 	for _, id := range ids {
 		if it := l.Get(id); it != nil {
 			if on {
-				l.favs[l.favKey(it)] = true
+				set[l.favKey(it)] = true
 			} else {
-				delete(l.favs, l.favKey(it))
+				delete(set, l.favKey(it))
 			}
 		}
 	}
-	keys := make([]string, 0, len(l.favs))
-	for k := range l.favs {
-		keys = append(keys, k)
-	}
-	l.favMu.Unlock()
-	sort.Strings(keys)
-	b, _ := json.MarshalIndent(keys, "", " ")
 	l.bump()
-	return writeFileAtomic(filepath.Join(l.opt.CacheDir, "favorites.json"), b)
+	return l.saveFavs()
+}
+
+// ClaimLegacyFavs gives the favorites of older versions (one list for
+// everybody) to user, typically the first admin.
+func (l *Library) ClaimLegacyFavs(user string) error {
+	if user == "" {
+		return nil
+	}
+	l.favMu.Lock()
+	defer l.favMu.Unlock()
+	legacy := l.favs[""]
+	if len(legacy) == 0 {
+		return nil
+	}
+	set := l.favs[user]
+	if set == nil {
+		set = map[string]bool{}
+		l.favs[user] = set
+	}
+	for k := range legacy {
+		set[k] = true
+	}
+	delete(l.favs, "")
+	l.bump()
+	return l.saveFavs()
+}
+
+// DropUserFavs forgets the favorites of a deleted account.
+func (l *Library) DropUserFavs(user string) error {
+	l.favMu.Lock()
+	defer l.favMu.Unlock()
+	if _, ok := l.favs[user]; !ok {
+		return nil
+	}
+	delete(l.favs, user)
+	l.bump()
+	return l.saveFavs()
+}
+
+// RenameKeys moves per-file state (favorites of every user) from old item
+// keys (root name + "/" + rel) to new ones after files were moved.
+func (l *Library) RenameKeys(pairs map[string]string) error {
+	if len(pairs) == 0 {
+		return nil
+	}
+	l.favMu.Lock()
+	defer l.favMu.Unlock()
+	changed := false
+	for _, set := range l.favs {
+		for from, to := range pairs {
+			if set[from] {
+				delete(set, from)
+				if to != "" {
+					set[to] = true
+				}
+				changed = true
+			}
+		}
+	}
+	if !changed {
+		return nil
+	}
+	l.bump()
+	return l.saveFavs()
 }
 
 func writeFileAtomic(path string, b []byte) error {

@@ -198,11 +198,7 @@ func (l *Library) faceImage(it *Item) ([]byte, string, error) {
 	src := l.Path(it)
 	if !rawExt[strings.ToLower(filepath.Ext(src))] {
 		if img, err := decodeFile(src); err == nil {
-			if needsOrient(src) {
-				img = orient(resizeFit(img, 1600, 1600), it.Orient)
-			} else {
-				img = resizeFit(img, 1600, 1600)
-			}
+			img = orient(resizeFit(img, 1600, 1600), l.displayOrient(it, src))
 			var buf bytes.Buffer
 			if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: 90}); err == nil {
 				return buf.Bytes(), "face.jpg", nil

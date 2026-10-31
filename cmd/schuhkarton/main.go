@@ -26,6 +26,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/dgrieser/schuhkarton/internal/auth"
 	"github.com/dgrieser/schuhkarton/internal/backup"
 	"github.com/dgrieser/schuhkarton/internal/config"
 	"github.com/dgrieser/schuhkarton/internal/gallery"
@@ -46,6 +47,8 @@ Aufruf:
   schuhkarton doctor                          Einstellungen, Ordner und Werkzeuge prüfen
   schuhkarton config [path]                   gültige Einstellungen bzw. Pfad der Datei zeigen
   schuhkarton models download [-dir DIR]      Gesichtsmodelle laden (nur ohne Container nötig)
+  schuhkarton user list|add|passwd|approve|role|disable|enable|del NAME [admin|user]
+                                              Konten verwalten (z.B. "user add Anna admin")
   schuhkarton version
 
 ORDNER als Pfad oder Name=Pfad, z.B. Familie=/mnt/nas/Bilder. Ordner auf der Kommandozeile
@@ -61,7 +64,7 @@ func main() {
 	cmd := "serve"
 	if len(args) > 0 {
 		switch args[0] {
-		case "serve", "index", "worker", "doctor", "config", "models", "version", "help":
+		case "serve", "index", "worker", "doctor", "config", "models", "user", "version", "help":
 			cmd, args = args[0], args[1:]
 		case "-h", "--help", "-help":
 			cmd = "help"
@@ -84,6 +87,8 @@ func main() {
 		err = runConfig(args)
 	case "models":
 		err = runModels(args)
+	case "user":
+		err = runUser(args)
 	default:
 		err = runServe(cmd, args)
 	}
@@ -204,7 +209,8 @@ func libOptions(cfg *config.Config) gallery.Options {
 		ExifTool: gallery.FindExifTool(cfg.Media.ExifTool), FFmpeg: gallery.FindFFmpeg(cfg.Media.FFmpeg),
 		ThumbSize: cfg.Media.ThumbSize, PreviewSize: cfg.Media.PreviewSize, Quality: cfg.Media.JPEGQuality,
 		Previews: cfg.Cache.Previews, VideoPreviews: cfg.Media.VideoPreviews, VideoPreviewSize: cfg.Media.VideoPreviewSize,
-		Transcode: cfg.Media.Transcode,
+		Transcode:     cfg.Media.Transcode,
+		IgnoreFolders: !cfg.Library.FolderMeta, WriteFiles: cfg.Library.WriteFiles, TrashDays: cfg.Library.TrashDays,
 		Faces: gallery.FaceOptions{
 			Mode: cfg.Faces.Mode, URL: cfg.Faces.URL, Token: cfg.Faces.Token, Workers: cfg.Faces.Workers,
 			MinScore: cfg.Faces.MinScore, ClusterThreshold: cfg.Faces.ClusterThreshold, NamedThreshold: cfg.Faces.NamedThreshold,
@@ -240,16 +246,21 @@ func runServe(cmd string, args []string) error {
 		return nil
 	}
 
-	r := &runner{base: ctx, webDir: *f.web, sw: &handlerSwitch{}, prog: &server.ProgressBox{}}
+	users, err := auth.Open(auth.PathFor(cfg.Path()))
+	if err != nil {
+		return err
+	}
+	defer users.Flush()
+	r := &runner{base: ctx, webDir: *f.web, sw: &handlerSwitch{}, prog: &server.ProgressBox{}, users: users, setupToken: server.NewToken()}
 	r.http = &http.Server{Handler: r.sw, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute}
 	if err := r.listen(cfg.Server.Listen, cfg); err != nil {
 		return err
 	}
 	r.cfg = cfg
 	if cfg.NeedsSetup() {
-		token := server.NewToken()
+		token := r.setupToken
 		r.sw.Set(server.NewSetup(server.SetupOptions{
-			Install: true, Token: token, Config: r.config, Listen: r.addr, WebDir: r.webDir, Apply: r.apply, Progress: r.prog,
+			Install: true, Token: token, Users: users, Config: r.config, Listen: r.addr, WebDir: r.webDir, Apply: r.apply, Progress: r.prog,
 		}).Handler())
 		fmt.Fprintf(os.Stderr, "\nSchuhkarton ist noch nicht eingerichtet. Diesen Link öffnen, um Ordner, Speicher und Gesichtserkennung festzulegen:\n\n")
 		for _, u := range pageURLs(r.addr(), cfg.Server.PublicURL) {
@@ -292,7 +303,10 @@ type runner struct {
 	sw     *handlerSwitch
 	http   *http.Server
 
-	prog *server.ProgressBox
+	prog  *server.ProgressBox
+	users *auth.Store
+	// setupToken opens the settings while there is no admin account yet
+	setupToken string
 
 	mu     sync.Mutex
 	cfg    *config.Config
@@ -390,9 +404,15 @@ func (r *runner) start(cfg *config.Config) error {
 		lib.Go(func() { br.Loop(ctx) })
 	}
 	token := appToken(cfg, r.addr())
+	if a := r.users.FirstAdmin(); a != "" {
+		// favorites from before accounts existed belong to the first admin
+		if err := lib.ClaimLegacyFavs(a); err != nil {
+			log.Printf("favorites: %v", err)
+		}
+	}
 	settings := server.NewSetup(server.SetupOptions{Config: r.config, Listen: r.addr, WebDir: r.webDir, Apply: r.apply,
-		AccessLink: r.accessLink, Progress: r.prog}).Handler()
-	h := server.New(ctx, server.Options{Lib: lib, Config: cfg, Token: token, WebDir: r.webDir, Setup: settings, Backup: br})
+		AccessLink: r.accessLink, Progress: r.prog, Users: r.users, Token: r.setupToken}).Handler()
+	h := server.New(ctx, server.Options{Lib: lib, Config: cfg, Token: token, WebDir: r.webDir, Setup: settings, Backup: br, Users: r.users})
 	r.mu.Lock()
 	r.cfg, r.lib, r.cancel, r.token = cfg, lib, cancel, token
 	r.mu.Unlock()
@@ -494,6 +514,12 @@ func (r *runner) printLinks() {
 		log.Printf("Schuhkarton: %s%s", u, q)
 	}
 	log.Printf("Einstellungen: %s", cfg.Path())
+	if !r.users.HasAdmin() {
+		log.Printf("Noch kein Admin-Konto. Anlegen unter (oder mit \"schuhkarton user add NAME admin\"):")
+		for _, u := range pageURLs(r.addr(), cfg.Server.PublicURL) {
+			log.Printf("  %s/setup?token=%s", u, r.setupToken)
+		}
+	}
 }
 
 func scanLoop(ctx context.Context, lib *gallery.Library, every time.Duration) {

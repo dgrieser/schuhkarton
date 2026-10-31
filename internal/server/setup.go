@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/dgrieser/schuhkarton/internal/auth"
 	"github.com/dgrieser/schuhkarton/internal/config"
 	"github.com/dgrieser/schuhkarton/internal/gallery"
 	"github.com/dgrieser/schuhkarton/internal/setup"
@@ -26,6 +27,8 @@ type Plan struct {
 	TokenMode string `json:"tokenMode"`
 	// Import copies another cache into the cache folder first.
 	Import string `json:"import"`
+	// Admin is the first admin account (required while there is none).
+	Admin *credentials `json:"admin,omitempty"`
 }
 
 // Progress reports a running save (cache import, restart).
@@ -60,8 +63,9 @@ func (b *ProgressBox) set(p Progress) {
 
 // SetupOptions configure the wizard (first start) or the settings page.
 type SetupOptions struct {
-	Install bool   // first start: protected by Token instead of the gallery's token
-	Token   string // setup token printed to the log
+	Install bool   // first start: protected by Token instead of an admin login
+	Token   string // setup token printed to the log (first start, or while there is no admin)
+	Users   *auth.Store
 	Config  func() *config.Config
 	Listen  func() string // the address the server listens on now
 	// AccessLink returns the gallery link with its token (settings page only).
@@ -116,12 +120,12 @@ func (s *Setup) Handler() http.Handler {
 	return mux
 }
 
-// guard checks the setup token in install mode (the gallery's own auth
-// protects the settings page).
+// guard lets admins in, or whoever has the setup link while there is no
+// admin yet (first start, or an update from a version without accounts).
 func (s *Setup) guard(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if s.o.Install && !s.authorized(r) {
-			http.Error(w, "Bitte den Einrichtungslink aus der Ausgabe von schuhkarton öffnen.", http.StatusUnauthorized)
+		if !s.allowed(r) {
+			http.Error(w, "Nur für Admins. Ohne Admin-Konto: den Einrichtungslink aus der Ausgabe von schuhkarton öffnen.", http.StatusUnauthorized)
 			return
 		}
 		// same-origin only: the browser sends Origin on POST
@@ -135,6 +139,18 @@ func (s *Setup) guard(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+func (s *Setup) needAdmin() bool { return s.o.Users == nil || !s.o.Users.HasAdmin() }
+
+func (s *Setup) allowed(r *http.Request) bool {
+	if s.o.Install {
+		return s.authorized(r)
+	}
+	if isAdmin(r) {
+		return true
+	}
+	return s.o.Token != "" && s.needAdmin() && s.authorized(r)
+}
+
 func (s *Setup) authorized(r *http.Request) bool {
 	tok := r.URL.Query().Get("token")
 	if tok == "" {
@@ -146,26 +162,30 @@ func (s *Setup) authorized(r *http.Request) bool {
 }
 
 func (s *Setup) page(w http.ResponseWriter, r *http.Request) {
-	if s.o.Install {
-		if !s.authorized(r) {
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			w.WriteHeader(http.StatusUnauthorized)
-			w.Write([]byte(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Schuhkarton einrichten</title>` +
-				`<body style="font:16px system-ui;padding:2rem;background:#111;color:#eee;max-width:40rem"><h1>Schuhkarton einrichten</h1>` +
-				`<p>Bitte den Einrichtungslink öffnen, den <code>schuhkarton</code> beim Start ausgibt (mit <code>?token=…</code>).</p>`))
+	if t := r.URL.Query().Get("token"); t != "" && s.o.Token != "" && subtle.ConstantTimeCompare([]byte(t), []byte(s.o.Token)) == 1 {
+		http.SetCookie(w, &http.Cookie{Name: setupCookie, Value: t, Path: "/", MaxAge: 86400, HttpOnly: true, SameSite: http.SameSiteStrictMode})
+		http.Redirect(w, r, "/setup", http.StatusFound)
+		return
+	}
+	if !s.allowed(r) {
+		if !s.o.Install {
+			http.Redirect(w, r, "/login?next=/setup", http.StatusFound)
 			return
 		}
-		if t := r.URL.Query().Get("token"); t != "" {
-			http.SetCookie(w, &http.Cookie{Name: setupCookie, Value: t, Path: "/", MaxAge: 86400, HttpOnly: true, SameSite: http.SameSiteStrictMode})
-			http.Redirect(w, r, "/setup", http.StatusFound)
-			return
-		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Schuhkarton einrichten</title>` +
+			`<body style="font:16px system-ui;padding:2rem;background:#111;color:#eee;max-width:40rem"><h1>Schuhkarton einrichten</h1>` +
+			`<p>Bitte den Einrichtungslink öffnen, den <code>schuhkarton</code> beim Start ausgibt (mit <code>?token=…</code>).</p>` +
+			`<p lang="en">Please open the setup link that <code>schuhkarton</code> prints when it starts.</p>`))
+		return
 	}
 	b, err := fs.ReadFile(s.files, "setup.html")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	b = withLang(b, s.o.Config().UI.Language)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Write(b)
@@ -200,6 +220,8 @@ func (s *Setup) state(w http.ResponseWriter, r *http.Request) {
 		"os":         runtime.GOOS + "/" + runtime.GOARCH,
 		"lan":        lanAddrs(),
 		"accessLink": s.accessLink(),
+		"needAdmin":  s.needAdmin(),
+		"me":         userName(r),
 	})
 }
 
@@ -299,6 +321,22 @@ func (s *Setup) save(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, r, map[string]any{"ok": false, "error": "Speichern läuft schon"})
 		return
 	}
+	if s.needAdmin() && s.o.Users != nil {
+		if p.Admin == nil {
+			writeJSON(w, r, map[string]any{"ok": false, "error": "Bitte zuerst ein Admin-Konto anlegen"})
+			return
+		}
+		if err := s.o.Users.Create(p.Admin.Name, p.Admin.Password, auth.RoleAdmin, false); err != nil {
+			writeJSON(w, r, map[string]any{"ok": false, "error": err.Error()})
+			return
+		}
+		if tok, err := s.o.Users.StartSession(p.Admin.Name); err == nil {
+			http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: tok, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode,
+				MaxAge: int(auth.SessionTTL.Seconds()), Secure: r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")})
+		}
+		http.SetCookie(w, &http.Cookie{Name: setupCookie, Value: "", Path: "/", MaxAge: -1})
+		p.Admin = nil
+	}
 	s.prog.set(Progress{Running: true, Phase: "Speichern"})
 	p.Config = next
 	go func() {
@@ -331,6 +369,9 @@ func merge(cur, in *config.Config) *config.Config {
 	set("library.folders", func() { n.Library.Folders = cleanFolders(in.Library.Folders) })
 	set("library.exclude", func() { n.Library.Exclude = in.Library.Exclude })
 	set("library.rescan", func() { n.Library.Rescan = in.Library.Rescan })
+	set("library.folder_meta", func() { n.Library.FolderMeta = in.Library.FolderMeta })
+	set("library.write_files", func() { n.Library.WriteFiles = in.Library.WriteFiles })
+	set("library.trash_days", func() { n.Library.TrashDays = in.Library.TrashDays })
 	set("cache.dir", func() { n.Cache.Dir = config.ExpandHome(strings.TrimSpace(in.Cache.Dir)) })
 	set("cache.previews", func() { n.Cache.Previews = in.Cache.Previews })
 	set("media.workers", func() { n.Media.Workers = in.Media.Workers })
@@ -350,8 +391,15 @@ func merge(cur, in *config.Config) *config.Config {
 	set("backup.originals", func() { n.Backup.Originals = in.Backup.Originals })
 	set("backup.cache", func() { n.Backup.Cache = in.Backup.Cache })
 	set("backup.config", func() { n.Backup.Config = in.Backup.Config })
+	set("access.anonymous", func() { n.Access.Anonymous = in.Access.Anonymous })
+	set("access.register", func() { n.Access.Register = in.Access.Register })
 	set("ui.title", func() { n.UI.Title = strings.TrimSpace(in.UI.Title) })
 	set("ui.theme", func() { n.UI.Theme = in.UI.Theme })
+	set("ui.language", func() {
+		if in.UI.Language != "" {
+			n.UI.Language = in.UI.Language
+		}
+	})
 	return n
 }
 

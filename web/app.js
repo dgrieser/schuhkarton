@@ -12,18 +12,34 @@
     get(k, d) { try { const v = localStorage.getItem('schuhkarton-' + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
     set(k, v) { try { localStorage.setItem('schuhkarton-' + k, JSON.stringify(v)); } catch { /* private mode */ } },
   };
-  const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
+  const debounce = (fn, ms) => { let tm; return (...a) => { clearTimeout(tm); tm = setTimeout(() => fn(...a), ms); }; };
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-  const nf = new Intl.NumberFormat('de-DE');
+  // language (web/i18n.js): German texts are the keys
+  const LANG = window.skLang || 'de';
+  const EN = LANG === 'en';
+  const t = window.skT || ((s) => s);
+  const nf = new Intl.NumberFormat(EN ? 'en-GB' : 'de-DE');
   const num = (n) => nf.format(n);
+  // counted text: pl(3, '{n} Foto', '{n} Fotos') → "3 Fotos" / "3 photos"
+  const pl = (n, one, many) => t(n === 1 ? one : many, { n: num(n) });
 
-  const MONTHS = ['Januar', 'Februar', 'März', 'April', 'Mai', 'Juni', 'Juli', 'August', 'September', 'Oktober', 'November', 'Dezember'];
-  const DAYS = ['Sonntag', 'Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag'];
-  const dt = (t) => new Date(t * 1000); // capture times are wall-clock values stored as UTC
-  const fmtMonth = (t) => { const d = dt(t); return `${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`; };
-  const fmtDay = (t) => { const d = dt(t); return `${DAYS[d.getUTCDay()].slice(0, 2)}., ${d.getUTCDate()}. ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`; };
-  const fmtLong = (t) => { const d = dt(t); return `${DAYS[d.getUTCDay()]}, ${d.getUTCDate()}. ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`; };
-  const fmtTime = (t) => { const d = dt(t); return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`; };
+  const MONTHS_DE = ['Januar', 'Februar', 'März', 'April', 'Mai', 'Juni', 'Juli', 'August', 'September', 'Oktober', 'November', 'Dezember'];
+  const DAYS_DE = ['Sonntag', 'Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag'];
+  const MONTHS = EN ? ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'] : MONTHS_DE;
+  const DAYS = EN ? ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'] : DAYS_DE;
+  const dt = (ts) => new Date(ts * 1000); // capture times are wall-clock values stored as UTC
+  const fmtMonth = (ts) => { const d = dt(ts); return `${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`; };
+  const fmtDay = (ts) => {
+    const d = dt(ts);
+    return EN ? `${DAYS[d.getUTCDay()].slice(0, 3)}, ${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`
+      : `${DAYS[d.getUTCDay()].slice(0, 2)}., ${d.getUTCDate()}. ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+  };
+  const fmtLong = (ts) => {
+    const d = dt(ts);
+    return EN ? `${DAYS[d.getUTCDay()]}, ${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`
+      : `${DAYS[d.getUTCDay()]}, ${d.getUTCDate()}. ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+  };
+  const fmtTime = (ts) => { const d = dt(ts); return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`; };
   const fmtDur = (s) => { s = Math.round(s || 0); const m = Math.floor(s / 60); return m >= 60 ? `${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}` : `${m}:${String(s % 60).padStart(2, '0')}`; };
   const fmtSize = (b) => b > 1e9 ? `${(b / 1e9).toFixed(2)} GB` : b > 1e6 ? `${(b / 1e6).toFixed(1)} MB` : `${Math.round(b / 1e3)} KB`;
   const years = (a, b) => { const x = dt(a).getUTCFullYear(), y = dt(b).getUTCFullYear(); return x === y ? `${x}` : `${x}–${y}`; };
@@ -144,34 +160,43 @@
     // touch: two-finger pinch changes the tile size, long press selects
     touch() {
       const pts = new Map();
-      let p0 = null, longT = 0, startP = null;
+      let p0 = null, longT = 0, press = null;
       const el = this.el;
+      const cancelLong = () => { clearTimeout(longT); longT = 0; press = null; };
       el.addEventListener('pointerdown', (e) => {
+        this.suppressClick = false; // a flag left over from an earlier press must not swallow this tap
         if (e.pointerType !== 'touch') return;
         pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
-        if (pts.size === 2 && !this.opts.small) {
-          clearTimeout(longT);
-          const [a, b] = [...pts.values()];
-          p0 = { d: Math.hypot(a.x - b.x, a.y - b.y) || 1, size: S.size };
+        if (pts.size > 1) {
+          cancelLong();
+          if (pts.size === 2 && !this.opts.small) {
+            const [a, b] = [...pts.values()];
+            p0 = { d: Math.hypot(a.x - b.x, a.y - b.y) || 1, size: S.size };
+          }
           return;
         }
         const tile = e.target.closest('.tile');
         if (!tile) return;
-        startP = { x: e.clientX, y: e.clientY };
+        press = { id: e.pointerId, x: e.clientX, y: e.clientY, tile, sy: this.scrollPos() };
         longT = setTimeout(() => {
+          const p = press;
+          longT = 0;
+          press = null;
+          // only a finger that is still down on the same tile, alone, and the page did not scroll
+          if (!p || pts.size !== 1 || !pts.has(p.id) || !p.tile.isConnected || Viewer.open_ || Math.abs(this.scrollPos() - p.sy) > 2) return;
           this.suppressClick = true;
           S.selecting = true;
-          const id = tile.dataset.id;
+          const id = p.tile.dataset.id;
           S.sel.has(id) ? S.sel.delete(id) : S.sel.add(id);
           this.lastSel = id;
           navigator.vibrate?.(12);
           selectionChanged();
-        }, 480);
+        }, 550);
       });
       el.addEventListener('pointermove', (e) => {
         if (!pts.has(e.pointerId)) return;
         pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
-        if (startP && Math.hypot(e.clientX - startP.x, e.clientY - startP.y) > 10) clearTimeout(longT);
+        if (press && Math.hypot(e.clientX - press.x, e.clientY - press.y) > 10) cancelLong();
         if (p0 && pts.size === 2) {
           const [a, b] = [...pts.values()];
           const ns = clamp(Math.round((p0.size * Math.hypot(a.x - b.x, a.y - b.y)) / p0.d / 10) * 10, 70, 420);
@@ -188,14 +213,24 @@
           }
         }
       });
+      // releases are watched on the window: the tile under the finger may be gone by then
       const up = (e) => {
-        pts.delete(e.pointerId);
-        clearTimeout(longT);
-        startP = null;
+        if (!pts.delete(e.pointerId)) return;
+        cancelLong();
         if (p0 && pts.size < 2) { p0 = null; saveSize(); Scrub.attach(this); }
       };
-      el.addEventListener('pointerup', up);
-      el.addEventListener('pointercancel', up);
+      const onScroll = () => { if (press) cancelLong(); };
+      addEventListener('pointerup', up);
+      addEventListener('pointercancel', up);
+      addEventListener('blur', cancelLong);
+      this.scrollRoot.addEventListener('scroll', onScroll, { passive: true });
+      this.untouch = () => {
+        cancelLong();
+        removeEventListener('pointerup', up);
+        removeEventListener('pointercancel', up);
+        removeEventListener('blur', cancelLong);
+        this.scrollRoot.removeEventListener('scroll', onScroll);
+      };
       el.addEventListener('contextmenu', (e) => { if (e.target.closest('.tile') && isTouch) e.preventDefault(); });
     }
 
@@ -206,7 +241,10 @@
       this.relayout();
     }
 
+    scrollPos() { return this.scrollRoot === window ? scrollY : this.scrollRoot.scrollTop; }
+
     destroy() {
+      this.untouch?.();
       this.scrollRoot.removeEventListener('scroll', this.onScroll);
       this.ro.disconnect();
       this.io.disconnect();
@@ -233,7 +271,7 @@
         const places = new Map();
         for (const it of s.items) if (it.p) places.set(it.p, (places.get(it.p) || 0) + 1);
         const top = [...places.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map((e) => e[0]);
-        s.meta = [plural(s.items.length, 'Element', 'Elemente'), top.join(', ')].filter(Boolean).join(' · ');
+        s.meta = [pl(s.items.length, '{n} Element', '{n} Elemente'), top.join(', ')].filter(Boolean).join(' · ');
       }
       return out;
     }
@@ -299,7 +337,7 @@
       el.style.height = `${s.h}px`;
       if (s.headH) {
         el.innerHTML = `<div class="sec-head"><h2>${esc(s.title)}</h2><span class="meta">${esc(s.meta)}</span>
-          <button class="btn ghost selall" data-selall>${icon('select')}<span>Auswählen</span></button></div>`;
+          <button class="btn ghost selall" data-selall>${icon('select')}<span>${t('Auswählen')}</span></button></div>`;
       }
       s.el = el;
       this.el.appendChild(el);
@@ -308,11 +346,11 @@
     mountBucket(s, b) {
       const els = [];
       const frag = document.createDocumentFragment();
-      const t = s.tiles;
+      const tl = s.tiles;
       for (let i = 0; i < s.items.length; i++) {
-        const ty = t.y[i];
+        const ty = tl.y[i];
         if (Math.floor(ty / BUCKET) !== b) continue;
-        const el = this.tile(s.items[i], t.x[i], ty + s.headH, t.w[i], t.h[i]);
+        const el = this.tile(s.items[i], tl.x[i], ty + s.headH, tl.w[i], tl.h[i]);
         frag.appendChild(el);
         els.push(el);
       }
@@ -570,7 +608,7 @@
   function selectionChanged() {
     const n = S.sel.size;
     $('#selbar').hidden = n === 0 && !S.selecting;
-    $('#selCount').textContent = n ? plural(n, 'ausgewählt', 'ausgewählt') : 'Elemente antippen';
+    $('#selCount').textContent = n ? t('{n} ausgewählt', { n: num(n) }) : t('Elemente antippen');
     document.body.classList.toggle('selecting', S.selecting || n > 0);
     S.gallery?.refreshTiles();
     for (const g of extraGalleries) g.refreshTiles();
@@ -583,7 +621,7 @@
     const on = !ids.every((id) => S.byId.get(id)?.f);
     await post('/api/fav', { ids, on });
     for (const id of ids) { const it = S.byId.get(id); if (it) it.f = on; }
-    toast(on ? `${plural(ids.length, 'Element', 'Elemente')} zu Favoriten` : 'Aus Favoriten entfernt');
+    toast(on ? pl(ids.length, '{n} Element zu Favoriten', '{n} Elemente zu Favoriten') : t('Aus Favoriten entfernt'));
     updateCounts();
     endSelection();
     rerender();
@@ -592,7 +630,7 @@
     const f = $('#zipForm');
     f.ids.value = [...S.sel].join(',');
     f.submit();
-    toast('Download startet …');
+    toast(t('Download startet …'));
   };
 
   // ---------------------------------------------------------------------------
@@ -624,6 +662,7 @@
       this.media.innerHTML = '';
       document.body.classList.remove('locked');
       $('#pop')?.remove();
+      if (FS.auto) FS.exit();
       if (!fromPop) history.back();
       if (this.it) S.gallery?.scrollToItem(this.it.id);
     },
@@ -670,7 +709,7 @@
       $('#vDl').href = `/o/${it.id}?dl=1`;
       $('#vPrev').hidden = this.i === 0;
       $('#vNext').hidden = this.i >= this.list.length - 1;
-      $('#vTitle').innerHTML = `<b>${fmtLong(it.t)}</b><span>${[it.ap ? 'ungefähr' : fmtTime(it.t), it.p, `${num(this.i + 1)} von ${num(this.list.length)}`].filter(Boolean).map(esc).join(' · ')}</span>`;
+      $('#vTitle').innerHTML = `<b>${fmtLong(it.t)}</b><span>${[it.ap ? t('ungefähr') : fmtTime(it.t), it.p, t('{i} von {n}', { i: num(this.i + 1), n: num(this.list.length) })].filter(Boolean).map(esc).join(' · ')}</span>`;
       this.strip();
       this.preload();
       this.detail = null;
@@ -720,9 +759,21 @@
       v.play().catch(() => {});
     },
 
+    // details as a bottom sheet (phones, tablets): free height, remembered per device class
+    sheetMode: matchMedia('(max-width: 900px)'),
+    sheetH() { return parseFloat(this.el.style.getPropertyValue('--sheet')) || innerHeight * 0.5; },
+    setSheet(h) {
+      h = clamp(h, 0, innerHeight - 56);
+      this.el.style.setProperty('--sheet', `${Math.round(h)}px`);
+    },
+    restoreSheet() {
+      const f = clamp(+store.get(`sheet-${devClass()}`, 0.5) || 0.5, 0.18, 0.92);
+      this.setSheet(innerHeight * f);
+    },
     renderInfo() {
       const p = $('#vInfoPanel');
       p.hidden = !this.showInfo;
+      if (this.showInfo && this.sheetMode.matches && !this.el.style.getPropertyValue('--sheet')) this.restoreSheet();
       this.el.classList.toggle('info', this.showInfo);
       $('#vInfo').classList.toggle('on', this.showInfo);
       if (!this.showInfo || !this.detail) return;
@@ -740,25 +791,25 @@
       }
       const faces = (d.faces || []).map((f) => {
         const per = f.person ? S.peopleById.get(f.person) : null;
-        const name = f.name || (per ? 'Unbenannt' : 'Unbekannt');
+        const name = f.name || (per ? t('Unbenannt') : t('Unbekannt'));
         return `<a href="${f.person ? `#/person/${encodeURIComponent(f.person)}` : '#'}" data-face="${f.idx}"><img src="${faceURL(it.id, f.idx)}" alt="">${esc(name)}</a>`;
       }).join('');
       p.innerHTML = `
-        <h3>Aufnahme</h3>
+        <h3>${t('Aufnahme')}</h3>
         <div class="big">${fmtLong(d.taken)}</div>
-        <div class="muted">${d.takenSrc === 'folder' || d.takenSrc === 'mtime' ? 'Datum ungefähr (aus Ordner bzw. Datei)' : `${fmtTime(d.taken)} Uhr`}</div>
-        ${d.place || d.gps ? `<h3>Ort</h3>
-          <div class="kv">${icon('pin')}<div>${d.place ? `<a class="link" href="#/ort/${encodeURIComponent(d.place)}">${esc(d.place)}</a>` : 'Ohne Ortsname'}
+        <div class="muted">${d.takenSrc === 'folder' || d.takenSrc === 'mtime' ? t('Datum ungefähr (aus Ordner bzw. Datei)') : t('{time} Uhr', { time: fmtTime(d.taken) })}</div>
+        ${d.place || d.gps ? `<h3>${t('Ort')}</h3>
+          <div class="kv">${icon('pin')}<div>${d.place ? `<a class="link" href="#/ort/${encodeURIComponent(d.place)}">${esc(d.place)}</a>` : t('Ohne Ortsname')}
           ${d.gps ? `<div class="muted">${d.lat.toFixed(5)}, ${d.lon.toFixed(5)}${d.alt ? ` · ${Math.round(d.alt)} m` : ''}</div>` : ''}</div></div>
           ${d.gps ? '<div class="minimap" id="vMap"></div>' : ''}` : ''}
-        ${faces ? `<h3>Personen</h3><div class="faces">${faces}</div>` : ''}
-        ${d.desc ? `<h3>Text im Bild</h3><div class="text">${text}</div>` : ''}
-        ${d.keywords?.length || d.category ? `<h3>Stichwörter</h3><div class="chips">${[d.category, ...(d.keywords || [])].filter((v, i, a) => v && a.indexOf(v) === i).map((k) => `<a class="chip" href="#/suche/${encodeURIComponent(k)}">${icon('tag')}${esc(k)}</a>`).join('')}</div>` : ''}
-        ${camera || shot ? `<h3>Kamera</h3><div class="kv">${icon('camera')}<div>${esc(camera || 'Unbekannt')}${d.lens ? `<div class="muted">${esc(d.lens)}</div>` : ''}${shot ? `<div class="muted">${esc(shot)}</div>` : ''}</div></div>` : ''}
-        <h3>Datei</h3>
+        ${faces ? `<h3>${t('Personen')}</h3><div class="faces">${faces}</div>` : ''}
+        ${d.desc ? `<h3>${t('Text im Bild')}</h3><div class="text">${text}</div>` : ''}
+        ${d.keywords?.length || d.category ? `<h3>${t('Stichwörter')}</h3><div class="chips">${[d.category, ...(d.keywords || [])].filter((v, i, a) => v && a.indexOf(v) === i).map((k) => `<a class="chip" href="#/suche/${encodeURIComponent(k)}">${icon('tag')}${esc(k)}</a>`).join('')}</div>` : ''}
+        ${camera || shot ? `<h3>${t('Kamera')}</h3><div class="kv">${icon('camera')}<div>${esc(camera || t('Unbekannt'))}${d.lens ? `<div class="muted">${esc(d.lens)}</div>` : ''}${shot ? `<div class="muted">${esc(shot)}</div>` : ''}</div></div>` : ''}
+        <h3>${t('Datei')}</h3>
         <div class="kv">${icon('file')}<div>${esc(d.name)}<div class="muted">${[fmtSize(d.size), mp, d.duration ? fmtDur(d.duration) : '', d.codec].filter(Boolean).map(esc).join(' · ')}</div></div></div>
         <div class="kv">${icon('folder')}<div><a class="link" href="#/alben/${encodeURIComponent(d.album)}">${esc(d.album)}</a><div><code>${esc(d.path)}</code></div></div></div>
-        <div class="kv">${icon('download')}<div><a class="link" href="/o/${it.id}?dl=1">Original herunterladen</a> · <a class="link" href="/o/${it.id}" target="_blank" rel="noopener">öffnen</a></div></div>`;
+        <div class="kv">${icon('download')}<div><a class="link" href="/o/${it.id}?dl=1">${t('Original herunterladen')}</a> · <a class="link" href="/o/${it.id}" target="_blank" rel="noopener">${t('öffnen')}</a></div></div>`;
       if (d.gps && window.L) {
         const mm = L.map($('#vMap', p), { zoomControl: false, attributionControl: false }).setView([d.lat, d.lon], 13);
         tileLayer().addTo(mm);
@@ -780,22 +831,23 @@
       if (!this.showFaces || !d?.faces?.length || this.it.k !== 1) return;
       const ov = document.createElement('div');
       ov.className = 'v-faces';
-      ov.innerHTML = d.faces.map((f) => `<div class="v-face ${f.name ? '' : 'unknown'}" data-idx="${f.idx}" style="left:${f.X * 100}%;top:${f.Y * 100}%;width:${f.W * 100}%;height:${f.H * 100}%"><span>${esc(f.name || (f.person ? 'Unbenannt' : '?'))}</span></div>`).join('');
+      ov.innerHTML = d.faces.map((f) => `<div class="v-face ${f.name ? '' : 'unknown'}" data-idx="${f.idx}" style="left:${f.X * 100}%;top:${f.Y * 100}%;width:${f.W * 100}%;height:${f.H * 100}%"><span>${esc(f.name || (f.person ? t('Unbenannt') : '?'))}</span></div>`).join('');
       this.media.appendChild(ov);
       for (const b of $$('.v-face', ov)) b.onclick = (e) => { e.stopPropagation(); this.namePop(b, d.faces[+b.dataset.idx]); };
     },
 
     namePop(anchor, face) {
+      if (!Account.need('user')) return;
       $('#pop')?.remove();
       const r = anchor.getBoundingClientRect();
       const pop = document.createElement('div');
       pop.className = 'pop';
       pop.id = 'pop';
       const names = [...new Set(S.people.filter((p) => p.name).map((p) => p.name))].sort();
-      pop.innerHTML = `<b>Wer ist das?</b>
-        <input list="pnames" value="${esc(face.name || '')}" placeholder="Name eingeben">
+      pop.innerHTML = `<b>${t('Wer ist das?')}</b>
+        <input list="pnames" value="${esc(face.name || '')}" placeholder="${t('Name eingeben')}">
         <datalist id="pnames">${names.map((n) => `<option value="${esc(n)}">`).join('')}</datalist>
-        <div class="row"><button class="primary" data-a="save">Speichern</button><button data-a="not">${face.person ? 'Nicht diese Person' : 'Ausblenden'}</button></div>`;
+        <div class="row"><button class="primary" data-a="save">${t('Speichern')}</button><button data-a="not">${face.person ? t('Nicht diese Person') : t('Ausblenden')}</button></div>`;
       document.body.appendChild(pop);
       pop.style.left = `${clamp(r.left, 8, innerWidth - 250)}px`;
       pop.style.top = `${clamp(r.bottom + 8, 8, innerHeight - 160)}px`;
@@ -804,7 +856,7 @@
       const save = async (name) => {
         pop.remove();
         await post(`/api/face/${this.it.id}/${face.idx}`, { name });
-        toast(name ? `Als ${name} gespeichert` : 'Entfernt');
+        toast(name ? t('Als {name} gespeichert', { name }) : t('Entfernt'));
         await loadPeople();
         const d = await api(`/api/item/${this.it.id}`);
         this.detail = d;
@@ -820,34 +872,61 @@
       };
     },
 
-    // --- zoom & gestures
-    resetZoom() { this.zoom = { s: 1, x: 0, y: 0 }; this.applyZoom(); },
+    // --- zoom & gestures (transform-origin 0 0: screen = layout box + translate + scale)
+    resetZoom(animate = false) {
+      this.zoom = { s: 1, x: 0, y: 0 };
+      if (animate) this.animateZoom();
+      this.applyZoom();
+    },
+    // the next transform change glides instead of jumping
+    animateZoom() {
+      const m = this.media;
+      m.style.transition = 'transform .22s cubic-bezier(.2, .8, .2, 1), opacity .22s';
+      clearTimeout(this.animT);
+      this.animT = setTimeout(() => { m.style.transition = ''; }, 260);
+    },
+    // stage and untransformed media box in screen pixels (offsets ignore transforms)
+    geom() {
+      const st = this.stage.getBoundingClientRect(), m = this.media;
+      return { sx: st.left, sy: st.top, sw: st.width, sh: st.height, bx: st.left + m.offsetLeft, by: st.top + m.offsetTop, w: m.offsetWidth, h: m.offsetHeight };
+    },
+    // keeps the picture on the stage: centred while smaller, no empty margin where it could fill the stage
+    clampZoom() {
+      const z = this.zoom, g = this.geom();
+      const fit = (pos, base, size, s0, ss) => {
+        const sz = size * z.s;
+        return sz <= ss ? s0 + (ss - sz) / 2 - base : clamp(pos, s0 + ss - sz - base, s0 - base);
+      };
+      z.x = fit(z.x, g.bx, g.w, g.sx, g.sw);
+      z.y = fit(z.y, g.by, g.h, g.sy, g.sh);
+    },
     applyZoom() {
       const z = this.zoom;
+      if (z.s === 1) z.x = z.y = 0;
+      else this.clampZoom();
       this.media.style.transform = z.s === 1 ? '' : `translate(${z.x}px, ${z.y}px) scale(${z.s})`;
       this.stage.style.cursor = z.s > 1 ? 'grab' : '';
     },
-    zoomAt(cx, cy, ns) {
-      const z = this.zoom;
-      const r = this.media.getBoundingClientRect();
-      // point under the cursor in unscaled media coordinates
-      const px = (cx - r.left) / z.s, py = (cy - r.top) / z.s;
-      ns = clamp(ns, 1, 8);
-      if (ns === 1) { this.resetZoom(); return; }
-      const base = { left: r.left - z.x, top: r.top - z.y };
-      z.x = cx - base.left - px * ns;
-      z.y = cy - base.top - py * ns;
+    // scales by ns around the screen point (cx, cy) and moves that point to (tx, ty); pinches may dip below 1 and snap back
+    zoomAt(cx, cy, ns, tx = cx, ty = cy, min = 1) {
+      const z = this.zoom, g = this.geom();
+      const px = (cx - g.bx - z.x) / z.s, py = (cy - g.by - z.y) / z.s;
+      ns = clamp(ns, min, 8);
+      if (ns === 1 && min === 1) { this.resetZoom(); return; }
+      z.x = tx - g.bx - px * ns;
+      z.y = ty - g.by - py * ns;
       z.s = ns;
       this.applyZoom();
     },
 
     async toggleFav() {
+      if (!Account.need('user')) return;
       const it = this.it;
       it.f = !it.f;
       await post('/api/fav', { ids: [it.id], on: it.f });
       $('#vFav').classList.toggle('on', it.f);
       $('#vFav').innerHTML = icon('heart', it.f ? 'fill' : '');
-      toast(it.f ? 'Zu Favoriten hinzugefügt' : 'Aus Favoriten entfernt');
+      toast(it.f ? t('Zu Favoriten hinzugefügt') : t('Aus Favoriten entfernt'));
       updateCounts();
       scheduleRerender();
     },
@@ -885,11 +964,61 @@
     live.onpointerenter = () => V.playLive(false);
     live.onclick = () => V.playLive(false);
 
-    // idle: hide controls while watching
-    V.el.addEventListener('pointermove', () => {
+    // the picture fits the stage: its size follows the stage (details panel, sheet height, rotation)
+    new ResizeObserver(() => {
+      const r = V.stage.getBoundingClientRect();
+      if (!r.width || !r.height) return;
+      V.el.style.setProperty('--sw', `${Math.round(r.width)}px`);
+      V.el.style.setProperty('--sh', `${Math.round(r.height)}px`);
+      if (V.zoom.s !== 1) V.applyZoom();
+    }).observe(V.stage);
+    V.sheetMode.addEventListener('change', () => { if (V.sheetMode.matches && V.showInfo) V.restoreSheet(); });
+    addEventListener('resize', () => { if (V.sheetMode.matches && V.showInfo) V.setSheet(V.sheetH()); });
+
+    // sheet grip: drag to any height; a short sheet or a quick flick down closes the details
+    {
+      const grip = $('#vGrip');
+      let drag = null;
+      grip.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        grip.setPointerCapture(e.pointerId);
+        drag = { y: e.clientY, h: V.sheetH(), ly: e.clientY, lt: e.timeStamp, v: 0 };
+        V.el.classList.add('sheet-drag');
+      });
+      grip.addEventListener('pointermove', (e) => {
+        if (!drag) return;
+        const dt = e.timeStamp - drag.lt;
+        if (dt > 0) drag.v = (e.clientY - drag.ly) / dt; // px per ms, positive = down
+        drag.ly = e.clientY;
+        drag.lt = e.timeStamp;
+        V.setSheet(drag.h - (e.clientY - drag.y));
+      });
+      const up = () => {
+        if (!drag) return;
+        const { h, v } = drag;
+        drag = null;
+        V.el.classList.remove('sheet-drag');
+        const now = V.sheetH();
+        if (now < 110 || (v > 1.2 && now < h)) {
+          // closed: the next opening starts at the last kept height
+          V.setSheet(h);
+          V.showInfo = false;
+          store.set('info', false);
+          V.renderInfo();
+          return;
+        }
+        store.set(`sheet-${devClass()}`, Math.round((now / innerHeight) * 1000) / 1000);
+      };
+      grip.addEventListener('pointerup', up);
+      grip.addEventListener('pointercancel', up);
+    }
+
+    // idle: the mouse shows the controls and they fade after a while; on touch a tap toggles them
+    V.el.addEventListener('pointermove', (e) => {
+      if (e.pointerType !== 'mouse') return;
       V.el.classList.remove('idle');
       clearTimeout(V.idleT);
-      V.idleT = setTimeout(() => { if (!V.el.matches(':hover .v-top, :hover .v-strip')) V.el.classList.add('idle'); }, 2600);
+      V.idleT = setTimeout(() => { if (!V.el.querySelector('.v-top:hover, .v-strip:hover')) V.el.classList.add('idle'); }, 2600);
     });
 
     // wheel zoom
@@ -898,65 +1027,92 @@
       e.preventDefault();
       V.zoomAt(e.clientX, e.clientY, V.zoom.s * Math.exp(-e.deltaY * 0.0022));
     }, { passive: false });
+
+    // pointer gestures: pan (zoomed), pinch, swipe (fitted), taps
+    const pts = new Map();
+    let start = null, pinch = null, moved = false, multi = false, held = false, lastTap = null, tapT = 0, longT = 0, lastType = 'mouse';
     V.stage.addEventListener('dblclick', (e) => {
-      if (V.it?.k !== 1) return;
+      if (V.it?.k !== 1 || lastType !== 'mouse') return; // touch double taps are handled in end()
+      V.animateZoom();
       V.zoom.s > 1 ? V.resetZoom() : V.zoomAt(e.clientX, e.clientY, 2.5);
     });
-
-    // pointer gestures: pan, pinch, swipe
-    const pts = new Map();
-    let start = null, pinch0 = null, moved = false, lastTap = 0, longT = 0;
     V.stage.addEventListener('pointerdown', (e) => {
+      lastType = e.pointerType;
       if (e.target.closest('video[controls]') || e.target.closest('.v-face')) return;
       V.stage.setPointerCapture(e.pointerId);
       pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
-      moved = false;
+      V.media.style.transition = '';
       if (pts.size === 1) {
-        start = { x: e.clientX, y: e.clientY, zx: V.zoom.x, zy: V.zoom.y, t: Date.now() };
-        if (V.it?.lv) longT = setTimeout(() => V.playLive(false), 450);
+        moved = multi = held = false;
+        start = { x: e.clientX, y: e.clientY, zx: V.zoom.x, zy: V.zoom.y };
+        if (V.it?.lv) longT = setTimeout(() => { held = true; V.playLive(false); }, 450);
       } else if (pts.size === 2) {
         const [a, b] = [...pts.values()];
-        pinch0 = { d: Math.hypot(a.x - b.x, a.y - b.y), s: V.zoom.s, cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2 };
+        multi = moved = true;
         clearTimeout(longT);
+        clearTimeout(tapT);
+        lastTap = null;
+        if (V.zoom.s === 1) { V.media.style.transform = ''; V.media.style.opacity = ''; } // drop a started swipe
+        pinch = V.it?.k === 1 ? { d: Math.hypot(a.x - b.x, a.y - b.y) || 1, cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2 } : null;
       }
     });
     V.stage.addEventListener('pointermove', (e) => {
       if (!pts.has(e.pointerId)) return;
       pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
-      if (pts.size === 2 && pinch0) {
+      if (pts.size >= 2) {
+        if (!pinch) return;
         const [a, b] = [...pts.values()];
-        V.zoomAt(pinch0.cx, pinch0.cy, pinch0.s * Math.hypot(a.x - b.x, a.y - b.y) / pinch0.d);
-        moved = true;
+        const d = Math.hypot(a.x - b.x, a.y - b.y) || 1, cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2;
+        // the point between the fingers stays between the fingers
+        V.zoomAt(pinch.cx, pinch.cy, V.zoom.s * d / pinch.d, cx, cy, 0.8);
+        pinch = { d, cx, cy };
         return;
       }
       if (!start) return;
       const dx = e.clientX - start.x, dy = e.clientY - start.y;
-      if (Math.abs(dx) + Math.abs(dy) > 8) { moved = true; clearTimeout(longT); }
+      if (!moved && Math.abs(dx) + Math.abs(dy) > 8) { moved = true; clearTimeout(longT); }
+      if (!moved) return;
       if (V.zoom.s > 1) {
-        V.zoom.x = start.zx + dx; V.zoom.y = start.zy + dy;
+        V.zoom.x = start.zx + dx;
+        V.zoom.y = start.zy + dy;
         V.applyZoom();
-      } else if (moved) {
-        V.media.style.transform = `translate(${dx}px, ${Math.max(0, dy) * 0.6}px)`;
-        V.media.style.opacity = String(1 - Math.min(0.6, Math.max(0, dy) / 600));
+      } else if (!multi && V.zoom.s === 1) {
+        // fitted picture: it is not panned, only previews the swipe (sideways: neighbours, down: close)
+        const side = Math.abs(dx) >= Math.abs(dy);
+        V.media.style.transform = side ? `translateX(${dx}px)` : `translateY(${Math.max(0, dy) * 0.6}px)`;
+        V.media.style.opacity = side ? '' : String(1 - Math.min(0.6, Math.max(0, dy) / 600));
       }
     });
     const end = (e) => {
-      if (!pts.has(e.pointerId)) return;
-      pts.delete(e.pointerId);
+      if (!pts.delete(e.pointerId)) return;
       clearTimeout(longT);
+      if (pts.size === 1) {
+        // one finger of a pinch lifted: go on panning from where the other finger is
+        const [p] = [...pts.values()];
+        start = { x: p.x, y: p.y, zx: V.zoom.x, zy: V.zoom.y };
+        pinch = null;
+        return;
+      }
       if (pts.size) return;
-      pinch0 = null;
-      if (start && V.zoom.s === 1) {
+      pinch = null;
+      if (V.zoom.s !== 1 && V.zoom.s < 1.1) V.resetZoom(true); // nearly fitted: snap back
+      if (V.zoom.s === 1 && start && moved) {
         const dx = e.clientX - start.x, dy = e.clientY - start.y;
-        V.media.style.transform = '';
-        V.media.style.opacity = '';
-        if (moved && dy > 120 && Math.abs(dy) > Math.abs(dx)) V.close();
-        else if (moved && Math.abs(dx) > 70 && Math.abs(dx) > Math.abs(dy)) V.step(dx < 0 ? 1 : -1);
-        else if (!moved && isTouch) {
-          const now = Date.now();
-          if (now - lastTap < 300) V.zoomAt(e.clientX, e.clientY, 2.5);
-          else V.el.classList.toggle('idle');
-          lastTap = now;
+        const swipe = !multi && e.type !== 'pointercancel';
+        if (swipe && dy > 120 && dy > Math.abs(dx)) { V.media.style.transform = ''; V.media.style.opacity = ''; V.close(); }
+        else if (swipe && Math.abs(dx) > 70 && Math.abs(dx) > Math.abs(dy)) { V.media.style.transform = ''; V.media.style.opacity = ''; V.step(dx < 0 ? 1 : -1); }
+        else { V.animateZoom(); V.media.style.transform = ''; V.media.style.opacity = ''; }
+      }
+      if (start && !moved && !multi && !held && e.type !== 'pointercancel' && e.pointerType !== 'mouse') {
+        // touch: one tap toggles the controls (a little later, so a double tap does not), two taps zoom
+        const now = Date.now(), x = e.clientX, y = e.clientY;
+        clearTimeout(tapT);
+        if (lastTap && now - lastTap.t < 320 && Math.hypot(x - lastTap.x, y - lastTap.y) < 40) {
+          lastTap = null;
+          if (V.it?.k === 1) { V.animateZoom(); V.zoom.s > 1 ? V.resetZoom() : V.zoomAt(x, y, 2.5); }
+        } else {
+          lastTap = { t: now, x, y };
+          tapT = setTimeout(() => { lastTap = null; V.el.classList.toggle('idle'); }, 280);
         }
       }
       start = null;
@@ -985,6 +1141,7 @@
         case '+': case '=': V.zoomAt(innerWidth / 2, innerHeight / 2, V.zoom.s * 1.4); break;
         case '-': V.zoomAt(innerWidth / 2, innerHeight / 2, V.zoom.s / 1.4); break;
         case '0': V.resetZoom(); break;
+        case 'v': case 'V': FS.toggle(); break;
         default: return;
       }
       e.preventDefault();
@@ -992,7 +1149,8 @@
     }
     if (typing) return;
     if (e.key === '/') { e.preventDefault(); $('#q').focus(); $('#q').select(); }
-    if (e.key === 'Escape') { if (Filter.open_) Filter.close(); if (S.sel.size || S.selecting) endSelection(); $('#side').classList.remove('open'); }
+    if ((e.key === 'v' || e.key === 'V') && !e.ctrlKey && !e.metaKey && !e.altKey) FS.toggle();
+    if (e.key === 'Escape') { ViewMenu.close(); if (Filter.open_) Filter.close(); if (S.sel.size || S.selecting) endSelection(); $('#side').classList.remove('open'); }
   });
 
   // ---------------------------------------------------------------------------
@@ -1001,14 +1159,15 @@
   {
     const q = $('#q'), box = $('#suggest');
     let opts = [], on = -1;
-    const TYPES = { ort: 'Ort', person: 'Person', kategorie: 'Kategorie', kamera: 'Kamera', jahr: 'Jahr', monat: 'Monat' };
+    const TYPES = { ort: 'Ort', person: 'Person', kategorie: 'Kategorie', kamera: 'Kamera', jahr: 'Jahr', monat: 'Monat', wochentag: 'Wochentag', jahreszeit: 'Jahreszeit', tageszeit: 'Tageszeit' };
+    const SYNTAX = EN ? ['place:', 'person:', 'year:2019', 'month:june', 'type:video', 'type:selfie', 'text:', '-word'] : ['ort:', 'person:', 'jahr:2019', 'monat:juni', 'typ:video', 'typ:selfie', 'text:', '-wort'];
     const draw = () => {
       if (!q.value.trim()) {
-        box.innerHTML = `<div class="hint">Suche in Ort, Personen, Datum, Ordnern, Kamera und im <b>Text in Bildern</b>.<br>
-          Filter: <code>ort:</code> <code>person:</code> <code>jahr:2019</code> <code>monat:juni</code> <code>typ:video</code> <code>typ:selfie</code> <code>text:</code> <code>-wort</code></div>`;
+        box.innerHTML = `<div class="hint">${t('Suche in Ort, Personen, Datum, Ordnern, Kamera und im {b}.', { b: `<b>${t('Text in Bildern')}</b>` })}<br>
+          ${t('Filter')}: ${SYNTAX.map((x) => `<code>${x}</code>`).join(' ')}</div>`;
       } else {
-        box.innerHTML = opts.map((o, i) => `<button data-i="${i}" class="${i === on ? 'on' : ''}"><span class="t">${esc(TYPES[o.type] || o.type)}</span>${esc(o.label)}<span class="n">${o.count ? num(o.count) : ''}</span></button>`).join('')
-          + `<button data-i="-1" class="${on === opts.length ? 'on' : ''}"><span class="t">Suche</span>„${esc(q.value)}“ überall</button>`;
+        box.innerHTML = opts.map((o, i) => `<button data-i="${i}" class="${i === on ? 'on' : ''}"><span class="t">${esc(TYPES[o.type] ? t(TYPES[o.type]) : o.type)}</span>${esc(o.label)}<span class="n">${o.count ? num(o.count) : ''}</span></button>`).join('')
+          + `<button data-i="-1" class="${on === opts.length ? 'on' : ''}"><span class="t">${t('Suche')}</span>${t('„{q}“ überall', { q: esc(q.value) })}</button>`;
       }
       box.hidden = false;
     };
@@ -1016,7 +1175,7 @@
       const v = q.value.trim();
       if (!v) { opts = []; draw(); return; }
       const last = v.split(/\s+/).pop();
-      opts = (await api(`/api/suggest?q=${encodeURIComponent(last)}`).catch(() => [])) || [];
+      opts = (await api(`/api/suggest?q=${encodeURIComponent(last)}&lang=${LANG}`).catch(() => [])) || [];
       on = -1;
       if (document.activeElement === q) draw();
     }, 120);
@@ -1114,10 +1273,37 @@
   // ---------------------------------------------------------------------------
   // filters: clickable for everyone, typed syntax for power users
   // ---------------------------------------------------------------------------
-  const FKEYS = { person: 'Person', wer: 'Person', ort: 'Ort', jahr: 'Jahr', monat: 'Monat', jahreszeit: 'Jahreszeit', wochentag: 'Wochentag', tag: 'Tag',
-    tageszeit: 'Tageszeit', typ: 'Art', kamera: 'Kamera', kategorie: 'Kategorie', album: 'Ordner', ordner: 'Ordner', text: 'Text im Bild', datum: 'Datum', datei: 'Datei' };
+  // filter keys are kept in German inside; queries use the syntax of the page language
+  const FKEYS = { person: 'Person', ort: 'Ort', jahr: 'Jahr', monat: 'Monat', jahreszeit: 'Jahreszeit', wochentag: 'Wochentag', tag: 'Tag',
+    tageszeit: 'Tageszeit', typ: 'Art', kamera: 'Kamera', kategorie: 'Kategorie', album: 'Ordner', text: 'Text im Bild', datum: 'Datum', datei: 'Datei' };
+  const KEY_ALIAS = { wer: 'person', who: 'person', ordner: 'album', folder: 'album', place: 'ort', year: 'jahr', month: 'monat', season: 'jahreszeit',
+    weekday: 'wochentag', day: 'tag', time: 'tageszeit', zeit: 'tageszeit', type: 'typ', kind: 'typ', camera: 'kamera', category: 'kategorie', date: 'datum', file: 'datei' };
+  const KEY_EN = { ort: 'place', jahr: 'year', monat: 'month', jahreszeit: 'season', wochentag: 'weekday', tag: 'day', tageszeit: 'time', typ: 'type',
+    kamera: 'camera', kategorie: 'category', album: 'folder', datum: 'date', datei: 'file' };
   const KIND_LABEL = { foto: 'Fotos', video: 'Videos', live: 'Live Photos', selfie: 'Selfies', screenshot: 'Screenshots', panorama: 'Panoramen', text: 'Mit Text im Bild', gps: 'Mit Ortsangabe', favorit: 'Favoriten' };
+  // words of the date and kind filters: German (canonical) → English
+  const WORD_EN = {
+    ...Object.fromEntries(MONTHS_DE.map((m, i) => [m.toLowerCase(), ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'][i]])),
+    ...Object.fromEntries(DAYS_DE.map((d, i) => [d.toLowerCase(), ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'][i]])),
+    frühling: 'spring', sommer: 'summer', herbst: 'autumn', winter: 'winter', wochenende: 'weekend', werktag: 'workday',
+    morgens: 'morning', mittags: 'noon', nachmittags: 'afternoon', abends: 'evening', nachts: 'night',
+    foto: 'photo', video: 'video', live: 'live', selfie: 'selfie', screenshot: 'screenshot', panorama: 'panorama', text: 'text', gps: 'gps', favorit: 'favorite',
+  };
+  const WORD_DE = Object.fromEntries(Object.entries(WORD_EN).map(([de, en]) => [en, de]));
+  Object.assign(WORD_DE, { fall: 'herbst', weekday: 'werktag', midday: 'mittags', photos: 'foto', favourite: 'favorit', favorites: 'favorit', fruhling: 'frühling', marz: 'märz' });
+  const WORD_KEYS = new Set(['monat', 'jahreszeit', 'wochentag', 'tag', 'tageszeit', 'typ']);
+  const WORD_LABEL = { frühling: 'Frühling', sommer: 'Sommer', herbst: 'Herbst', winter: 'Winter', wochenende: 'Wochenende', werktag: 'Werktag',
+    morgens: 'Morgens', mittags: 'Mittags', nachmittags: 'Nachmittags', abends: 'Abends', nachts: 'Nachts' };
   const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+  // canonical (German, lower case) value of a filter word: "June" → "juni"
+  const canonVal = (key, v) => { const l = v.toLowerCase(); return WORD_KEYS.has(key) ? WORD_DE[l] || l : l; };
+  const wordLabel = (cv) => {
+    const mi = MONTHS_DE.findIndex((m) => m.toLowerCase() === cv);
+    if (mi >= 0) return MONTHS[mi];
+    const di = DAYS_DE.findIndex((d) => d.toLowerCase() === cv);
+    if (di >= 0) return DAYS[di];
+    return WORD_LABEL[cv] ? t(WORD_LABEL[cv]) : cap(cv);
+  };
 
   function tokenizeQ(q) {
     const out = [];
@@ -1136,23 +1322,31 @@
       let neg = false;
       if (tok.startsWith('-') && tok.length > 1) { neg = true; tok = tok.slice(1); }
       const i = tok.indexOf(':');
-      const key = i > 0 ? tok.slice(0, i).toLowerCase() : '';
-      if (key && FKEYS[key] && tok.slice(i + 1)) filters.push({ key: key === 'wer' ? 'person' : key === 'ordner' ? 'album' : key, val: tok.slice(i + 1), neg });
+      const raw = i > 0 ? tok.slice(0, i).toLowerCase() : '';
+      const key = FKEYS[raw] ? raw : KEY_ALIAS[raw] || '';
+      const val = tok.slice(i + 1);
+      if (key && val) filters.push({ key, val, cv: canonVal(key, val), neg });
       else words.push((neg ? '-' : '') + tok);
     }
     return { filters, words };
   }
   const quote = (v) => (/\s/.test(v) ? `"${v}"` : v);
+  // a filter in the syntax of the page language: {key: 'monat', cv: 'juni'} → month:june
+  function filterQ(f) {
+    const key = EN ? KEY_EN[f.key] || f.key : f.key;
+    const known = WORD_KEYS.has(f.key) && WORD_EN[f.cv];
+    const val = known ? (EN ? WORD_EN[f.cv] : f.cv) : f.val;
+    return `${f.neg ? '-' : ''}${key}:${quote(val)}`;
+  }
   function buildQ({ filters, words }) {
-    return [...words, ...filters.map((f) => `${f.neg ? '-' : ''}${f.key}:${quote(f.val)}`)].join(' ').trim();
+    return [...words, ...filters.map(filterQ)].join(' ').trim();
   }
   function filterLabel(f) {
-    if (f.key === 'typ') return KIND_LABEL[f.val.toLowerCase()] || cap(f.val);
-    if (f.key === 'tag') return cap(f.val);
+    if (f.key === 'typ') return KIND_LABEL[f.cv] ? t(KIND_LABEL[f.cv]) : cap(f.val);
     if (f.key === 'person') return f.val;
     if (['ort', 'kamera', 'kategorie'].includes(f.key)) return f.val;
-    if (['monat', 'jahreszeit', 'wochentag', 'tageszeit'].includes(f.key)) return cap(f.val);
-    return `${FKEYS[f.key]}: ${f.val}`;
+    if (WORD_KEYS.has(f.key)) return wordLabel(f.cv);
+    return `${t(FKEYS[f.key])}: ${f.val}`;
   }
   function runQuery(q) {
     const target = q ? `#/suche/${encodeURIComponent(q)}` : '#/fotos';
@@ -1165,37 +1359,38 @@
     async open() {
       this.open_ = true;
       this.el.hidden = false;
-      if (!this.facets) this.facets = await api('/api/facets').catch(() => ({}));
+      if (!this.facets) this.facets = await api(`/api/facets?lang=${LANG}`).catch(() => ({}));
       if (!S.people.length) await loadPeople().catch(() => {});
       this.draw();
     },
     close() { this.open_ = false; this.el.hidden = true; },
-    count(n) { this.n = n; const c = $('.count', this.el); if (c) c.textContent = `${num(n)} Treffer`; },
+    count(n) { this.n = n; const c = $('.count', this.el); if (c) c.textContent = pl(n, '{n} Treffer', '{n} Treffer'); },
     current() { return route.view === 'suche' ? parseQ(route.arg) : { filters: [], words: [] }; },
-    has(p, key, val) { return p.filters.some((f) => f.key === key && f.val.toLowerCase() === val.toLowerCase() && !f.neg); },
+    has(p, key, val) { return p.filters.some((f) => f.key === key && f.cv === val.toLowerCase() && !f.neg); },
     toggle(key, val) {
       const p = this.current();
-      const i = p.filters.findIndex((f) => f.key === key && f.val.toLowerCase() === val.toLowerCase());
+      const i = p.filters.findIndex((f) => f.key === key && f.cv === val.toLowerCase());
       if (i >= 0) p.filters.splice(i, 1);
-      else p.filters.push({ key, val, neg: false });
+      else p.filters.push({ key, val, cv: val.toLowerCase(), neg: false });
       runQuery(buildQ(p));
       setTimeout(() => this.draw(), 0);
     },
     sections() {
       const f = this.facets || {};
       const named = S.people.filter((p) => p.name);
-      const DAYS_ORDER = ['Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag', 'Sonntag'];
+      const word = (key, cv) => ({ key, val: cv, label: wordLabel(cv) });
+      const weekOrder = [1, 2, 3, 4, 5, 6, 0].map((i) => DAYS_DE[i].toLowerCase());
       return [
-        named.length && { title: 'Personen', items: named.map((p) => ({ key: 'person', val: p.name, label: p.name, img: faceURL(p.cover.item, p.cover.idx), n: p.count })) },
-        f.places?.length && { title: 'Orte', search: true, items: f.places.map((x) => ({ key: 'ort', val: x.label, label: x.label, n: x.count })) },
-        f.years?.length && { title: 'Jahr', items: f.years.map((x) => ({ key: 'jahr', val: x.label, label: x.label, n: x.count })) },
-        { title: 'Monat', items: MONTHS.map((m) => ({ key: 'monat', val: m.toLowerCase(), label: m })) },
-        { title: 'Jahreszeit', items: ['Frühling', 'Sommer', 'Herbst', 'Winter'].map((x) => ({ key: 'jahreszeit', val: x.toLowerCase(), label: x })) },
-        { title: 'Wochentag', items: [...DAYS_ORDER.map((d) => ({ key: 'wochentag', val: d.toLowerCase(), label: d })), { key: 'tag', val: 'wochenende', label: 'Wochenende' }, { key: 'tag', val: 'werktag', label: 'Werktag' }] },
-        { title: 'Tageszeit', items: ['Morgens', 'Mittags', 'Nachmittags', 'Abends', 'Nachts'].map((x) => ({ key: 'tageszeit', val: x.toLowerCase(), label: x })) },
-        { title: 'Art', items: Object.entries(KIND_LABEL).map(([v, l]) => ({ key: 'typ', val: v, label: l })) },
-        f.cameras?.length && { title: 'Kamera', items: f.cameras.map((x) => ({ key: 'kamera', val: x.label, label: x.label, n: x.count })) },
-        f.categories?.length && { title: 'Kategorie', items: f.categories.map((x) => ({ key: 'kategorie', val: x.label, label: x.label, n: x.count })) },
+        named.length && { title: t('Personen'), items: named.map((p) => ({ key: 'person', val: p.name, label: p.name, img: faceURL(p.cover.item, p.cover.idx), n: p.count })) },
+        f.places?.length && { title: t('Orte'), search: true, items: f.places.map((x) => ({ key: 'ort', val: x.label, label: x.label, n: x.count })) },
+        f.years?.length && { title: t('Jahr'), items: f.years.map((x) => ({ key: 'jahr', val: x.label, label: x.label, n: x.count })) },
+        { title: t('Monat'), items: MONTHS_DE.map((m) => word('monat', m.toLowerCase())) },
+        { title: t('Jahreszeit'), items: ['frühling', 'sommer', 'herbst', 'winter'].map((x) => word('jahreszeit', x)) },
+        { title: t('Wochentag'), items: [...weekOrder.map((d) => word('wochentag', d)), word('tag', 'wochenende'), word('tag', 'werktag')] },
+        { title: t('Tageszeit'), items: ['morgens', 'mittags', 'nachmittags', 'abends', 'nachts'].map((x) => word('tageszeit', x)) },
+        { title: t('Art'), items: Object.entries(KIND_LABEL).map(([v, l]) => ({ key: 'typ', val: v, label: t(l) })) },
+        f.cameras?.length && { title: t('Kamera'), items: f.cameras.map((x) => ({ key: 'kamera', val: x.label, label: x.label, n: x.count })) },
+        f.categories?.length && { title: t('Kategorie'), items: f.categories.map((x) => ({ key: 'kategorie', val: x.label, label: x.label, n: x.count })) },
       ].filter(Boolean);
     },
     draw() {
@@ -1204,18 +1399,18 @@
       const chip = (it) => `<button class="chip ${this.has(p, it.key, it.val) ? 'on' : ''}" data-k="${esc(it.key)}" data-v="${esc(it.val)}"
         ${it.n ? `title="${num(it.n)}"` : ''}>${it.img ? `<img src="${it.img}" alt="">` : ''}${esc(it.label)}</button>`;
       const pq = this.placeQ.toLowerCase();
-      this.el.innerHTML = `<header><b>Filter</b><span class="count">${this.n !== null && route.view === 'suche' ? `${num(this.n)} Treffer` : ''}</span>
-        <span style="flex:1"></span>${p.filters.length ? '<button class="btn ghost" data-reset>Zurücksetzen</button>' : ''}
-        <button class="btn ghost icon" data-close title="Schließen">${icon('x')}</button></header>
+      this.el.innerHTML = `<header><b>${t('Filter')}</b><span class="count">${this.n !== null && route.view === 'suche' ? pl(this.n, '{n} Treffer', '{n} Treffer') : ''}</span>
+        <span style="flex:1"></span>${p.filters.length ? `<button class="btn ghost" data-reset>${t('Zurücksetzen')}</button>` : ''}
+        <button class="btn ghost icon" data-close title="${t('Schließen')}">${icon('x')}</button></header>
         ${this.sections().map((sec) => {
           let items = sec.items;
           if (sec.search && pq) items = items.filter((x) => x.label.toLowerCase().includes(pq));
           const showAll = sec.search ? (pq ? 60 : 18) : 200;
-          return `<h4>${sec.title}</h4>${sec.search ? `<input class="filt" data-ps placeholder="Ort suchen …" value="${esc(this.placeQ)}">` : ''}
+          return `<h4>${sec.title}</h4>${sec.search ? `<input class="filt" data-ps placeholder="${t('Ort suchen …')}" value="${esc(this.placeQ)}">` : ''}
             <div class="chips">${items.slice(0, showAll).map(chip).join('')}</div>`;
         }).join('')}
-        <p class="hint">Mehrere Werte einer Art bedeuten „oder“, verschiedene Arten „und“. Tippen geht auch:
-          <code>sommer 2019 lübbecke</code>, <code>ort:Dresden</code>, <code>person:Anna</code>, <code>tag:wochenende</code>, <code>typ:video</code>, <code>-typ:screenshot</code>.</p>`;
+        <p class="hint">${t('Mehrere Werte einer Art bedeuten „oder“, verschiedene Arten „und“. Tippen geht auch:')}
+          ${(EN ? ['summer 2019 dresden', 'place:Dresden', 'person:Anna', 'day:weekend', 'type:video', '-type:screenshot'] : ['sommer 2019 lübbecke', 'ort:Dresden', 'person:Anna', 'tag:wochenende', 'typ:video', '-typ:screenshot']).map((x) => `<code>${x}</code>`).join(', ')}.</p>`;
       for (const b of $$('[data-k]', this.el)) b.onclick = () => this.toggle(b.dataset.k, b.dataset.v);
       $('[data-close]', this.el).onclick = () => this.close();
       $('[data-reset]', this.el)?.addEventListener('click', () => { const q = this.current(); q.filters = []; runQuery(buildQ(q)); setTimeout(() => this.draw(), 0); });
@@ -1230,33 +1425,79 @@
 
   // shared toolbar for gallery views
   function galleryTools(opts = {}) {
-    const lay = (k, ic, t) => `<button data-lay="${k}" class="${S.layout === k ? 'on' : ''}" title="${t}">${icon(ic)}</button>`;
+    const lay = (k, title) => `<button data-lay="${k}" class="${S.layout === k ? 'on' : ''}" title="${t(title)}">${icon(k)}</button>`;
     return `
-      ${opts.kinds ? `<div class="seg" data-kinds>${['all:Alle', 'photo:Fotos', 'video:Videos'].map((s) => { const [k, l] = s.split(':'); return `<button data-kind="${k}" class="${S.kind === k ? 'on' : ''}">${l}</button>`; }).join('')}</div>` : ''}
-      ${opts.group !== false ? `<select class="sel" data-group title="Gruppieren">
-        ${[['year', 'Jahre'], ['month', 'Monate'], ['day', 'Tage']].map(([k, l]) => `<option value="${k}" ${S.group === k ? 'selected' : ''}>${l}</option>`).join('')}</select>` : ''}
-      <div class="seg">${lay('rows', 'rows', 'Reihen')}${lay('grid', 'grid', 'Raster')}${lay('masonry', 'masonry', 'Mosaik')}</div>
-      <label class="zoom" title="Größe">${icon('photos')}<input type="range" min="70" max="420" step="10" value="${S.size}" data-size></label>
-      <button class="btn icon ${S.animate ? 'on' : ''}" data-anim title="Videos und Live Photos animiert zeigen">${icon('play')}</button>`;
+      ${opts.kinds ? `<div class="seg" data-kinds>${[['all', 'Alle'], ['photo', 'Fotos'], ['video', 'Videos']].map(([k, l]) => `<button data-kind="${k}" class="${S.kind === k ? 'on' : ''}">${t(l)}</button>`).join('')}</div>` : ''}
+      ${opts.group !== false ? `<select class="sel" data-group title="${t('Gruppieren')}">
+        ${[['year', 'Jahre'], ['month', 'Monate'], ['day', 'Tage']].map(([k, l]) => `<option value="${k}" ${S.group === k ? 'selected' : ''}>${t(l)}</option>`).join('')}</select>` : ''}
+      <div class="seg lay-seg">${lay('rows', 'Reihen')}${lay('grid', 'Raster')}${lay('masonry', 'Mosaik')}</div>
+      <label class="zoom" title="${t('Größe')}">${icon('photos')}<input type="range" min="70" max="420" step="10" value="${S.size}" data-size></label>
+      <button class="btn icon ${S.animate ? 'on' : ''}" data-anim title="${t('Videos und Live Photos animiert zeigen')}">${icon('play')}</button>
+      <button class="btn view-btn" data-vmenu title="${t('Ansicht')}" aria-haspopup="dialog">${icon(S.layout)}${icon('down')}</button>`;
+  }
+  // one change of layout, grouping, size or animation, mirrored in the toolbar and the view menu
+  function setView(g, what, v) {
+    if (what === 'layout') { S.layout = v; store.set('layout', v); }
+    else if (what === 'group') { S.group = v; store.set('group', v); g.opts.group = v; }
+    else if (what === 'size') { S.size = v; saveSize(); }
+    else if (what === 'animate') { S.animate = v; store.set('animate', v); }
+    for (const b of $$('[data-lay]')) b.classList.toggle('on', b.dataset.lay === S.layout);
+    for (const b of $$('[data-grp]')) b.classList.toggle('on', b.dataset.grp === S.group);
+    for (const s of $$('[data-group]')) s.value = S.group;
+    for (const r of $$('[data-size]')) if (r.value !== String(S.size)) r.value = S.size;
+    for (const b of $$('[data-anim]')) b.classList.toggle('on', S.animate);
+    for (const b of $$('[data-vmenu]')) b.innerHTML = icon(S.layout) + icon('down');
+    g.relayout();
+    if (what !== 'animate') Scrub.attach(g);
   }
   function bindTools(root, g, onKind) {
-    for (const b of $$('[data-lay]', root)) b.onclick = () => { S.layout = b.dataset.lay; store.set('layout', S.layout); $$('[data-lay]', root).forEach((x) => x.classList.toggle('on', x === b)); g.relayout(); Scrub.attach(g); };
-    const sz = $('[data-size]', root);
-    if (sz) sz.oninput = () => { S.size = +sz.value; saveSize(); g.relayout(); Scrub.attach(g); };
+    for (const b of $$('[data-lay]', root)) b.onclick = () => setView(g, 'layout', b.dataset.lay);
+    for (const b of $$('[data-grp]', root)) b.onclick = () => setView(g, 'group', b.dataset.grp);
+    for (const r of $$('[data-size]', root)) r.oninput = () => setView(g, 'size', +r.value);
     const gr = $('[data-group]', root);
-    if (gr) gr.onchange = () => { S.group = gr.value; store.set('group', S.group); g.opts.group = S.group; g.relayout(); Scrub.attach(g); };
-    const an = $('[data-anim]', root);
-    if (an) an.onclick = () => { S.animate = !S.animate; store.set('animate', S.animate); an.classList.toggle('on', S.animate); g.relayout(); };
+    if (gr) gr.onchange = () => setView(g, 'group', gr.value);
+    for (const b of $$('[data-anim]', root)) b.onclick = () => setView(g, 'animate', !S.animate);
     for (const b of $$('[data-kind]', root)) b.onclick = () => { S.kind = b.dataset.kind; $$('[data-kind]', root).forEach((x) => x.classList.toggle('on', x === b)); onKind?.(); };
+    const vm = $('[data-vmenu]', root);
+    if (vm) vm.onclick = (e) => { e.stopPropagation(); ViewMenu.el ? ViewMenu.close() : ViewMenu.open(g, !!gr); };
   }
+  // phones: layout, grouping, size and animation in one sheet instead of a toolbar wider than the screen
+  const ViewMenu = {
+    el: null,
+    open(g, group) {
+      this.close();
+      const lay = (k, l) => `<button data-lay="${k}" class="${S.layout === k ? 'on' : ''}">${icon(k)}<span>${t(l)}</span></button>`;
+      const m = document.createElement('div');
+      m.className = 'vmenu';
+      m.setAttribute('role', 'dialog');
+      m.innerHTML = `<header><b>${t('Ansicht')}</b><button class="btn ghost icon" data-close title="${t('Schließen')}">${icon('x')}</button></header>
+        <h4>${t('Anordnung')}</h4><div class="seg wide">${lay('rows', 'Reihen')}${lay('grid', 'Raster')}${lay('masonry', 'Mosaik')}</div>
+        ${group ? `<h4>${t('Gruppieren nach')}</h4><div class="seg wide">${[['year', 'Jahren'], ['month', 'Monaten'], ['day', 'Tagen']].map(([k, l]) => `<button data-grp="${k}" class="${S.group === k ? 'on' : ''}">${t(l)}</button>`).join('')}</div>` : ''}
+        <h4>${t('Größe')}</h4><input type="range" min="70" max="420" step="10" value="${S.size}" data-size aria-label="${t('Größe')}">
+        <button class="btn vrow ${S.animate ? 'on' : ''}" data-anim>${icon('play')}<span>${t('Videos und Live Photos animiert zeigen')}</span></button>`;
+      document.body.appendChild(m);
+      this.el = m;
+      bindTools(m, g);
+      $('[data-close]', m).onclick = () => this.close();
+      this.off = (e) => { if (!m.contains(e.target) && !e.target.closest('[data-vmenu]')) this.close(); };
+      document.addEventListener('pointerdown', this.off, true);
+      cleanup.push(() => this.close());
+    },
+    close() {
+      if (!this.el) return;
+      this.el.remove();
+      this.el = null;
+      document.removeEventListener('pointerdown', this.off, true);
+    },
+  };
   const byKind = (items) => (S.kind === 'photo' ? items.filter((it) => it.k === 1) : S.kind === 'video' ? items.filter((it) => it.k === 2) : items);
 
-  function galleryView(view, { title, sub = '', items, group = S.group, kinds = false, before = '', snips = null, autoplay = false, scrub = true, emptyText = 'Keine Fotos gefunden.', tools = {} }) {
+  function galleryView(view, { title, sub = '', items, group = S.group, kinds = false, before = '', snips = null, autoplay = false, scrub = true, emptyText = t('Keine Fotos gefunden.'), tools = {} }) {
     view.innerHTML = `<div class="head"><div><h1>${title}</h1><div class="sub">${sub}</div></div><div class="tools">${galleryTools({ kinds, ...tools })}</div></div>${before}<div data-g></div>`;
     const host = $('[data-g]', view);
     const make = () => {
       const list = kinds ? byKind(items) : items;
-      if (!list.length) { host.innerHTML = `<div class="empty">${icon('photos')}<h2>Nichts hier</h2><p>${emptyText}</p></div>`; return; }
+      if (!list.length) { host.innerHTML = `<div class="empty">${icon('photos')}<h2>${t('Nichts hier')}</h2><p>${emptyText}</p></div>`; return; }
       host.innerHTML = '';
       S.gallery?.destroy();
       const g = new Gallery(host, { group, snips, autoplay, onLayout: (gg) => scrub && group !== 'none' && Scrub.attach(gg) });
@@ -1274,9 +1515,9 @@
     const m = day.getMonth(), d = day.getDate(), y = day.getFullYear();
     const by = new Map();
     for (const it of S.items) {
-      const t = dt(it.t);
-      if (t.getUTCMonth() === m && t.getUTCDate() === d && t.getUTCFullYear() < y) {
-        const k = t.getUTCFullYear();
+      const dd = dt(it.t);
+      if (dd.getUTCMonth() === m && dd.getUTCDate() === d && dd.getUTCFullYear() < y) {
+        const k = dd.getUTCFullYear();
         if (!by.has(k)) by.set(k, []);
         by.get(k).push(it);
       }
@@ -1294,24 +1535,28 @@
       const mem = memoriesFor(new Date());
       const strip = mem.length ? `<div class="memories">${mem.map((m) => {
         const c = bestCover(m.items);
-        return `<a class="memory" href="#/erinnerungen" data-yr="${m.yr}"><img src="${thumbURL(c)}" alt="" loading="lazy"><b>${m.ago === 1 ? 'Vor einem Jahr' : `Vor ${m.ago} Jahren`}</b><span>${plural(m.items.length, 'Foto', 'Fotos')} · ${m.yr}</span></a>`;
+        return `<a class="memory" href="#/erinnerungen" data-yr="${m.yr}"><img src="${thumbURL(c)}" alt="" loading="lazy"><b>${pl(m.ago, 'Vor einem Jahr', 'Vor {n} Jahren')}</b><span>${pl(m.items.length, '{n} Foto', '{n} Fotos')} · ${m.yr}</span></a>`;
       }).join('')}</div>` : '';
       const total = S.items.length;
       galleryView(view, {
-        title: 'Fotos', sub: total ? `${plural(total, 'Element', 'Elemente')} · ${years(S.items[S.items.length - 1].t, S.items[0].t)}` : 'Wird eingelesen …',
-        items: S.items, kinds: true, before: strip, emptyText: 'Die Ordner werden noch eingelesen.',
+        title: t('Fotos'), sub: total ? `${pl(total, '{n} Element', '{n} Elemente')} · ${years(S.items[S.items.length - 1].t, S.items[0].t)}` : t('Wird eingelesen …'),
+        items: S.items, kinds: true, before: strip, emptyText: t('Die Ordner werden noch eingelesen.'),
       });
       for (const a of $$('.memory', view)) a.onclick = (e) => { e.preventDefault(); const m = mem.find((x) => x.yr === +a.dataset.yr); Viewer.open(m.items, 0); };
     },
 
     videos(view) {
       const items = S.items.filter((it) => it.k === 2);
-      galleryView(view, { title: 'Videos', sub: `${plural(items.length, 'Video', 'Videos')} · Vorschau beim Darüberfahren`, items, autoplay: true });
+      galleryView(view, { title: t('Videos'), sub: `${pl(items.length, '{n} Video', '{n} Videos')} · ${t('Vorschau beim Darüberfahren')}`, items, autoplay: true });
     },
 
     favoriten(view) {
+      if (!Account.can('user')) {
+        view.innerHTML = `<div class="empty"><h2>${t('Favoriten')}</h2><p>${t('Favoriten gehören zu einem Konto.')}</p><p><a class="btn primary" href="${esc(Account.loginURL())}">${t('Anmelden')}</a></p></div>`;
+        return;
+      }
       const items = S.items.filter((it) => it.f);
-      galleryView(view, { title: 'Favoriten', sub: plural(items.length, 'Favorit', 'Favoriten'), items, emptyText: 'Mit dem Herz in der Ansicht markieren.' });
+      galleryView(view, { title: t('Favoriten'), sub: pl(items.length, '{n} Favorit', '{n} Favoriten'), items, emptyText: t('Mit dem Herz in der Ansicht markieren.') });
     },
 
     erinnerungen(view) {
@@ -1325,11 +1570,11 @@
       }
       week.sort((a, b) => b.t - a.t);
       const shuffled = S.items.filter((it) => it.k === 1).sort(() => Math.random() - 0.5).slice(0, 40).sort((a, b) => b.t - a.t);
-      view.innerHTML = `<div class="head"><div><h1>Erinnerungen</h1><div class="sub">${fmtLong(Date.UTC(today.getFullYear(), today.getMonth(), today.getDate()) / 1000)}</div></div>
-        <div class="tools"><button class="btn" id="shuffle">${icon('shuffle')}<span>Neu mischen</span></button></div></div>
-        ${mem.length ? '' : '<div class="banner">' + icon('cal') + '<div>Heute vor einem Jahr oder länger gibt es keine Fotos – unten die Woche drumherum und zufällige Momente.</div></div>'}
-        <div id="memDay"></div><div class="head"><div><h1 style="font-size:20px">Diese Woche in früheren Jahren</h1></div></div><div id="memWeek"></div>
-        <div class="head"><div><h1 style="font-size:20px">Zufällige Momente</h1></div></div><div id="memRand"></div>`;
+      view.innerHTML = `<div class="head"><div><h1>${t('Erinnerungen')}</h1><div class="sub">${fmtLong(Date.UTC(today.getFullYear(), today.getMonth(), today.getDate()) / 1000)}</div></div>
+        <div class="tools"><button class="btn" id="shuffle">${icon('shuffle')}<span>${t('Neu mischen')}</span></button></div></div>
+        ${mem.length ? '' : `<div class="banner">${icon('cal')}<div>${t('Heute vor einem Jahr oder länger gibt es keine Fotos – unten die Woche drumherum und zufällige Momente.')}</div></div>`}
+        <div id="memDay"></div><div class="head"><div><h1 style="font-size:20px">${t('Diese Woche in früheren Jahren')}</h1></div></div><div id="memWeek"></div>
+        <div class="head"><div><h1 style="font-size:20px">${t('Zufällige Momente')}</h1></div></div><div id="memRand"></div>`;
       const mk = (sel, items, group) => {
         if (!items.length) return;
         const g = new Gallery($(sel, view), { group });
@@ -1346,7 +1591,7 @@
 
     suche(view, q) {
       $('#q').value = q;
-      view.innerHTML = `<div class="head"><div><h1>Suche</h1><div class="sub">„${esc(q)}“ …</div></div></div>`;
+      view.innerHTML = `<div class="head compact"><div><h1>${t('Suche')}</h1><div class="sub">${t('„{q}“ …', { q: esc(q) })}</div></div></div>`;
       api(`/api/search?q=${encodeURIComponent(q)}`).then((res) => {
         if (route.view !== 'suche' || route.arg !== q) return;
         const snips = new Map();
@@ -1366,25 +1611,26 @@
         const places = text ? [...new Set(items.map((it) => it.p).filter((p) => p && p.toLowerCase().includes(text)))].slice(0, 6) : [];
         const jump = [...people.map((p) => `<a class="chip" href="#/person/${encodeURIComponent(p.id)}"><img src="${faceURL(p.cover.item, p.cover.idx)}" alt="">${esc(p.name)}</a>`),
           ...places.map((p) => `<a class="chip" href="#/ort/${encodeURIComponent(p)}">${icon('pin')}${esc(p)}</a>`)].join('');
-        const active = parsed.filters.map((f, i) => `<button class="chip" data-rmf="${i}" title="Filter entfernen">${f.neg ? 'ohne ' : ''}${esc(filterLabel(f))}${icon('x')}</button>`)
-          .concat(parsed.words.length ? [`<button class="chip" data-rmw title="Suchwörter entfernen">„${esc(parsed.words.join(' '))}“${icon('x')}</button>`] : []).join('');
+        const active = parsed.filters.map((f, i) => `<button class="chip" data-rmf="${i}" title="${t('Filter entfernen')}">${f.neg ? `${t('ohne')} ` : ''}${esc(filterLabel(f))}${icon('x')}</button>`)
+          .concat(parsed.words.length ? [`<button class="chip" data-rmw title="${t('Suchwörter entfernen')}">${t('„{q}“', { q: esc(parsed.words.join(' ')) })}${icon('x')}</button>`] : []).join('');
         galleryView(view, {
-          title: 'Suche', sub: `${plural(items.length, 'Treffer', 'Treffer')}${snips.size ? ` · ${num(snips.size)} mit Text im Bild` : ''} · ${res.ms ?? 0} ms`,
+          title: t('Suche'), sub: `${pl(items.length, '{n} Treffer', '{n} Treffer')}${snips.size ? ` · ${t('{n} mit Text im Bild', { n: num(snips.size) })}` : ''}<span class="hide-m"> · ${res.ms ?? 0} ms</span>`,
           items, group: sort === 'date' ? S.group : 'none', snips, scrub: sort === 'date',
-          before: `<div class="active-filters">${active}<button class="chip" data-addf>${icon('sliders')}Filter${parsed.filters.length ? ' ändern' : ' hinzufügen'}</button>
-            ${parsed.filters.length + parsed.words.length > 1 ? '<button class="chip" data-clear>Alle entfernen</button>' : ''}</div>
+          before: `<div class="active-filters">${active}<button class="chip" data-addf>${icon('sliders')}<span class="hide-m">${parsed.filters.length ? t('Filter ändern') : t('Filter hinzufügen')}</span><span class="only-m">${t('Filter')}</span></button>
+            ${parsed.filters.length + parsed.words.length > 1 ? `<button class="chip" data-clear>${t('Alle entfernen')}</button>` : ''}</div>
             ${jump ? `<div class="chips" style="margin-bottom:14px">${jump}</div>` : ''}`,
-          emptyText: 'Andere Schreibweise, weniger Wörter oder weniger Filter probieren.', tools: { group: false },
+          emptyText: t('Andere Schreibweise, weniger Wörter oder weniger Filter probieren.'), tools: { group: false },
         });
+        $('.head', view).classList.add('compact');
         const tools = $('.head .tools', view);
-        tools.insertAdjacentHTML('afterbegin', `<div class="seg"><button data-sort="rel" class="${sort === 'rel' ? 'on' : ''}">Relevanz</button><button data-sort="date" class="${sort === 'date' ? 'on' : ''}">Datum</button></div>`);
+        tools.insertAdjacentHTML('afterbegin', `<div class="seg"><button data-sort="rel" class="${sort === 'rel' ? 'on' : ''}">${t('Relevanz')}</button><button data-sort="date" class="${sort === 'date' ? 'on' : ''}">${t('Datum')}</button></div>`);
         for (const b of $$('[data-sort]', tools)) b.onclick = () => { store.set('searchSort', b.dataset.sort); rerender(); };
         for (const b of $$('[data-rmf]', view)) b.onclick = () => { parsed.filters.splice(+b.dataset.rmf, 1); runQuery(buildQ(parsed)); };
         $('[data-rmw]', view)?.addEventListener('click', () => { parsed.words = []; runQuery(buildQ(parsed)); });
         $('[data-clear]', view)?.addEventListener('click', () => runQuery(''));
         $('[data-addf]', view).onclick = () => Filter.open();
         if (route.item) onRoute();
-      }).catch((e) => { view.innerHTML = `<div class="empty"><h2>Suche fehlgeschlagen</h2><p>${esc(e.message)}</p></div>`; });
+      }).catch((e) => { view.innerHTML = `<div class="empty"><h2>${t('Suche fehlgeschlagen')}</h2><p>${esc(e.message)}</p></div>`; });
     },
 
     orte(view) {
@@ -1396,15 +1642,15 @@
         p.items.push(it);
       }
       const places = [...m.values()].sort((a, b) => b.items.length - a.items.length);
-      view.innerHTML = `<div class="head"><div><h1>Orte</h1><div class="sub">${plural(places.length, 'Ort', 'Orte')}</div></div>
-        <div class="tools"><input class="filter-in" id="pf" placeholder="Ort filtern …" type="search"></div></div><div class="cards" id="pc"></div>`;
+      view.innerHTML = `<div class="head"><div><h1>${t('Orte')}</h1><div class="sub">${pl(places.length, '{n} Ort', '{n} Orte')}</div></div>
+        <div class="tools"><input class="filter-in" id="pf" placeholder="${t('Ort filtern …')}" type="search"></div></div><div class="cards" id="pc"></div>`;
       const draw = (f = '') => {
         const fl = f.toLowerCase();
         $('#pc', view).innerHTML = places.filter((p) => !fl || p.name.toLowerCase().includes(fl)).map((p) => {
           const c = bestCover(p.items);
           return `<a class="card" href="#/ort/${encodeURIComponent(p.name)}"><div class="cv"><img src="${thumbURL(c)}" alt="" loading="lazy"><span class="n">${num(p.items.length)}</span></div>
             <b>${esc(p.name)}</b><span>${years(p.items[p.items.length - 1].t, p.items[0].t)}</span></a>`;
-        }).join('') || '<div class="empty">Keine Orte.</div>';
+        }).join('') || `<div class="empty">${t('Keine Orte.')}</div>`;
       };
       draw();
       $('#pf', view).oninput = (e) => draw(e.target.value);
@@ -1414,8 +1660,8 @@
       const items = S.items.filter((it) => it.p === name);
       const gps = items.filter((it) => it.la !== undefined);
       galleryView(view, {
-        title: `<a href="#/orte" class="muted" style="color:var(--muted)">Orte</a> / ${esc(name)}`,
-        sub: `${plural(items.length, 'Element', 'Elemente')} · ${items.length ? years(items[items.length - 1].t, items[0].t) : ''}`,
+        title: `<a href="#/orte" class="muted" style="color:var(--muted)">${t('Orte')}</a> / ${esc(name)}`,
+        sub: `${pl(items.length, '{n} Element', '{n} Elemente')} · ${items.length ? years(items[items.length - 1].t, items[0].t) : ''}`,
         items, kinds: true, before: gps.length ? '<div class="minimap" id="placeMap" style="height:200px;margin-bottom:16px"></div>' : '',
       });
       if (gps.length && window.L) {
@@ -1428,29 +1674,30 @@
     },
 
     async personen(view) {
-      view.innerHTML = `<div class="head"><div><h1>Personen</h1><div class="sub">wird geladen …</div></div></div>`;
+      view.innerHTML = `<div class="head"><div><h1>${t('Personen')}</h1><div class="sub">${t('wird geladen …')}</div></div></div>`;
       await loadPeople().catch(() => {});
       if (route.view !== 'personen') return;
       const info = S.peopleInfo;
       const named = S.people.filter((p) => p.name), unnamed = S.people.filter((p) => !p.name);
       let banner = '';
-      if (S.config.faces === 'off') banner = `<div class="banner">${icon('info')}<div>Gesichtserkennung ist ausgeschaltet. Sie läuft in einem eigenen Container; einschalten unter <a class="link" href="/setup">Einstellungen → Gesichter</a>.</div></div>`;
-      else if (!info.detection) banner = `<div class="banner">${icon('info')}<div>Die Gesichtserkennung antwortet nicht${info.error ? `: ${esc(info.error)}` : ''}. Läuft der Container? <a class="link" href="/setup">Einstellungen</a></div></div>`;
-      else if (!info.recognition) banner = `<div class="banner">${icon('info')}<div>${num(info.faces)} Fotos auf Gesichter geprüft. Zum <b>Gruppieren nach Personen</b> fehlt der Gesichtserkennung das Modell <code>face_recognition_sface_2021dec.onnx</code>.</div></div>`;
-      else if (info.faceTodo > info.faces) banner = `<div class="banner">${icon('info')}<div>Gesichter werden noch gesucht (${num(info.faces)} von ${num(info.faceTodo)}). Die Gruppen werden laufend besser.</div></div>`;
+      const settings = `<a class="link" href="/setup">${t('Einstellungen')}</a>`;
+      if (S.config.faces === 'off') banner = `<div class="banner">${icon('info')}<div>${t('Gesichtserkennung ist ausgeschaltet. Sie läuft in einem eigenen Container; einschalten unter {link}.', { link: `<a class="link" href="/setup">${t('Einstellungen → Gesichter')}</a>` })}</div></div>`;
+      else if (!info.detection) banner = `<div class="banner">${icon('info')}<div>${t('Die Gesichtserkennung antwortet nicht')}${info.error ? `: ${esc(info.error)}` : ''}. ${t('Läuft der Container?')} ${settings}</div></div>`;
+      else if (!info.recognition) banner = `<div class="banner">${icon('info')}<div>${t('{n} Fotos auf Gesichter geprüft. Zum {b} fehlt der Gesichtserkennung das Modell {m}.', { n: num(info.faces), b: `<b>${t('Gruppieren nach Personen')}</b>`, m: '<code>face_recognition_sface_2021dec.onnx</code>' })}</div></div>`;
+      else if (info.faceTodo > info.faces) banner = `<div class="banner">${icon('info')}<div>${t('Gesichter werden noch gesucht ({a} von {b}). Die Gruppen werden laufend besser.', { a: num(info.faces), b: num(info.faceTodo) })}</div></div>`;
       const card = (p) => `<a class="person" href="#/person/${encodeURIComponent(p.id)}"><span class="face"><img src="${faceURL(p.cover.item, p.cover.idx)}" alt="" loading="lazy"></span>
-        <b class="${p.name ? '' : 'unnamed'}">${esc(p.name || 'Name hinzufügen')}</b><span>${plural(p.count, 'Foto', 'Fotos')}</span></a>`;
-      view.innerHTML = `<div class="head"><div><h1>Personen</h1><div class="sub">${plural(named.length, 'Person', 'Personen')} mit Namen · ${plural(unnamed.length, 'Gruppe', 'Gruppen')} ohne Namen</div></div></div>
+        <b class="${p.name ? '' : 'unnamed'}">${esc(p.name || t('Name hinzufügen'))}</b><span>${pl(p.count, '{n} Foto', '{n} Fotos')}</span></a>`;
+      view.innerHTML = `<div class="head"><div><h1>${t('Personen')}</h1><div class="sub">${t('{a} mit Namen · {b} ohne Namen', { a: pl(named.length, '{n} Person', '{n} Personen'), b: pl(unnamed.length, '{n} Gruppe', '{n} Gruppen') })}</div></div></div>
         ${banner}
         ${named.length ? `<div class="people">${named.map(card).join('')}</div>` : ''}
-        ${unnamed.length ? `<div class="head"><div><h1 style="font-size:20px">Wer ist das?</h1><div class="sub">Namen vergeben, gleiche Namen werden zusammengeführt</div></div></div><div class="people">${unnamed.map(card).join('')}</div>` : ''}
-        ${!S.people.length && info.recognition ? `<div class="empty">${icon('people')}<h2>Noch keine Personen</h2><p>Die Gesichtssuche läuft im Hintergrund.</p></div>` : ''}`;
+        ${unnamed.length ? `<div class="head"><div><h1 style="font-size:20px">${t('Wer ist das?')}</h1><div class="sub">${t('Namen vergeben, gleiche Namen werden zusammengeführt')}</div></div></div><div class="people">${unnamed.map(card).join('')}</div>` : ''}
+        ${!S.people.length && info.recognition ? `<div class="empty">${icon('people')}<h2>${t('Noch keine Personen')}</h2><p>${t('Die Gesichtssuche läuft im Hintergrund.')}</p></div>` : ''}`;
     },
 
     async person(view, id) {
       if (!S.peopleById.has(id)) await loadPeople().catch(() => {});
       const p = S.peopleById.get(id);
-      if (!p) { view.innerHTML = `<div class="empty"><h2>Person nicht gefunden</h2><p><a class="link" href="#/personen">Zur Übersicht</a></p></div>`; return; }
+      if (!p) { view.innerHTML = `<div class="empty"><h2>${t('Person nicht gefunden')}</h2><p><a class="link" href="#/personen">${t('Zur Übersicht')}</a></p></div>`; return; }
       const items = S.items.filter((it) => it.pp?.includes(id));
       const names = [...new Set(S.people.filter((x) => x.name && x.id !== id).map((x) => x.name))].sort();
       galleryView(view, {
@@ -1459,15 +1706,15 @@
       });
       const head = $('.head', view);
       head.firstElementChild.outerHTML = `<div class="person-head"><span class="face"><img src="${faceURL(p.cover.item, p.cover.idx)}" alt=""></span><div>
-        <input class="name-in" id="pname" value="${esc(p.name)}" placeholder="Name hinzufügen" list="pn2"><datalist id="pn2">${names.map((n) => `<option value="${esc(n)}">`).join('')}</datalist>
-        <div class="sub">${plural(items.length, 'Foto', 'Fotos')} · ${plural(p.faces, 'Gesicht', 'Gesichter')} · gleicher Name führt Personen zusammen</div></div></div>`;
-      $('.head .tools', view).insertAdjacentHTML('afterbegin', `<button class="btn" id="phide" title="Diese Gruppe nicht mehr zeigen">${icon('eye-off')}<span>Ausblenden</span></button>`);
+        <input class="name-in" id="pname" value="${esc(p.name)}" placeholder="${Account.can('user') ? t('Name hinzufügen') : t('Unbenannt')}" list="pn2" ${Account.can('user') ? '' : 'readonly'}><datalist id="pn2">${names.map((n) => `<option value="${esc(n)}">`).join('')}</datalist>
+        <div class="sub">${pl(items.length, '{n} Foto', '{n} Fotos')} · ${pl(p.faces, '{n} Gesicht', '{n} Gesichter')} · ${t('gleicher Name führt Personen zusammen')}</div></div></div>`;
+      $('.head .tools', view).insertAdjacentHTML('afterbegin', `<button class="btn" id="phide" data-need="user" title="${t('Diese Gruppe nicht mehr zeigen')}">${icon('eye-off')}<span>${t('Ausblenden')}</span></button>`);
       const inp = $('#pname', view);
       const save = async () => {
         const name = inp.value.trim();
         if (name === p.name) return;
         await post(`/api/people/${encodeURIComponent(id)}`, { name });
-        toast(name ? `Gespeichert: ${name}` : 'Name entfernt');
+        toast(name ? t('Gespeichert: {name}', { name }) : t('Name entfernt'));
         await loadPeople();
         await loadItems();
         const np = S.people.find((x) => x.name === name);
@@ -1477,7 +1724,7 @@
       inp.onchange = save;
       $('#phide', view).onclick = async () => {
         await post(`/api/people/${encodeURIComponent(id)}`, { name: '~' });
-        toast('Ausgeblendet');
+        toast(t('Ausgeblendet'));
         await loadPeople();
         location.hash = '#/personen';
       };
@@ -1503,10 +1750,10 @@
       }
       let node = root;
       if (path) for (const part of path.split('/')) node = node?.kids.get(part);
-      if (!node) { view.innerHTML = '<div class="empty"><h2>Ordner nicht gefunden</h2></div>'; return; }
+      if (!node) { view.innerHTML = `<div class="empty"><h2>${t('Ordner nicht gefunden')}</h2></div>`; return; }
       // single root: skip straight into it
       if (!path && root.kids.size === 1) { node = [...root.kids.values()][0]; }
-      const crumbs = ['<a href="#/alben">Alben</a>'];
+      const crumbs = [`<a href="#/alben">${t('Alben')}</a>`];
       if (node.path) {
         let acc = '';
         for (const part of node.path.split('/')) {
@@ -1515,25 +1762,27 @@
         }
       }
       const kids = [...node.kids.values()].sort((a, b) => b.name.localeCompare(a.name, 'de', { numeric: true }));
+      // a year folder named like its years shows its subfolders instead of "2025 / 2025"
+      const albumMeta = (k) => { const y = k.from ? years(k.from, k.to) : ''; return y && y !== k.name ? y : k.kids.size ? pl(k.kids.size, '{n} Ordner', '{n} Ordner') : y; };
       const cards = kids.length ? `<div class="cards" style="margin-bottom:26px">${kids.map((k) => `<a class="card folder" href="#/alben/${encodeURIComponent(k.path)}">
         <div class="cv"><img src="${thumbURL(k.cover)}" alt="" loading="lazy"><span class="n">${num(k.total)}</span></div>
-        <b>${esc(k.name)}</b><span>${k.from ? years(k.from, k.to) : ''}</span></a>`).join('')}</div>` : '';
+        <b>${esc(k.name)}</b><span>${albumMeta(k)}</span></a>`).join('')}</div>` : '';
       if (node.items.length) {
         galleryView(view, {
-          title: esc(node.name || 'Alben'), sub: `<span class="crumbs">${crumbs.join('')}</span>`,
+          title: esc(node.name || t('Alben')), sub: `<span class="crumbs">${crumbs.join('')}</span>`,
           items: node.items, before: cards, group: kids.length ? 'none' : S.group,
         });
       } else {
-        view.innerHTML = `<div class="head"><div><h1>${esc(node.name || 'Alben')}</h1><div class="sub crumbs">${crumbs.join('')}</div></div>
-          <div class="tools"><span class="muted">${plural(kids.length, 'Ordner', 'Ordner')} · ${plural(node.total, 'Element', 'Elemente')}</span></div></div>${cards}`;
+        view.innerHTML = `<div class="head"><div><h1>${esc(node.name || t('Alben'))}</h1><div class="sub crumbs">${crumbs.join('')}</div></div>
+          <div class="tools"><span class="muted">${pl(kids.length, '{n} Ordner', '{n} Ordner')} · ${pl(node.total, '{n} Element', '{n} Elemente')}</span></div></div>${cards}`;
       }
     },
 
     karte(view) {
       const gps = S.items.filter((it) => it.la !== undefined);
-      view.innerHTML = `<div class="head"><div><h1>Karte</h1><div class="sub">${plural(gps.length, 'Element', 'Elemente')} mit Ortsangabe</div></div></div>
+      view.innerHTML = `<div class="head"><div><h1>${t('Karte')}</h1><div class="sub">${t('{a} mit Ortsangabe', { a: pl(gps.length, '{n} Element', '{n} Elemente') })}</div></div></div>
         <div class="mapwrap"><div class="map" id="map"></div><div class="map-side"><header id="mapHead"></header><div class="list" id="mapList"></div></div></div>`;
-      if (!window.L) { $('#map', view).innerHTML = '<div class="empty">Karte konnte nicht geladen werden (keine Internetverbindung?).</div>'; return; }
+      if (!window.L) { $('#map', view).innerHTML = `<div class="empty">${t('Karte konnte nicht geladen werden (keine Internetverbindung?).')}</div>`; return; }
       const map = L.map($('#map', view), { worldCopyJump: true, preferCanvas: true });
       tileLayer().addTo(map);
       const cluster = L.markerClusterGroup({
@@ -1563,7 +1812,7 @@
       const upd = debounce(() => {
         const b = map.getBounds();
         const inb = gps.filter((it) => b.contains([it.la, it.lo]));
-        $('#mapHead', view).innerHTML = `<b>${plural(inb.length, 'Element', 'Elemente')}</b> im Ausschnitt${inb.length > 600 ? ' · die neuesten 600' : ''}`;
+        $('#mapHead', view).innerHTML = `<b>${pl(inb.length, '{n} Element', '{n} Elemente')}</b> ${t('im Ausschnitt')}${inb.length > 600 ? ` · ${t('die neuesten 600')}` : ''}`;
         side.setItems(inb.slice(0, 600));
       }, 200);
       map.on('moveend', upd);
@@ -1581,6 +1830,7 @@
   // status, theme, menu
   // ---------------------------------------------------------------------------
   let statusT = 0;
+  const stalled = {}; // progress label -> last count and since when
   const scheduleReload = debounce(async () => { await loadItems(); if (!Viewer.open_) rerender(); }, 300);
   async function pollStatus() {
     clearTimeout(statusT);
@@ -1590,19 +1840,29 @@
       const { status: s, scanning } = res;
       S.status = s;
       const rows = [];
-      const bar = (label, a, b) => { if (b > 0 && a < b) { busy = true; rows.push(`<div class="row"><span>${label} ${num(a)} / ${num(b)}</span><span class="bar"><i style="width:${(a / b) * 100}%"></i></span></div>`); } };
+      // files that cannot be read (broken videos …) count as done: from the server (…Fail), or when nothing moved for 90 s
+      let missing = 0;
+      const bar = (label, a, b, fail = 0) => {
+        if (!(b > 0)) return;
+        if (a + fail >= b) { missing = Math.max(missing, fail); return; }
+        const st = stalled[label], now = Date.now();
+        if (!st || st.a !== a || st.b !== b) stalled[label] = { a, b, t: now };
+        else if (!scanning && now - st.t > 90000) { missing = Math.max(missing, b - a); return; }
+        busy = true;
+        rows.push(`<div class="row"><span>${label} ${num(a)} / ${num(b)}</span><span class="bar"><i style="width:${(a / b) * 100}%"></i></span></div>`);
+      };
       if (scanning) {
         busy = true;
-        if (s.metaTodo > 0) bar('Metadaten', s.meta, s.metaTodo);
-        else rows.push(`<div class="row"><span>${esc(s.phase)} · ${num(s.scanned)}</span></div>`);
+        if (s.metaTodo > 0) bar(t('Metadaten'), s.meta, s.metaTodo);
+        else rows.push(`<div class="row"><span>${esc(t(s.phase || ''))} · ${num(s.scanned)}</span></div>`);
       }
       const liveVideos = Math.max(0, S.items.filter((it) => it.lv).length);
-      bar('Vorschaubilder', s.thumbs + s.posters, s.photos + s.videos + liveVideos);
-      bar('Video-Vorschauen', s.previews, s.videos + liveVideos);
-      if (s.faceDetection && s.faceTodo) bar('Gesichter', s.faces, s.faceTodo);
+      bar(t('Vorschaubilder'), s.thumbs + s.posters, s.photos + s.videos + liveVideos, s.thumbFail || 0);
+      bar(t('Video-Vorschauen'), s.previews, s.videos + liveVideos, s.previewFail || 0);
+      if (s.faceDetection && s.faceTodo) bar(t('Gesichter'), s.faces, s.faceTodo);
       const bk = res.backup;
-      if (bk?.running) { busy = true; rows.push(`<div class="row"><span>Sicherung: ${esc(bk.phase || '')} · ${num(bk.copied)} kopiert</span></div>`); }
-      if (!rows.length) rows.push(`<div class="row"><span>${num(s.photos)} Fotos · ${num(s.videos)} Videos${s.people ? ` · ${num(s.people)} Personen` : ''}</span></div>`);
+      if (bk?.running) { busy = true; rows.push(`<div class="row"><span>${t('Sicherung')}: ${esc(t(bk.phase || ''))} · ${t('{n} kopiert', { n: num(bk.copied) })}</span></div>`); }
+      if (!rows.length) rows.push(`<div class="row"><span>${pl(s.photos, '{n} Foto', '{n} Fotos')} · ${pl(s.videos, '{n} Video', '{n} Videos')}${s.people ? ` · ${pl(s.people, '{n} Person', '{n} Personen')}` : ''}</span>${missing ? `<span class="faint" title="${t('Diese Dateien lassen sich nicht lesen')}">${num(missing)} ${t('ohne Vorschau')}</span>` : ''}</div>`);
       $('#status').innerHTML = rows.join('');
       if (s.version !== S.version) {
         const age = Date.now() - S.loadedAt;
@@ -1616,44 +1876,157 @@
     statusT = setTimeout(pollStatus, busy ? 3000 : 20000);
   }
 
+  // fullscreen for the whole app (header, menu on phones) and in the viewer; iPhones cannot, so no buttons there
+  const FS = {
+    ok: !!(document.fullscreenEnabled || document.webkitFullscreenEnabled),
+    auto: false, // entered by the slideshow: left again when the viewer closes
+    get on() { return !!(document.fullscreenElement || document.webkitFullscreenElement); },
+    enter() {
+      const el = document.documentElement, fn = el.requestFullscreen || el.webkitRequestFullscreen;
+      try { fn?.call(el, { navigationUI: 'hide' })?.catch?.(() => {}); } catch { /* not allowed here */ }
+    },
+    exit() {
+      this.auto = false;
+      const fn = document.exitFullscreen || document.webkitExitFullscreen;
+      if (this.on && fn) { try { fn.call(document)?.catch?.(() => {}); } catch { /* ignore */ } }
+    },
+    toggle() { if (!this.ok) return; this.auto = false; this.on ? this.exit() : this.enter(); },
+    sync() {
+      const on = this.on;
+      if (!on) this.auto = false;
+      for (const b of $$('[data-fs]')) {
+        b.hidden = !this.ok;
+        b.title = on ? t('Vollbild beenden (V)') : t('Vollbild (V)');
+        b.setAttribute('aria-label', on ? t('Vollbild beenden') : t('Vollbild'));
+        $('use', b)?.setAttribute('href', on ? '#i-shrink' : '#i-expand');
+      }
+    },
+  };
+  for (const b of $$('[data-fs]')) b.onclick = () => FS.toggle();
+  document.addEventListener('fullscreenchange', () => FS.sync());
+  document.addEventListener('webkitfullscreenchange', () => FS.sync());
+  FS.sync();
+
   const Theme = {
     mq: matchMedia('(prefers-color-scheme: light)'),
     mode: (() => { try { const m = localStorage.getItem('schuhkarton-theme'); return m === 'light' || m === 'dark' || m === 'system' ? m : ''; } catch { return ''; } })() || 'system',
     label: { system: 'System', light: 'Hell', dark: 'Dunkel' },
     apply() {
-      const t = this.mode === 'system' ? (this.mq.matches ? 'light' : 'dark') : this.mode;
-      const changed = document.documentElement.dataset.theme !== t;
-      document.documentElement.dataset.theme = t;
-      $('#themeColor')?.setAttribute('content', t === 'light' ? '#f5f4f1' : '#0c0d0f');
-      $('#theme').innerHTML = icon(this.mode === 'system' ? 'monitor' : this.mode === 'light' ? 'sun' : 'moon') + `<span class="lbl">${this.label[this.mode]}</span>`;
-      $('#theme').title = `Design: ${this.label[this.mode]} (wechseln)`;
+      const th = this.mode === 'system' ? (this.mq.matches ? 'light' : 'dark') : this.mode;
+      const changed = document.documentElement.dataset.theme !== th;
+      const lbl = t(this.label[this.mode]);
+      document.documentElement.dataset.theme = th;
+      $('#themeColor')?.setAttribute('content', th === 'light' ? '#f5f4f1' : '#0c0d0f');
+      $('#theme').innerHTML = icon(this.mode === 'system' ? 'monitor' : this.mode === 'light' ? 'sun' : 'moon') + `<span class="lbl">${lbl}</span>`;
+      $('#theme').title = t('Design: {x} (wechseln)', { x: lbl });
       return changed;
     },
     cycle() {
       this.mode = { system: 'light', light: 'dark', dark: 'system' }[this.mode];
       try { localStorage.setItem('schuhkarton-theme', this.mode); } catch { /* ignore */ }
       this.apply();
-      toast(`Design: ${this.label[this.mode]}`);
+      toast(t('Design: {x}', { x: t(this.label[this.mode]) }));
     },
   };
   Theme.apply();
   Theme.mq.addEventListener('change', () => { if (Theme.mode === 'system') Theme.apply(); });
   $('#theme').onclick = () => Theme.cycle();
-  $('#rescan').onclick = async () => { await post('/api/rescan', {}); toast('Ordner werden neu eingelesen'); pollStatus(); };
+  $('#rescan').onclick = async () => { await post('/api/rescan', {}); toast(t('Ordner werden neu eingelesen')); pollStatus(); };
   $('#menu').onclick = () => $('#side').classList.toggle('open');
   $('#slideBtn').onclick = () => {
     const list = (S.gallery?.items || S.items).filter((it) => it.k === 1);
     if (!list.length) return;
+    if (FS.ok && !FS.on) { FS.enter(); FS.auto = true; }
     Viewer.open(list, 0);
     Viewer.startSlides();
   };
   document.addEventListener('click', (e) => {
-    if ($('#side').classList.contains('open') && !e.target.closest('#side') && !e.target.closest('#menu')) $('#side').classList.remove('open');
+    if ($('#side').classList.contains('open') && !e.target.closest('#side') && !e.target.closest('#menu') && !e.target.closest('.pop')) $('#side').classList.remove('open');
   });
+
+  // ---------------------------------------------------------------------------
+  // account: anonymous viewers look, accounts personalise, admins manage
+  // ---------------------------------------------------------------------------
+  const Account = {
+    me: { role: 'anon' },
+    async load() {
+      this.me = await api('/api/me').catch(() => ({ role: 'anon' }));
+      const r = this.me.role || 'anon';
+      document.body.dataset.role = r;
+      S.me = this.me;
+      this.render();
+    },
+    can(what) {
+      const r = this.me.role;
+      if (what === 'admin') return r === 'admin';
+      if (what === 'user') return r === 'admin' || r === 'user';
+      return true;
+    },
+    // need returns true when allowed; otherwise it explains and offers the login
+    need(what) {
+      if (this.can(what)) return true;
+      toast(this.me.role === 'pending' ? t('Dein Konto wartet noch auf Freigabe') : what === 'admin' ? t('Nur für Admins') : t('Dafür bitte anmelden'));
+      return false;
+    },
+    passwordDialog() {
+      $('#pop')?.remove();
+      const pop = document.createElement('div');
+      pop.className = 'pop pw-pop';
+      pop.id = 'pop';
+      pop.innerHTML = `<b>${t('Passwort ändern')}</b>
+        <form onsubmit="return false"><input type="text" autocomplete="username" value="${esc(this.me.name)}" hidden>
+        <input type="password" id="pwOld" autocomplete="current-password" placeholder="${t('Bisheriges Passwort')}">
+        <input type="password" id="pwNew" autocomplete="new-password" placeholder="${t('Neues Passwort (mind. 8 Zeichen)')}">
+        <div class="row"><button class="primary" data-a="save">${t('Speichern')}</button><button data-a="cancel">${t('Abbrechen')}</button></div></form>`;
+      document.body.appendChild(pop);
+      const r = $('#account').getBoundingClientRect();
+      pop.style.left = `${clamp(r.left, 8, innerWidth - 270)}px`;
+      pop.style.top = `${clamp(r.top - 190, 8, innerHeight - 200)}px`;
+      $('#pwOld', pop).focus();
+      pop.onclick = async (e) => {
+        const a = e.target.closest('[data-a]')?.dataset.a;
+        if (a === 'cancel') pop.remove();
+        if (a !== 'save') return;
+        const res = await post('/api/me/password', { old: $('#pwOld', pop).value, new: $('#pwNew', pop).value }).catch((err) => ({ ok: false, error: err.message }));
+        if (!res.ok) { toast(t(res.error || '')); return; }
+        pop.remove();
+        toast(t('Passwort geändert'));
+      };
+    },
+    loginURL() { return `/login?next=${encodeURIComponent(location.pathname + location.hash)}`; },
+    render() {
+      const el = $('#account');
+      if (!el) return;
+      const m = this.me;
+      if (m.role === 'anon') {
+        el.innerHTML = `<a class="acc-login" href="${esc(this.loginURL())}">${icon('user')}<span>${t('Anmelden')}</span></a>`;
+        return;
+      }
+      const role = t({ admin: 'Admin', user: 'Konto', pending: 'wartet auf Freigabe' }[m.role] || '');
+      el.innerHTML = `<div class="acc-me">${icon('user')}<span><b>${esc(m.name)}</b><small>${esc(role)}</small></span>
+        <button class="btn ghost icon" id="mypw" title="${t('Passwort ändern')}">${icon('key')}</button>
+        <button class="btn ghost icon" id="logout" title="${t('Abmelden')}">${icon('logout')}</button></div>
+        ${m.pendingUsers ? `<a class="acc-pending" href="/setup#benutzer" data-n="${m.pendingUsers}">${pl(m.pendingUsers, '{n} Konto wartet auf Freigabe', '{n} Konten warten auf Freigabe')}</a>` : ''}`;
+      $('#logout').onclick = async () => { await post('/api/auth/logout', {}).catch(() => {}); location.reload(); };
+      $('#mypw').onclick = () => this.passwordDialog();
+    },
+  };
+
+  // internals for admin.js (admin tools) — not a public API
+  window.SK = {
+    t, LANG, S, VIEWS, Viewer, Gallery, Account, api, post, toast, esc, icon, $, $$, num, plural, pl, clamp, debounce,
+    fmtLong, fmtTime, fmtMonth, thumbURL, largeURL, tileLayer, galleryView,
+    route: () => route, render, rerender, loadItems, loadPeople, scheduleReload, selectionChanged, endSelection, updateCounts,
+  };
 
   // ---------------------------------------------------------------------------
   // start
   // ---------------------------------------------------------------------------
+  window.skTranslate?.();
+  $('#langBtn').innerHTML = `${icon('globe')}<span class="lbl">${LANG.toUpperCase()}</span>`;
+  $('#langBtn').title = LANG === 'de' ? 'Sprache: Deutsch – switch to English' : 'Language: English – auf Deutsch wechseln';
+  $('#langBtn').onclick = () => window.skSetLang?.(LANG === 'de' ? 'en' : 'de');
+
   (async () => {
     S.config = await api('/api/config').catch(() => ({}));
     if (S.config.title) {
@@ -1664,7 +2037,8 @@
       Theme.mode = S.config.theme;
       Theme.apply();
     }
-    try { await loadItems(); } catch (e) { $('#view').innerHTML = `<div class="empty"><h2>Server nicht erreichbar</h2><p>${esc(e.message)}</p></div>`; }
+    await Account.load();
+    try { await loadItems(); } catch (e) { $('#view').innerHTML = `<div class="empty"><h2>${t('Server nicht erreichbar')}</h2><p>${esc(e.message)}</p></div>`; }
     loadPeople().catch(() => {});
     onRoute();
     pollStatus();

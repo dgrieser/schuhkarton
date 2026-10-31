@@ -121,10 +121,29 @@ func TestDateWords(t *testing.T) {
 	if s, _ := matchTerm(d, "", it, parseQuery("tag:werktag")[0]); s != 0 {
 		t.Error("werktag must not match a Saturday")
 	}
+	// English syntax and words
+	for _, q := range []string{"day:weekend", "season:summer", "time:evening", "weekday:saturday", "month:july"} {
+		terms := parseQuery(q)
+		if s, _ := matchTerm(d, "", it, terms[0]); s == 0 {
+			t.Errorf("%s does not match", q)
+		}
+	}
+	if s, _ := matchTerm(d, "", it, parseQuery("day:workday")[0]); s != 0 {
+		t.Error("workday must not match a Saturday")
+	}
+}
+
+func TestLocalizeQuery(t *testing.T) {
+	if got := localizeQuery(`ort:"Porta Westfalica"`, "en"); got != `place:"Porta Westfalica"` {
+		t.Errorf("en: %q", got)
+	}
+	if got := localizeQuery("ort:Lübbecke", "de"); got != "ort:Lübbecke" {
+		t.Errorf("de: %q", got)
+	}
 }
 
 func TestSearchOrWithinField(t *testing.T) {
-	l := &Library{opt: Options{Roots: []Root{{Name: "B", Path: "/x"}}}, byID: map[string]*Item{}, favs: map[string]bool{}}
+	l := &Library{opt: Options{Roots: []Root{{Name: "B", Path: "/x"}}}, byID: map[string]*Item{}, favs: map[string]map[string]bool{}}
 	l.people = newPeopleStore("", 0.48, 0.42)
 	mk := func(id, rel string, y int) *Item {
 		it := &Item{ID: id, Rel: rel, Kind: Photo, MetaTaken: time.Date(y, 6, 1, 10, 0, 0, 0, time.UTC).Unix()}
@@ -134,7 +153,7 @@ func TestSearchOrWithinField(t *testing.T) {
 	l.setItems([]*Item{mk("a", "2018/06 Juni Lübbecke/a.jpg", 2018), mk("b", "2019/06 Juni Dresden/b.jpg", 2019), mk("c", "2019/06 Juni Lübbecke/c.jpg", 2019)})
 	ids := func(q string) string {
 		var out []string
-		for _, h := range l.Search(q) {
+		for _, h := range l.Search(q, "") {
 			out = append(out, h.ID)
 		}
 		sort.Strings(out)

@@ -42,7 +42,7 @@ func (l *Library) Scan(ctx context.Context) error {
 				return ctx.Err()
 			}
 			name := d.Name()
-			if p != root.Path && l.excluded(name) {
+			if p != root.Path && (l.excluded(name) || name == TrashDir) {
 				if d.IsDir() {
 					return fs.SkipDir
 				}
@@ -104,6 +104,7 @@ func (l *Library) Scan(ctx context.Context) error {
 	l.recluster()
 	l.phase.Store("bereit")
 	l.media.kick()
+	l.PurgeTrash()
 	return nil
 }
 
@@ -184,6 +185,9 @@ func (l *Library) finishItem(it *Item) {
 	}
 	it.Place, it.Category = "", ""
 	folderYear, folderMonth := 0, 0
+	if l.opt.IgnoreFolders {
+		parts = nil // no heuristics from folder names
+	}
 	// <Jahr>/<MM Monat Ort>  or  <Sammlung>/<Jahr>/<MM Monat Kategorie>
 	for i := 0; i+1 < len(parts); i++ {
 		if !reYear.MatchString(parts[i]) {
@@ -209,7 +213,7 @@ func (l *Library) finishItem(it *Item) {
 		}
 		break
 	}
-	if folderYear == 0 {
+	if folderYear == 0 && len(parts) > 1 {
 		for _, p := range parts[1:] {
 			if reYear.MatchString(p) {
 				folderYear = atoi(p)
@@ -272,6 +276,15 @@ func (l *Library) finishItem(it *Item) {
 	if junkDescRe.MatchString(it.Desc) {
 		it.Desc = ""
 	}
+	// metadata fills what the folders do not say
+	if it.Place == "" {
+		it.Place = it.MetaPlace
+	}
+	if it.Category == "" {
+		it.Category = it.MetaCategory
+	}
+	// edits by an admin win over everything
+	l.applyOverride(it)
 }
 
 func atoi(s string) int {

@@ -6,8 +6,9 @@
 // Layout of the backup folder:
 //
 //	originals/<folder name>/...   the photos and videos
-//	cache/...                     index.gob.gz, people.json, favorites.json, thumbs/, faces/
+//	cache/...                     index.gob.gz, people.json, favorites.json, edits.json, trash.json, thumbs/, faces/
 //	config/config.yaml            the settings (with tokens: keep the backup private)
+//	config/users.json             accounts (password hashes)
 //	schuhkarton-backup.json       the last run
 package backup
 
@@ -165,10 +166,14 @@ func (r *Runner) backup(ctx context.Context) error {
 		if _, err := os.Stat(r.opt.ConfigPath); err == nil {
 			r.copyIfChanged(r.opt.ConfigPath, filepath.Join(r.opt.Dir, "config", "config.yaml"))
 		}
+		// accounts (password hashes) live next to the settings
+		if users := filepath.Join(filepath.Dir(r.opt.ConfigPath), "users.json"); fileExists(users) {
+			r.copyIfChanged(users, filepath.Join(r.opt.Dir, "config", "users.json"))
+		}
 	}
 	if r.opt.Cache && r.opt.CacheDir != "" {
 		r.set(func(s *Status) { s.Phase = "Cache" })
-		for _, f := range []string{"index.gob.gz", "people.json", "favorites.json"} {
+		for _, f := range []string{"index.gob.gz", "people.json", "favorites.json", "edits.json", "trash.json"} {
 			if _, err := os.Stat(filepath.Join(r.opt.CacheDir, f)); err == nil {
 				r.copyIfChanged(filepath.Join(r.opt.CacheDir, f), filepath.Join(r.opt.Dir, "cache", f))
 			}
@@ -288,4 +293,9 @@ func copyFile(src, dst string, si os.FileInfo) error {
 func Inside(path, dir string) bool {
 	rel, err := filepath.Rel(dir, path)
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
+}
+
+func fileExists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
 }

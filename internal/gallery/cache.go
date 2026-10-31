@@ -102,7 +102,7 @@ func ImportCache(src, dst string, progress func(done, total int)) error {
 			return nil
 		})
 	}
-	for _, f := range []string{"index.gob.gz", "people.json", "favorites.json"} {
+	for _, f := range []string{"index.gob.gz", "people.json", "favorites.json", "edits.json", "trash.json"} {
 		if exists(filepath.Join(src, f)) && !exists(filepath.Join(dst, f)) {
 			files = append(files, filepath.Join(src, f))
 		}

@@ -92,7 +92,7 @@ var exifTags = []string{
 	"-ImageWidth", "-ImageHeight", "-ExifImageWidth", "-ExifImageHeight", "-Orientation", "-Rotation",
 	"-Duration", "-CompressorID", "-VideoCodec",
 	"-XMP-dc:Description", "-ImageDescription", "-Caption-Abstract",
-	"-XMP-dc:Subject", "-Keywords",
+	"-XMP-dc:Subject", "-Keywords", "-XMP-photoshop:City", "-XMP-photoshop:Category",
 }
 
 // read returns the metadata per path.
@@ -237,6 +237,7 @@ func applyMeta(it *Item, m map[string]any) {
 			break
 		}
 	}
+	it.MetaPlace, it.MetaCategory = str(m, "City"), str(m, "Category")
 	seen := map[string]bool{}
 	it.Keywords = nil
 	for _, k := range []string{"Subject", "Keywords"} {
