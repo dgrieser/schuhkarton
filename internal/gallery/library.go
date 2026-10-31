@@ -4,6 +4,7 @@ package gallery
 
 import (
 	"compress/gzip"
+	"context"
 	"crypto/sha1"
 	"encoding/gob"
 	"encoding/hex"
@@ -17,8 +18,9 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
+
+	"github.com/dgrieser/schuhkarton/internal/helper"
 )
 
 // Kind distinguishes photos from videos.
@@ -42,11 +44,30 @@ type Options struct {
 	Exclude  []string // glob patterns matched against file and folder names
 	Workers  int
 
-	ExifTool  string // path to exiftool; empty disables metadata
-	Python    string // python with cv2, PIL, pillow_heif; empty disables helper
-	ModelsDir string // folder with the face models
-	Faces     bool   // detect and cluster faces
-	Previews  bool   // also pre-generate the large lightbox previews
+	ExifTool string // path to exiftool; empty: dates from names and folders only
+	FFmpeg   string // path to ffmpeg; empty: no video thumbnails
+
+	ThumbSize        int  // short edge of grid thumbnails
+	PreviewSize      int  // long edge of lightbox previews
+	Quality          int  // JPEG quality
+	Previews         bool // also pre-generate the large lightbox previews
+	VideoPreviews    bool // animated video previews
+	VideoPreviewSize int  // their short edge
+	Transcode        bool // H.264 for browsers that cannot play the original
+
+	Faces FaceOptions
+}
+
+// FaceOptions configure face detection.
+type FaceOptions struct {
+	Mode             string // "off", "local" (Python here) or "remote" (face container)
+	URL, Token       string // remote
+	Workers          int
+	MinScore         float64
+	ClusterThreshold float64
+	NamedThreshold   float64
+	Python           string // local
+	ModelsDir        string // local
 }
 
 // Face is one detected face. Box coordinates are relative (0..1) to the
@@ -119,8 +140,10 @@ type Status struct {
 	Faces    int64  `json:"faces"`
 	FaceTodo int64  `json:"faceTodo"`
 	People   int    `json:"people"`
+	FaceMode string `json:"faceMode"`
 	FaceOK   bool   `json:"faceDetection"`
 	FaceRec  bool   `json:"faceRecognition"`
+	FaceErr  string `json:"faceError,omitempty"`
 	Scanned  int64  `json:"scanned"`
 	Errors   int64  `json:"errors"`
 	Version  int64  `json:"version"`
@@ -148,12 +171,16 @@ type Library struct {
 	people *peopleStore
 	search searchIndex
 
-	helper *helperPool
-	media  *mediaGen
+	faces faceBackend  // nil when face detection is off
+	local *helper.Pool // Python helper for formats Go cannot decode (mode local)
+	media *mediaGen
 
 	saveMu sync.Mutex
 	dirty  atomic.Bool
 	lock   *os.File
+
+	stopBG context.CancelFunc
+	bg     sync.WaitGroup
 }
 
 const indexVersion = 3
@@ -169,28 +196,29 @@ func Open(opt Options) (*Library, error) {
 	if len(opt.Roots) == 0 {
 		return nil, errors.New("no folders to serve")
 	}
-	if opt.Workers < 1 {
-		opt.Workers = 1
-	}
+	opt = withDefaults(opt)
 	for _, d := range []string{"", "thumbs", "faces"} {
 		if err := os.MkdirAll(filepath.Join(opt.CacheDir, d), 0o755); err != nil {
 			return nil, err
 		}
 	}
 	// one process per cache: two would overwrite each other's index
-	lf, err := os.OpenFile(filepath.Join(opt.CacheDir, "lock"), os.O_CREATE|os.O_RDWR, 0o644)
+	lf, err := lockCache(filepath.Join(opt.CacheDir, "lock"))
 	if err != nil {
-		return nil, err
-	}
-	if err := syscall.Flock(int(lf.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		lf.Close()
 		return nil, fmt.Errorf("der Cache %s wird schon von einem anderen schuhkarton-Prozess benutzt", opt.CacheDir)
 	}
 	l := &Library{opt: opt, byID: map[string]*Item{}, favs: map[string]bool{}, lock: lf}
 	l.phase.Store("bereit")
-	l.helper = newHelperPool(opt)
+	switch opt.Faces.Mode {
+	case "local":
+		l.local = helper.New(helper.Options{Python: opt.Faces.Python, ScriptDir: opt.CacheDir,
+			Models: modelDirs(opt), Size: opt.Faces.Workers, MinScore: opt.Faces.MinScore})
+		l.faces = &localFaces{pool: l.local}
+	case "remote":
+		l.faces = newRemoteFaces(opt.Faces.URL, opt.Faces.Token)
+	}
 	l.media = newMediaGen(l)
-	l.people = newPeopleStore(filepath.Join(opt.CacheDir, "people.json"))
+	l.people = newPeopleStore(filepath.Join(opt.CacheDir, "people.json"), opt.Faces.ClusterThreshold, opt.Faces.NamedThreshold)
 	l.loadIndex()
 	l.loadFavs()
 	l.recluster()
@@ -199,9 +227,68 @@ func Open(opt Options) (*Library, error) {
 
 // Close stops helpers and writes pending state.
 func (l *Library) Close() {
+	if l.stopBG != nil {
+		l.stopBG()
+	}
+	done := make(chan struct{})
+	go func() { l.bg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		l.logf("background jobs still running, closing anyway")
+	}
 	l.saveIndex()
-	l.helper.close()
+	if l.local != nil {
+		l.local.Close()
+	}
 	l.lock.Close()
+}
+
+func withDefaults(o Options) Options {
+	o.Workers = max(1, o.Workers)
+	if o.ThumbSize <= 0 {
+		o.ThumbSize = 360
+	}
+	if o.PreviewSize <= 0 {
+		o.PreviewSize = 2048
+	}
+	if o.Quality <= 0 || o.Quality > 100 {
+		o.Quality = 82
+	}
+	if o.VideoPreviewSize <= 0 {
+		o.VideoPreviewSize = 240
+	}
+	if o.Faces.Mode == "" {
+		o.Faces.Mode = "off"
+	}
+	o.Faces.Workers = max(1, o.Faces.Workers)
+	if o.Faces.MinScore <= 0 {
+		o.Faces.MinScore = 0.86
+	}
+	if o.Faces.ClusterThreshold <= 0 {
+		o.Faces.ClusterThreshold = 0.48
+	}
+	if o.Faces.NamedThreshold <= 0 {
+		o.Faces.NamedThreshold = 0.42
+	}
+	return o
+}
+
+// modelDirs lists where the face models are looked up.
+func modelDirs(o Options) []string {
+	dirs := []string{o.Faces.ModelsDir, filepath.Join(o.CacheDir, "models")}
+	if home, err := os.UserHomeDir(); err == nil {
+		dirs = append(dirs, filepath.Join(home, ".cache/picture-organizer"))
+	}
+	return dirs
+}
+
+// FaceStatus reports the face backend.
+func (l *Library) FaceStatus() FaceInfo {
+	if l.faces == nil {
+		return FaceInfo{Mode: "off"}
+	}
+	return l.faces.probe()
 }
 
 func (l *Library) logf(format string, args ...any) { log.Printf(format, args...) }
@@ -251,10 +338,10 @@ func (l *Library) Status() Status {
 		FaceTodo: l.cnt.faceTodo.Load(),
 		Scanned:  l.cnt.scanned.Load(),
 		Errors:   l.cnt.errors.Load(),
-		FaceOK:   l.helper.facesAvailable(),
-		FaceRec:  l.helper.recognitionAvailable(),
 		Version:  l.Version(),
 	}
+	fs := l.FaceStatus()
+	s.FaceMode, s.FaceOK, s.FaceRec, s.FaceErr = fs.Mode, fs.Detection, fs.Recognition, fs.Error
 	for _, it := range l.Items() {
 		if it.Kind == Video {
 			if it.LivePhoto == "" {
@@ -438,7 +525,8 @@ var videoExt = map[string]bool{
 
 var rawExt = map[string]bool{".arw": true, ".cr2": true, ".cr3": true, ".nef": true, ".dng": true, ".orf": true, ".rw2": true, ".raf": true}
 
-func kindOf(name string) Kind {
+// KindOf tells photos from videos by the file extension (0: neither).
+func KindOf(name string) Kind {
 	ext := strings.ToLower(filepath.Ext(name))
 	switch {
 	case photoExt[ext]:

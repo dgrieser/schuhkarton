@@ -1,4 +1,4 @@
-"""schuhkarton helper: decodes images Go cannot read (HEIC, AVIF, ...) and finds faces.
+"""schuhkarton helper: finds faces (OpenCV YuNet + SFace) and decodes images with Pillow.
 
 Protocol: one JSON request per line on stdin, one JSON response per line on
 stdout. The first line written is a hello with the available features.
@@ -9,15 +9,25 @@ import json
 import os
 import sys
 
-from PIL import Image, ImageOps
-
+MISSING = []
+VERSIONS = {}
+HEIC = False
+try:
+    from PIL import Image, ImageOps
+    import PIL
+    VERSIONS['pillow'] = PIL.__version__
+except Exception:  # pragma: no cover - reported in the hello
+    MISSING.append('pillow')
 try:
     import pillow_heif
     pillow_heif.register_heif_opener()
+    HEIC = True
+    VERSIONS['pillow_heif'] = pillow_heif.__version__
 except Exception:  # pragma: no cover - optional
-    pass
+    MISSING.append('pillow_heif')
 
 cv2 = np = det = rec = None
+MIN_SCORE = 0.86
 
 
 def find_model(dirs, names):
@@ -32,9 +42,16 @@ def find_model(dirs, names):
 def load_models(dirs):
     global cv2, np, det, rec
     try:
-        import cv2 as _cv2
         import numpy as _np
+        VERSIONS['numpy'] = _np.__version__
     except Exception:
+        MISSING.append('numpy')
+        return
+    try:
+        import cv2 as _cv2
+        VERSIONS['opencv'] = _cv2.__version__
+    except Exception:
+        MISSING.append('opencv')
         return
     cv2, np = _cv2, _np
     cv2.setNumThreads(1)
@@ -42,8 +59,12 @@ def load_models(dirs):
     s = find_model(dirs, ['face_recognition_sface_2021dec.onnx', 'sface.onnx'])
     if y:
         det = cv2.FaceDetectorYN.create(y, '', (320, 320), 0.8, 0.3, 5000)
+    else:
+        MISSING.append('face_detection_yunet_2023mar.onnx')
     if s and det is not None:
         rec = cv2.FaceRecognizerSF.create(s, '')
+    elif not s:
+        MISSING.append('face_recognition_sface_2021dec.onnx')
 
 
 def open_image(path, longest):
@@ -101,7 +122,7 @@ def op_faces(req):
     minside = max(36, min(w, h) * 0.035)
     for i, row in enumerate(found):
         x, y, fw, fh, score = float(row[0]), float(row[1]), float(row[2]), float(row[3]), float(row[14])
-        if score < 0.86 or min(fw, fh) < minside:
+        if score < MIN_SCORE or min(fw, fh) < minside:
             continue
         face = {'x': max(0, x / w), 'y': max(0, y / h), 'w': fw / w, 'h': fh / h, 'score': score}
         if rec is not None:
@@ -122,10 +143,15 @@ def op_faces(req):
 
 
 def main():
-    dirs = [d for d in sys.argv[1:] if d]
-    load_models(dirs)
+    global MIN_SCORE
+    args = sys.argv[1:]
+    if len(args) >= 2 and args[0] == '--min-score':
+        MIN_SCORE = float(args[1])
+        args = args[2:]
+    load_models([d for d in args if d])
     out = sys.stdout
-    out.write(json.dumps({'hello': True, 'faces': det is not None, 'recognition': rec is not None}) + '\n')
+    out.write(json.dumps({'hello': True, 'detection': det is not None, 'recognition': rec is not None,
+                          'heic': HEIC, 'missing': MISSING, 'versions': VERSIONS}) + '\n')
     out.flush()
     for line in sys.stdin:
         try:

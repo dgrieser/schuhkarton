@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Check
+        run: make check
+
+  cross:
+    name: Cross-build
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target: [linux/amd64, linux/arm64, linux/arm/7, darwin/amd64, darwin/arm64, windows/amd64, windows/arm64]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build ${{ matrix.target }}
+        run: |
+          IFS=/ read -r os arch arm <<< "$TARGET"
+          GOOS=$os GOARCH=$arch GOARM=$arm CGO_ENABLED=0 go build -o /dev/null ./cmd/schuhkarton
+        env:
+          TARGET: ${{ matrix.target }}

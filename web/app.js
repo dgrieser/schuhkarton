@@ -53,6 +53,7 @@
     items: [], byId: new Map(), version: -1, loadedAt: 0,
     people: [], peopleById: new Map(), peopleInfo: {},
     status: null,
+    config: {},
     layout: store.get('layout', 'rows'),
     size: 220,
     group: store.get('group', 'month'),
@@ -86,6 +87,7 @@
   async function loadPeople() {
     const res = await api('/api/people');
     S.people = res.people || [];
+    S.faceMode = S.config.faces;
     S.peopleById = new Map(S.people.map((p) => [p.id, p]));
     S.peopleInfo = res;
     updateCounts();
@@ -990,7 +992,7 @@
     }
     if (typing) return;
     if (e.key === '/') { e.preventDefault(); $('#q').focus(); $('#q').select(); }
-    if (e.key === 'Escape') { if (S.sel.size || S.selecting) endSelection(); $('#side').classList.remove('open'); }
+    if (e.key === 'Escape') { if (Filter.open_) Filter.close(); if (S.sel.size || S.selecting) endSelection(); $('#side').classList.remove('open'); }
   });
 
   // ---------------------------------------------------------------------------
@@ -1108,6 +1110,123 @@
     scrollTo({ top: y });
   }
   const scheduleRerender = debounce(() => { if (!Viewer.open_) rerender(); }, 400);
+
+  // ---------------------------------------------------------------------------
+  // filters: clickable for everyone, typed syntax for power users
+  // ---------------------------------------------------------------------------
+  const FKEYS = { person: 'Person', wer: 'Person', ort: 'Ort', jahr: 'Jahr', monat: 'Monat', jahreszeit: 'Jahreszeit', wochentag: 'Wochentag', tag: 'Tag',
+    tageszeit: 'Tageszeit', typ: 'Art', kamera: 'Kamera', kategorie: 'Kategorie', album: 'Ordner', ordner: 'Ordner', text: 'Text im Bild', datum: 'Datum', datei: 'Datei' };
+  const KIND_LABEL = { foto: 'Fotos', video: 'Videos', live: 'Live Photos', selfie: 'Selfies', screenshot: 'Screenshots', panorama: 'Panoramen', text: 'Mit Text im Bild', gps: 'Mit Ortsangabe', favorit: 'Favoriten' };
+  const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+
+  function tokenizeQ(q) {
+    const out = [];
+    let cur = '', inQ = false;
+    for (const ch of q) {
+      if (ch === '"') inQ = !inQ;
+      else if (/\s/.test(ch) && !inQ) { if (cur) { out.push(cur); cur = ''; } }
+      else cur += ch;
+    }
+    if (cur) out.push(cur);
+    return out;
+  }
+  function parseQ(q) {
+    const filters = [], words = [];
+    for (let tok of tokenizeQ(q || '')) {
+      let neg = false;
+      if (tok.startsWith('-') && tok.length > 1) { neg = true; tok = tok.slice(1); }
+      const i = tok.indexOf(':');
+      const key = i > 0 ? tok.slice(0, i).toLowerCase() : '';
+      if (key && FKEYS[key] && tok.slice(i + 1)) filters.push({ key: key === 'wer' ? 'person' : key === 'ordner' ? 'album' : key, val: tok.slice(i + 1), neg });
+      else words.push((neg ? '-' : '') + tok);
+    }
+    return { filters, words };
+  }
+  const quote = (v) => (/\s/.test(v) ? `"${v}"` : v);
+  function buildQ({ filters, words }) {
+    return [...words, ...filters.map((f) => `${f.neg ? '-' : ''}${f.key}:${quote(f.val)}`)].join(' ').trim();
+  }
+  function filterLabel(f) {
+    if (f.key === 'typ') return KIND_LABEL[f.val.toLowerCase()] || cap(f.val);
+    if (f.key === 'tag') return cap(f.val);
+    if (f.key === 'person') return f.val;
+    if (['ort', 'kamera', 'kategorie'].includes(f.key)) return f.val;
+    if (['monat', 'jahreszeit', 'wochentag', 'tageszeit'].includes(f.key)) return cap(f.val);
+    return `${FKEYS[f.key]}: ${f.val}`;
+  }
+  function runQuery(q) {
+    const target = q ? `#/suche/${encodeURIComponent(q)}` : '#/fotos';
+    if (route.view === 'suche') history.replaceState(null, '', target), onRoute();
+    else location.hash = target;
+  }
+
+  const Filter = {
+    el: $('#fpanel'), facets: null, open_: false, n: null, placeQ: '',
+    async open() {
+      this.open_ = true;
+      this.el.hidden = false;
+      if (!this.facets) this.facets = await api('/api/facets').catch(() => ({}));
+      if (!S.people.length) await loadPeople().catch(() => {});
+      this.draw();
+    },
+    close() { this.open_ = false; this.el.hidden = true; },
+    count(n) { this.n = n; const c = $('.count', this.el); if (c) c.textContent = `${num(n)} Treffer`; },
+    current() { return route.view === 'suche' ? parseQ(route.arg) : { filters: [], words: [] }; },
+    has(p, key, val) { return p.filters.some((f) => f.key === key && f.val.toLowerCase() === val.toLowerCase() && !f.neg); },
+    toggle(key, val) {
+      const p = this.current();
+      const i = p.filters.findIndex((f) => f.key === key && f.val.toLowerCase() === val.toLowerCase());
+      if (i >= 0) p.filters.splice(i, 1);
+      else p.filters.push({ key, val, neg: false });
+      runQuery(buildQ(p));
+      setTimeout(() => this.draw(), 0);
+    },
+    sections() {
+      const f = this.facets || {};
+      const named = S.people.filter((p) => p.name);
+      const DAYS_ORDER = ['Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag', 'Sonntag'];
+      return [
+        named.length && { title: 'Personen', items: named.map((p) => ({ key: 'person', val: p.name, label: p.name, img: faceURL(p.cover.item, p.cover.idx), n: p.count })) },
+        f.places?.length && { title: 'Orte', search: true, items: f.places.map((x) => ({ key: 'ort', val: x.label, label: x.label, n: x.count })) },
+        f.years?.length && { title: 'Jahr', items: f.years.map((x) => ({ key: 'jahr', val: x.label, label: x.label, n: x.count })) },
+        { title: 'Monat', items: MONTHS.map((m) => ({ key: 'monat', val: m.toLowerCase(), label: m })) },
+        { title: 'Jahreszeit', items: ['Frühling', 'Sommer', 'Herbst', 'Winter'].map((x) => ({ key: 'jahreszeit', val: x.toLowerCase(), label: x })) },
+        { title: 'Wochentag', items: [...DAYS_ORDER.map((d) => ({ key: 'wochentag', val: d.toLowerCase(), label: d })), { key: 'tag', val: 'wochenende', label: 'Wochenende' }, { key: 'tag', val: 'werktag', label: 'Werktag' }] },
+        { title: 'Tageszeit', items: ['Morgens', 'Mittags', 'Nachmittags', 'Abends', 'Nachts'].map((x) => ({ key: 'tageszeit', val: x.toLowerCase(), label: x })) },
+        { title: 'Art', items: Object.entries(KIND_LABEL).map(([v, l]) => ({ key: 'typ', val: v, label: l })) },
+        f.cameras?.length && { title: 'Kamera', items: f.cameras.map((x) => ({ key: 'kamera', val: x.label, label: x.label, n: x.count })) },
+        f.categories?.length && { title: 'Kategorie', items: f.categories.map((x) => ({ key: 'kategorie', val: x.label, label: x.label, n: x.count })) },
+      ].filter(Boolean);
+    },
+    draw() {
+      if (!this.open_) return;
+      const p = this.current();
+      const chip = (it) => `<button class="chip ${this.has(p, it.key, it.val) ? 'on' : ''}" data-k="${esc(it.key)}" data-v="${esc(it.val)}"
+        ${it.n ? `title="${num(it.n)}"` : ''}>${it.img ? `<img src="${it.img}" alt="">` : ''}${esc(it.label)}</button>`;
+      const pq = this.placeQ.toLowerCase();
+      this.el.innerHTML = `<header><b>Filter</b><span class="count">${this.n !== null && route.view === 'suche' ? `${num(this.n)} Treffer` : ''}</span>
+        <span style="flex:1"></span>${p.filters.length ? '<button class="btn ghost" data-reset>Zurücksetzen</button>' : ''}
+        <button class="btn ghost icon" data-close title="Schließen">${icon('x')}</button></header>
+        ${this.sections().map((sec) => {
+          let items = sec.items;
+          if (sec.search && pq) items = items.filter((x) => x.label.toLowerCase().includes(pq));
+          const showAll = sec.search ? (pq ? 60 : 18) : 200;
+          return `<h4>${sec.title}</h4>${sec.search ? `<input class="filt" data-ps placeholder="Ort suchen …" value="${esc(this.placeQ)}">` : ''}
+            <div class="chips">${items.slice(0, showAll).map(chip).join('')}</div>`;
+        }).join('')}
+        <p class="hint">Mehrere Werte einer Art bedeuten „oder“, verschiedene Arten „und“. Tippen geht auch:
+          <code>sommer 2019 lübbecke</code>, <code>ort:Dresden</code>, <code>person:Anna</code>, <code>tag:wochenende</code>, <code>typ:video</code>, <code>-typ:screenshot</code>.</p>`;
+      for (const b of $$('[data-k]', this.el)) b.onclick = () => this.toggle(b.dataset.k, b.dataset.v);
+      $('[data-close]', this.el).onclick = () => this.close();
+      $('[data-reset]', this.el)?.addEventListener('click', () => { const q = this.current(); q.filters = []; runQuery(buildQ(q)); setTimeout(() => this.draw(), 0); });
+      const ps = $('[data-ps]', this.el);
+      if (ps) ps.oninput = () => { this.placeQ = ps.value; const pos = ps.selectionStart; this.draw(); const n = $('[data-ps]', this.el); n.focus(); n.setSelectionRange(pos, pos); };
+    },
+  };
+  $('#filterBtn').onclick = (e) => { e.preventDefault(); e.stopPropagation(); Filter.open_ ? Filter.close() : Filter.open(); };
+  document.addEventListener('pointerdown', (e) => {
+    if (Filter.open_ && !e.target.closest('#fpanel') && !e.target.closest('#filterBtn') && !e.target.closest('[data-addf]')) Filter.close();
+  });
 
   // shared toolbar for gallery views
   function galleryTools(opts = {}) {
@@ -1238,21 +1357,32 @@
           items.push(it);
           if (h.snip) snips.set(h.id, h.snip);
         }
+        Filter.count(items.length);
         const sort = store.get('searchSort', 'rel');
         if (sort === 'date') items.sort((a, b) => b.t - a.t);
-        const people = S.people.filter((p) => p.name && p.name.toLowerCase().includes(q.toLowerCase())).slice(0, 6);
-        const places = [...new Set(items.map((it) => it.p).filter((p) => p && p.toLowerCase().includes(q.toLowerCase())))].slice(0, 6);
-        const chips = [...people.map((p) => `<a class="chip" href="#/person/${encodeURIComponent(p.id)}"><img src="${faceURL(p.cover.item, p.cover.idx)}" alt="">${esc(p.name)}</a>`),
+        const parsed = parseQ(q);
+        const text = parsed.words.join(' ').toLowerCase();
+        const people = text ? S.people.filter((p) => p.name && p.name.toLowerCase().includes(text)).slice(0, 6) : [];
+        const places = text ? [...new Set(items.map((it) => it.p).filter((p) => p && p.toLowerCase().includes(text)))].slice(0, 6) : [];
+        const jump = [...people.map((p) => `<a class="chip" href="#/person/${encodeURIComponent(p.id)}"><img src="${faceURL(p.cover.item, p.cover.idx)}" alt="">${esc(p.name)}</a>`),
           ...places.map((p) => `<a class="chip" href="#/ort/${encodeURIComponent(p)}">${icon('pin')}${esc(p)}</a>`)].join('');
+        const active = parsed.filters.map((f, i) => `<button class="chip" data-rmf="${i}" title="Filter entfernen">${f.neg ? 'ohne ' : ''}${esc(filterLabel(f))}${icon('x')}</button>`)
+          .concat(parsed.words.length ? [`<button class="chip" data-rmw title="Suchwörter entfernen">„${esc(parsed.words.join(' '))}“${icon('x')}</button>`] : []).join('');
         galleryView(view, {
-          title: 'Suche', sub: `${plural(items.length, 'Treffer', 'Treffer')} für „${esc(q)}“${snips.size ? ` · ${num(snips.size)} mit Text im Bild` : ''}`,
+          title: 'Suche', sub: `${plural(items.length, 'Treffer', 'Treffer')}${snips.size ? ` · ${num(snips.size)} mit Text im Bild` : ''} · ${res.ms ?? 0} ms`,
           items, group: sort === 'date' ? S.group : 'none', snips, scrub: sort === 'date',
-          before: chips ? `<div class="chips" style="margin-bottom:14px">${chips}</div>` : '',
-          emptyText: 'Andere Schreibweise oder weniger Wörter probieren.', tools: { group: false },
+          before: `<div class="active-filters">${active}<button class="chip" data-addf>${icon('sliders')}Filter${parsed.filters.length ? ' ändern' : ' hinzufügen'}</button>
+            ${parsed.filters.length + parsed.words.length > 1 ? '<button class="chip" data-clear>Alle entfernen</button>' : ''}</div>
+            ${jump ? `<div class="chips" style="margin-bottom:14px">${jump}</div>` : ''}`,
+          emptyText: 'Andere Schreibweise, weniger Wörter oder weniger Filter probieren.', tools: { group: false },
         });
         const tools = $('.head .tools', view);
         tools.insertAdjacentHTML('afterbegin', `<div class="seg"><button data-sort="rel" class="${sort === 'rel' ? 'on' : ''}">Relevanz</button><button data-sort="date" class="${sort === 'date' ? 'on' : ''}">Datum</button></div>`);
         for (const b of $$('[data-sort]', tools)) b.onclick = () => { store.set('searchSort', b.dataset.sort); rerender(); };
+        for (const b of $$('[data-rmf]', view)) b.onclick = () => { parsed.filters.splice(+b.dataset.rmf, 1); runQuery(buildQ(parsed)); };
+        $('[data-rmw]', view)?.addEventListener('click', () => { parsed.words = []; runQuery(buildQ(parsed)); });
+        $('[data-clear]', view)?.addEventListener('click', () => runQuery(''));
+        $('[data-addf]', view).onclick = () => Filter.open();
         if (route.item) onRoute();
       }).catch((e) => { view.innerHTML = `<div class="empty"><h2>Suche fehlgeschlagen</h2><p>${esc(e.message)}</p></div>`; });
     },
@@ -1304,8 +1434,9 @@
       const info = S.peopleInfo;
       const named = S.people.filter((p) => p.name), unnamed = S.people.filter((p) => !p.name);
       let banner = '';
-      if (!info.detection) banner = `<div class="banner">${icon('info')}<div>Gesichtserkennung ist nicht verfügbar. Dafür braucht der Server Python mit OpenCV und das YuNet-Modell.</div></div>`;
-      else if (!info.recognition) banner = `<div class="banner">${icon('info')}<div>${num(info.faces)} Fotos auf Gesichter geprüft. Zum <b>Gruppieren nach Personen</b> fehlt das Modell <code>face_recognition_sface_2021dec.onnx</code> im Ordner <code>~/.cache/schuhkarton/models</code>.</div></div>`;
+      if (S.config.faces === 'off') banner = `<div class="banner">${icon('info')}<div>Gesichtserkennung ist ausgeschaltet. Sie läuft in einem eigenen Container; einschalten unter <a class="link" href="/setup">Einstellungen → Gesichter</a>.</div></div>`;
+      else if (!info.detection) banner = `<div class="banner">${icon('info')}<div>Die Gesichtserkennung antwortet nicht${info.error ? `: ${esc(info.error)}` : ''}. Läuft der Container? <a class="link" href="/setup">Einstellungen</a></div></div>`;
+      else if (!info.recognition) banner = `<div class="banner">${icon('info')}<div>${num(info.faces)} Fotos auf Gesichter geprüft. Zum <b>Gruppieren nach Personen</b> fehlt der Gesichtserkennung das Modell <code>face_recognition_sface_2021dec.onnx</code>.</div></div>`;
       else if (info.faceTodo > info.faces) banner = `<div class="banner">${icon('info')}<div>Gesichter werden noch gesucht (${num(info.faces)} von ${num(info.faceTodo)}). Die Gruppen werden laufend besser.</div></div>`;
       const card = (p) => `<a class="person" href="#/person/${encodeURIComponent(p.id)}"><span class="face"><img src="${faceURL(p.cover.item, p.cover.idx)}" alt="" loading="lazy"></span>
         <b class="${p.name ? '' : 'unnamed'}">${esc(p.name || 'Name hinzufügen')}</b><span>${plural(p.count, 'Foto', 'Fotos')}</span></a>`;
@@ -1442,8 +1573,8 @@
   };
 
   function tileLayer() {
-    // OpenStreetMap tiles; dark mode inverts them in CSS (no API key needed)
-    return L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' });
+    // OpenStreetMap tiles (or the configured ones); dark mode inverts them in CSS
+    return L.tileLayer(S.config.mapTiles || 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: S.config.mapAttribution || '© OpenStreetMap' });
   }
 
   // ---------------------------------------------------------------------------
@@ -1455,7 +1586,8 @@
     clearTimeout(statusT);
     let busy = false;
     try {
-      const { status: s, scanning } = await api('/api/status');
+      const res = await api('/api/status');
+      const { status: s, scanning } = res;
       S.status = s;
       const rows = [];
       const bar = (label, a, b) => { if (b > 0 && a < b) { busy = true; rows.push(`<div class="row"><span>${label} ${num(a)} / ${num(b)}</span><span class="bar"><i style="width:${(a / b) * 100}%"></i></span></div>`); } };
@@ -1468,6 +1600,8 @@
       bar('Vorschaubilder', s.thumbs + s.posters, s.photos + s.videos + liveVideos);
       bar('Video-Vorschauen', s.previews, s.videos + liveVideos);
       if (s.faceDetection && s.faceTodo) bar('Gesichter', s.faces, s.faceTodo);
+      const bk = res.backup;
+      if (bk?.running) { busy = true; rows.push(`<div class="row"><span>Sicherung: ${esc(bk.phase || '')} · ${num(bk.copied)} kopiert</span></div>`); }
       if (!rows.length) rows.push(`<div class="row"><span>${num(s.photos)} Fotos · ${num(s.videos)} Videos${s.people ? ` · ${num(s.people)} Personen` : ''}</span></div>`);
       $('#status').innerHTML = rows.join('');
       if (s.version !== S.version) {
@@ -1484,7 +1618,7 @@
 
   const Theme = {
     mq: matchMedia('(prefers-color-scheme: light)'),
-    mode: (() => { try { const m = localStorage.getItem('schuhkarton-theme'); return m === 'light' || m === 'dark' ? m : 'system'; } catch { return 'system'; } })(),
+    mode: (() => { try { const m = localStorage.getItem('schuhkarton-theme'); return m === 'light' || m === 'dark' || m === 'system' ? m : ''; } catch { return ''; } })() || 'system',
     label: { system: 'System', light: 'Hell', dark: 'Dunkel' },
     apply() {
       const t = this.mode === 'system' ? (this.mq.matches ? 'light' : 'dark') : this.mode;
@@ -1521,6 +1655,15 @@
   // start
   // ---------------------------------------------------------------------------
   (async () => {
+    S.config = await api('/api/config').catch(() => ({}));
+    if (S.config.title) {
+      document.title = S.config.title;
+      $('.brand span').textContent = S.config.title;
+    }
+    if (S.config.theme && (() => { try { return !localStorage.getItem('schuhkarton-theme'); } catch { return true; } })()) {
+      Theme.mode = S.config.theme;
+      Theme.apply();
+    }
     try { await loadItems(); } catch (e) { $('#view').innerHTML = `<div class="empty"><h2>Server nicht erreichbar</h2><p>${esc(e.message)}</p></div>`; }
     loadPeople().catch(() => {});
     onRoute();

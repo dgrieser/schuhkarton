@@ -1,0 +1,12 @@
+# Example: the face detection container next to a NAS or any Docker host.
+# The gallery (the schuhkarton binary) runs wherever the photos are and is set
+# to faces.mode: remote, faces.url: http://<this host>:8089 in its settings.
+services:
+  faces:
+    image: ghcr.io/dgrieser/schuhkarton-faces:latest
+    restart: unless-stopped
+    ports:
+      - "8089:8089"
+    environment:
+      SCHUHKARTON_WORKER_TOKEN: ${SCHUHKARTON_WORKER_TOKEN:?set a token}
+      # SCHUHKARTON_WORKER_WORKERS: "4"

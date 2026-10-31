@@ -69,6 +69,24 @@ func germanVariants(tok string) []string {
 
 var spaces = regexp.MustCompile(`\s+`)
 
+// timeOfDay names the part of the day (only when the time is known).
+func timeOfDay(h int) string {
+	switch {
+	case h >= 5 && h < 11:
+		return "morgens vormittags"
+	case h >= 11 && h < 14:
+		return "mittags"
+	case h >= 14 && h < 18:
+		return "nachmittags"
+	case h >= 18 && h < 22:
+		return "abends"
+	}
+	return "nachts"
+}
+
+// seasons by month (meteorological), folded for search
+var seasons = []string{"", "winter", "winter", "fruhling", "fruhling", "fruhling", "sommer", "sommer", "sommer", "herbst", "herbst", "herbst", "winter"}
+
 type doc struct {
 	name, album, place, cat, date, cam, kw, desc, kind string
 }
@@ -89,17 +107,17 @@ type facet struct {
 	f     string
 }
 
-var seasons = []string{"", "winter", "winter", "fruhling", "fruhling", "fruhling", "sommer", "sommer", "sommer", "herbst", "herbst", "herbst", "winter"}
-
 func (l *Library) buildDoc(it *Item) *doc {
 	t := time.Unix(it.Taken, 0).UTC()
-	date := fmt.Sprintf("%d %s %s %s %02d.%02d.%d %d-%02d-%02d %s", t.Year(), fold(monthsDE[t.Month()]), seasons[t.Month()],
-		fold(weekdaysDE[t.Weekday()]), t.Day(), int(t.Month()), t.Year(), t.Year(), int(t.Month()), t.Day(), map[bool]string{true: "wochenende"}[t.Weekday() == 0 || t.Weekday() == 6])
-	if t.Month() == 12 && t.Day() >= 24 && t.Day() <= 26 {
-		date += " weihnachten"
+	weekend := t.Weekday() == 0 || t.Weekday() == 6
+	daykind := "werktag"
+	if weekend {
+		daykind = "wochenende"
 	}
-	if (t.Month() == 12 && t.Day() == 31) || (t.Month() == 1 && t.Day() == 1) {
-		date += " silvester neujahr"
+	date := fmt.Sprintf("%d %s %s %s %s %02d.%02d.%d %d-%02d-%02d", t.Year(), fold(monthsDE[t.Month()]), seasons[t.Month()],
+		fold(weekdaysDE[t.Weekday()]), daykind, t.Day(), int(t.Month()), t.Year(), t.Year(), int(t.Month()), t.Day())
+	if it.TakenSrc == "exif" || (it.TakenSrc == "name" && t.Hour()+t.Minute()+t.Second() != 12) {
+		date += " " + timeOfDay(t.Hour())
 	}
 	kind := "foto bild"
 	if it.Kind == Video {
@@ -119,7 +137,10 @@ func (l *Library) buildDoc(it *Item) *doc {
 		kind += " selfie"
 	}
 	if it.GPS {
-		kind += " gps"
+		kind += " gps ort"
+	}
+	if it.Desc != "" {
+		kind += " text"
 	}
 	return &doc{
 		name:  fold(name),
@@ -219,6 +240,7 @@ func tokenize(q string) []string {
 var fieldAlias = map[string]string{
 	"ort": "place", "place": "place", "person": "person", "wer": "person", "jahr": "year", "year": "year",
 	"monat": "month", "typ": "kind", "type": "kind", "kamera": "cam", "camera": "cam", "album": "album",
+	"wochentag": "date", "tag": "date", "jahreszeit": "date", "tageszeit": "date", "zeit": "date",
 	"ordner": "album", "text": "desc", "datum": "date", "date": "date", "kategorie": "cat", "datei": "name",
 }
 
@@ -258,6 +280,16 @@ func (l *Library) Search(q string) []Hit {
 		return nil
 	}
 	si := l.index()
+	groups := map[string][]term{}
+	var fieldOrder []string
+	for _, t := range terms {
+		if t.field != "" && !t.neg {
+			if groups[t.field] == nil {
+				fieldOrder = append(fieldOrder, t.field)
+			}
+			groups[t.field] = append(groups[t.field], t)
+		}
+	}
 	// people names per item (people change without a rescan)
 	people := map[string]string{}
 	for _, p := range l.People() {
@@ -280,8 +312,22 @@ func (l *Library) Search(q string) []Hit {
 		}
 		score, ok := 0.0, true
 		var snipWord string
+		extra := ""
+		if l.IsFav(it) {
+			extra = " favorit favoriten"
+		}
+		match := func(t term) (float64, string) {
+			if t.field == "kind" && extra != "" && contains(extra, t.words) {
+				return 5, ""
+			}
+			return matchTerm(d, people[it.ID], it, t)
+		}
+		// plain words and exclusions: all must hold
 		for _, t := range terms {
-			s, sw := matchTerm(d, people[it.ID], it, t)
+			if t.field != "" && !t.neg {
+				continue
+			}
+			s, sw := match(t)
 			if t.neg {
 				if s > 0 {
 					ok = false
@@ -297,6 +343,30 @@ func (l *Library) Search(q string) []Hit {
 			if sw != "" && snipWord == "" {
 				snipWord = sw
 			}
+		}
+		// filters: one value per field must match (ort:A ort:B = A or B)
+		for _, field := range fieldOrder {
+			if !ok {
+				break
+			}
+			group := groups[field]
+			if len(group) == 0 {
+				continue
+			}
+			best := 0.0
+			for _, t := range group {
+				s, sw := match(t)
+				if s > best {
+					best = s
+				}
+				if s > 0 && sw != "" && snipWord == "" {
+					snipWord = sw
+				}
+			}
+			if best == 0 {
+				ok = false
+			}
+			score += best
 		}
 		if !ok {
 			continue
@@ -357,7 +427,7 @@ func matchTerm(d *doc, people string, it *Item, t term) (float64, string) {
 		}
 		return 0, ""
 	case "month", "date":
-		if contains(d.date, w) {
+		if wordStart(d.date, w) {
 			return 5, ""
 		}
 		return 0, ""
@@ -498,6 +568,11 @@ func (l *Library) Suggest(prefix string) []facet {
 			out = append(out, facet{Type: "monat", Label: monthsDE[m], Query: "monat:" + strings.ToLower(monthsDE[m])})
 		}
 	}
+	for _, d := range dateWords {
+		if strings.HasPrefix(fold(d.label), p) {
+			out = append(out, facet{Type: d.typ, Label: d.label, Query: d.query})
+		}
+	}
 	out = append(out, weak...)
 	if len(out) > 12 {
 		out = out[:12]
@@ -505,9 +580,54 @@ func (l *Library) Suggest(prefix string) []facet {
 	return out
 }
 
+var dateWords = []struct{ typ, label, query string }{
+	{"wochentag", "Montag", "wochentag:montag"}, {"wochentag", "Dienstag", "wochentag:dienstag"},
+	{"wochentag", "Mittwoch", "wochentag:mittwoch"}, {"wochentag", "Donnerstag", "wochentag:donnerstag"},
+	{"wochentag", "Freitag", "wochentag:freitag"}, {"wochentag", "Samstag", "wochentag:samstag"},
+	{"wochentag", "Sonntag", "wochentag:sonntag"}, {"wochentag", "Wochenende", "tag:wochenende"},
+	{"wochentag", "Werktag", "tag:werktag"},
+	{"jahreszeit", "Frühling", "jahreszeit:frühling"}, {"jahreszeit", "Sommer", "jahreszeit:sommer"},
+	{"jahreszeit", "Herbst", "jahreszeit:herbst"}, {"jahreszeit", "Winter", "jahreszeit:winter"},
+	{"tageszeit", "Morgens", "tageszeit:morgens"}, {"tageszeit", "Mittags", "tageszeit:mittags"},
+	{"tageszeit", "Nachmittags", "tageszeit:nachmittags"}, {"tageszeit", "Abends", "tageszeit:abends"},
+	{"tageszeit", "Nachts", "tageszeit:nachts"},
+}
+
 func quoteIf(s string) string {
 	if strings.ContainsRune(s, ' ') {
 		return `"` + s + `"`
 	}
 	return s
+}
+
+// Facet lists for the filter panel.
+type Facets struct {
+	Years      []facet `json:"years"`
+	Places     []facet `json:"places"`
+	Cameras    []facet `json:"cameras"`
+	Categories []facet `json:"categories"`
+}
+
+// Facets returns the values the filter panel offers, most items first
+// (years newest first).
+func (l *Library) Facets() Facets {
+	si := l.index()
+	var f Facets
+	for _, x := range si.facets {
+		switch x.Type {
+		case "jahr":
+			f.Years = append(f.Years, x)
+		case "ort":
+			f.Places = append(f.Places, x)
+		case "kamera":
+			f.Cameras = append(f.Cameras, x)
+		case "kategorie":
+			f.Categories = append(f.Categories, x)
+		}
+	}
+	sort.Slice(f.Years, func(a, b int) bool { return f.Years[a].Label > f.Years[b].Label })
+	if len(f.Cameras) > 20 {
+		f.Cameras = f.Cameras[:20]
+	}
+	return f
 }

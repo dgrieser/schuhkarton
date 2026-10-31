@@ -11,7 +11,10 @@ import (
 // Start runs the background generation of thumbnails, previews and faces
 // until ctx ends. Scan kicks it after every pass.
 func (l *Library) Start(ctx context.Context) {
+	ctx, l.stopBG = context.WithCancel(ctx)
+	l.bg.Add(1)
 	go func() {
+		defer l.bg.Done()
 		for {
 			select {
 			case <-ctx.Done():
@@ -36,8 +39,8 @@ func (l *Library) generate(ctx context.Context) {
 	items := l.Items()
 	var thumbs, previews, faces []*Item
 	var nThumb, nPoster, nPrev, nFace int64
-	faceOK := l.opt.Faces && l.helper.facesAvailable()
-	recog := l.helper.recognitionAvailable()
+	fs := l.FaceStatus()
+	faceOK, recog := fs.Detection, fs.Recognition
 	for _, it := range items {
 		if !exists(l.CachePath(it, VarSmall)) || (l.opt.Previews && it.Kind == Photo && !exists(l.CachePath(it, VarLarge))) {
 			thumbs = append(thumbs, it)
@@ -46,7 +49,7 @@ func (l *Library) generate(ctx context.Context) {
 		} else {
 			nPoster++
 		}
-		if it.Kind == Video {
+		if it.Kind == Video && l.opt.VideoPreviews {
 			if exists(l.CachePath(it, VarPreview)) {
 				nPrev++
 			} else {
@@ -119,7 +122,7 @@ func (l *Library) generate(ctx context.Context) {
 	})
 	var faceMu sync.Mutex
 	lastCluster := time.Now()
-	run(faces, max(1, w/2), func(it *Item) {
+	run(faces, l.opt.Faces.Workers, func(it *Item) {
 		l.scanFaces(it)
 		l.cnt.faces.Add(1)
 		faceMu.Lock()
@@ -144,9 +147,12 @@ func (l *Library) generate(ctx context.Context) {
 func (l *Library) scanFaces(it *Item) {
 	prefix := filepath.Join(l.opt.CacheDir, "faces", it.key[:2], it.key)
 	os.MkdirAll(filepath.Dir(prefix), 0o755)
-	faces, err := l.helper.faces(l.Path(it), prefix)
+	faces, err := l.faces.detect(l, it, prefix)
 	if err != nil {
 		l.logf("faces %s: %v", it.Rel, err)
+		if isTransient(err) {
+			return // container unreachable: try again on the next pass
+		}
 		faces = nil
 	}
 	l.mu.Lock()
@@ -160,6 +166,15 @@ func (l *Library) ItemFaces(it *Item) []Face {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 	return append([]Face(nil), it.Faces...)
+}
+
+// Go runs fn in the background; Close waits for it.
+func (l *Library) Go(fn func()) {
+	l.bg.Add(1)
+	go func() {
+		defer l.bg.Done()
+		fn()
+	}()
 }
 
 // GenerateAll creates every missing derivative and returns when done.

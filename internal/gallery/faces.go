@@ -34,13 +34,14 @@ func (r FaceRef) key() string { return fmt.Sprintf("%s:%d", r.Item, r.Idx) }
 
 const (
 	labelHidden = "~"
-	threshNamed = 0.42 // cosine similarity to a named person's centroid
-	threshNew   = 0.48 // to an unnamed cluster; children look alike, rather split than mix
 	minCluster  = 3
 )
 
 type peopleStore struct {
 	path string
+	// cosine similarity needed to join an unnamed cluster (children look
+	// alike: rather split than mix) and a named person's centroid
+	threshNew, threshNamed float32
 
 	mu     sync.RWMutex
 	labels map[string]string // face key -> name, "!name" (not this person) or "~" (hidden)
@@ -51,8 +52,9 @@ type peopleStore struct {
 	clusterMu sync.Mutex
 }
 
-func newPeopleStore(path string) *peopleStore {
-	s := &peopleStore{path: path, labels: map[string]string{}, byID: map[string]*Person{}, byFace: map[string]string{}}
+func newPeopleStore(path string, threshNew, threshNamed float64) *peopleStore {
+	s := &peopleStore{path: path, threshNew: float32(threshNew), threshNamed: float32(threshNamed),
+		labels: map[string]string{}, byID: map[string]*Person{}, byFace: map[string]string{}}
 	if b, err := os.ReadFile(path); err == nil {
 		var f struct {
 			Labels map[string]string `json:"labels"`
@@ -304,7 +306,7 @@ func (s *peopleStore) cluster(items []faceSnap) {
 		best := bestMatches(rest, namedList)
 		for i, f := range rest {
 			c, sim := best[i].c, best[i].sim
-			if c != nil && sim >= threshNamed && f.label != "!"+c.name {
+			if c != nil && sim >= s.threshNamed && f.label != "!"+c.name {
 				c.refs = append(c.refs, f) // centroid stays the user's choice
 			} else {
 				pool = append(pool, f)
@@ -328,7 +330,7 @@ func (s *peopleStore) cluster(items []faceSnap) {
 					c, sim = nc, s
 				}
 			}
-			if c != nil && sim >= threshNew {
+			if c != nil && sim >= s.threshNew {
 				c.add(f)
 			} else {
 				nc := &cluster{}

@@ -17,22 +17,28 @@ import (
 	"sync"
 	"time"
 
+	_ "github.com/gen2brain/avif" // pure Go (WebAssembly), no cgo
+	_ "github.com/gen2brain/heic"
 	_ "golang.org/x/image/bmp"
 	"golang.org/x/image/draw"
 	_ "golang.org/x/image/tiff"
 	_ "golang.org/x/image/webp"
+
+	"github.com/dgrieser/schuhkarton/internal/helper"
 )
 
 // Variants of cached derivatives.
 const (
-	VarSmall   = "s" // grid thumbnail, short edge 360 px (jpg)
-	VarLarge   = "m" // lightbox preview, long edge 2048 px (jpg)
+	VarSmall   = "s" // grid thumbnail (jpg)
+	VarLarge   = "m" // lightbox preview (jpg)
 	VarPreview = "p" // animated video preview (mp4)
 	VarH264    = "h" // browser-compatible video (mp4)
-	smallShort = 360
-	smallLong  = 1200
-	largeLong  = 2048
 )
+
+// thumbnail sizes from the options
+func (l *Library) smallShort() int { return l.opt.ThumbSize }
+func (l *Library) smallLong() int  { return l.opt.ThumbSize * 10 / 3 }
+func (l *Library) largeLong() int  { return l.opt.PreviewSize }
 
 // mediaGen produces and caches thumbnails, previews and transcodes.
 type mediaGen struct {
@@ -48,8 +54,30 @@ type call struct {
 }
 
 func newMediaGen(l *Library) *mediaGen {
-	ff, _ := exec.LookPath("ffmpeg")
-	return &mediaGen{l: l, wake: make(chan struct{}, 1), ffmpeg: ff}
+	return &mediaGen{l: l, wake: make(chan struct{}, 1), ffmpeg: FindFFmpeg(l.opt.FFmpeg)}
+}
+
+// FindFFmpeg returns a usable ffmpeg or "".
+func FindFFmpeg(hint string) string {
+	for _, c := range []string{hint, "ffmpeg"} {
+		if c == "" {
+			continue
+		}
+		if p, err := exec.LookPath(c); err == nil {
+			return p
+		}
+	}
+	return ""
+}
+
+// needsOrient: HEIF and AVIF carry their rotation in the container, which
+// the decoder applies; EXIF orientation must not be applied again.
+func needsOrient(path string) bool {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".heic", ".heif", ".avif":
+		return false
+	}
+	return true
 }
 
 // CachePath returns where a derivative of an item is stored.
@@ -107,7 +135,7 @@ func (l *Library) Ensure(ctx context.Context, it *Item, variant string) (string,
 		c.err = l.makePoster(it)
 	case it.Kind == Video && variant == VarLarge:
 		c.err = l.makePosterLarge(it)
-	case it.Kind == Video && variant == VarPreview:
+	case it.Kind == Video && variant == VarPreview && l.opt.VideoPreviews:
 		c.err = l.makeVideoPreview(it)
 	default:
 		c.err = errors.New("unknown variant")
@@ -129,50 +157,53 @@ func (l *Library) makePhotoThumbs(it *Item, want string) error {
 	ext := strings.ToLower(filepath.Ext(src))
 	sp, lp := l.CachePath(it, VarSmall), l.CachePath(it, VarLarge)
 	both := want == VarLarge || l.opt.Previews
-	// Go decodes the common formats itself; the rest goes through the helper
-	if !(ext == ".heic" || ext == ".heif" || ext == ".avif") {
-		var img image.Image
-		var err error
-		if rawExt[ext] {
-			var b []byte
-			if b, err = extractPreview(l.opt.ExifTool, src); err == nil {
-				img, _, err = image.Decode(bytes.NewReader(b))
-			}
-		} else {
-			img, err = decodeFile(src)
+	q := l.opt.Quality
+	// Go decodes the common formats itself, HEIC and AVIF included
+	var img image.Image
+	var err error
+	if rawExt[ext] {
+		var b []byte
+		if b, err = extractPreview(l.opt.ExifTool, src); err == nil {
+			img, _, err = image.Decode(bytes.NewReader(b))
 		}
-		if err == nil {
-			// scaling is rotation-invariant here, so scale first and rotate the small result
-			b := img.Bounds()
-			w, h := b.Dx(), b.Dy()
-			if it.Orient >= 5 && it.Orient <= 8 {
-				w, h = h, w
-			}
-			l.setAspect(it, w, h)
-			if both || want == VarLarge {
-				large := resizeFit(img, largeLong, largeLong)
-				if err := writeJPEG(lp, orient(large, it.Orient), 85); err != nil {
-					return err
-				}
-				img = large
-			}
-			if !exists(sp) {
-				return writeJPEG(sp, orient(resizeShort(img, smallShort, smallLong), it.Orient), 80)
-			}
-			return nil
-		}
+	} else {
+		img, err = decodeFile(src)
 	}
-	if l.helper.available() {
-		outs := []thumbSpec{{Path: sp, Short: smallShort, MaxLong: smallLong, Q: 80}}
-		if both {
-			outs = append(outs, thumbSpec{Path: lp, Long: largeLong, Q: 85})
+	if err == nil {
+		o := it.Orient
+		if !needsOrient(src) {
+			o = 1
 		}
-		w, h, err := l.helper.thumb(src, outs)
-		if err == nil {
+		// scaling is rotation-invariant here, so scale first and rotate the small result
+		b := img.Bounds()
+		w, h := b.Dx(), b.Dy()
+		if o >= 5 && o <= 8 {
+			w, h = h, w
+		}
+		l.setAspect(it, w, h)
+		if both {
+			large := resizeFit(img, l.largeLong(), l.largeLong())
+			if err := writeJPEG(lp, orient(large, o), min(q+4, 95)); err != nil {
+				return err
+			}
+			img = large
+		}
+		if !exists(sp) {
+			return writeJPEG(sp, orient(resizeShort(img, l.smallShort(), l.smallLong()), o), q)
+		}
+		return nil
+	}
+	if l.local != nil {
+		outs := []helper.ThumbSpec{{Path: sp, Short: l.smallShort(), MaxLong: l.smallLong(), Q: q}}
+		if both {
+			outs = append(outs, helper.ThumbSpec{Path: lp, Long: l.largeLong(), Q: min(q+4, 95)})
+		}
+		w, h, herr := l.local.Thumb(src, outs)
+		if herr == nil {
 			l.setAspect(it, w, h)
 			return nil
 		}
-		l.logf("helper %s: %v", it.Rel, err)
+		l.logf("helper %s: %v", it.Rel, herr)
 	}
 	return l.ffmpegImage(src, sp, lp, both)
 }
@@ -197,9 +228,9 @@ func (l *Library) ffmpegImage(src, sp, lp string, both bool) error {
 	}
 	targets := []struct {
 		path, vf string
-	}{{sp, scaleShort(smallShort)}}
+	}{{sp, scaleShort(l.smallShort())}}
 	if both {
-		targets = append(targets, struct{ path, vf string }{lp, scaleLong(largeLong)})
+		targets = append(targets, struct{ path, vf string }{lp, scaleLong(l.largeLong())})
 	}
 	for _, t := range targets {
 		cmd := exec.Command(l.media.ffmpeg, "-v", "error", "-y", "-i", src, "-frames:v", "1", "-vf", t.vf, "-q:v", "3", t.path+".tmp.jpg")
@@ -361,10 +392,10 @@ func (l *Library) runFFmpeg(args ...string) error {
 func (l *Library) makePoster(it *Item) error {
 	p := l.CachePath(it, VarSmall)
 	err := l.runFFmpeg("-ss", fmt.Sprintf("%.2f", l.posterAt(it)), "-i", l.Path(it), "-frames:v", "1",
-		"-vf", scaleShort(smallShort), "-q:v", "4", p+".tmp.jpg")
+		"-vf", scaleShort(l.smallShort()), "-q:v", "4", p+".tmp.jpg")
 	if err != nil {
 		// some files cannot seek: take the first frame
-		err = l.runFFmpeg("-i", l.Path(it), "-frames:v", "1", "-vf", scaleShort(smallShort), "-q:v", "4", p+".tmp.jpg")
+		err = l.runFFmpeg("-i", l.Path(it), "-frames:v", "1", "-vf", scaleShort(l.smallShort()), "-q:v", "4", p+".tmp.jpg")
 	}
 	if err != nil {
 		return err
@@ -379,7 +410,7 @@ func (l *Library) makePoster(it *Item) error {
 func (l *Library) makePosterLarge(it *Item) error {
 	p := l.CachePath(it, VarLarge)
 	if err := l.runFFmpeg("-ss", fmt.Sprintf("%.2f", l.posterAt(it)), "-i", l.Path(it), "-frames:v", "1",
-		"-vf", scaleLong(largeLong), "-q:v", "3", p+".tmp.jpg"); err != nil {
+		"-vf", scaleLong(l.largeLong()), "-q:v", "3", p+".tmp.jpg"); err != nil {
 		return err
 	}
 	return os.Rename(p+".tmp.jpg", p)
@@ -390,7 +421,7 @@ func (l *Library) makePosterLarge(it *Item) error {
 func (l *Library) makeVideoPreview(it *Item) error {
 	p := l.CachePath(it, VarPreview)
 	tmp := p + ".tmp.mp4"
-	vf := scaleShort(240) + ",fps=24,setsar=1,format=yuv420p"
+	vf := scaleShort(l.opt.VideoPreviewSize) + ",fps=24,setsar=1,format=yuv420p"
 	enc := []string{"-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "31", "-profile:v", "high",
 		"-movflags", "+faststart", "-threads", "2", tmp}
 	src := l.Path(it)
@@ -435,8 +466,8 @@ func (l *Library) makeVideoPreview(it *Item) error {
 // StreamH264 writes a browser-compatible MP4 of a video to w. A finished
 // transcode is cached and served with range support by the caller.
 func (l *Library) StreamH264(ctx context.Context, it *Item, w io.Writer) error {
-	if l.media.ffmpeg == "" {
-		return errors.New("ffmpeg not found")
+	if l.media.ffmpeg == "" || !l.opt.Transcode {
+		return errors.New("transcoding disabled or ffmpeg not found")
 	}
 	final := l.CachePath(it, VarH264)
 	os.MkdirAll(filepath.Dir(final), 0o755)

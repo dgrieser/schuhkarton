@@ -22,34 +22,47 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dgrieser/schuhkarton/internal/backup"
+	"github.com/dgrieser/schuhkarton/internal/config"
 	"github.com/dgrieser/schuhkarton/internal/gallery"
+	"github.com/dgrieser/schuhkarton/internal/version"
 	"github.com/dgrieser/schuhkarton/web"
 )
 
-// Server serves one library.
-type Server struct {
-	lib   *gallery.Library
-	token string
-	ctx   context.Context
-	files fs.FS // UI files: embedded, or a folder during development
+// Options configure the gallery server.
+type Options struct {
+	Lib    *gallery.Library
+	Config *config.Config
+	Token  string         // required from clients when set (link ?t=, then a cookie)
+	WebDir string         // serve the UI from this folder instead of the embedded copy
+	Setup  http.Handler   // settings page and its API (/setup, /api/setup/)
+	Backup *backup.Runner // nil without a backup folder
 }
 
-// New creates the HTTP handler. A non-empty token is required from clients
-// (link parameter ?t=, then a cookie).
-// webDir, when set, serves the UI from disk instead of the embedded copy.
-func New(ctx context.Context, lib *gallery.Library, token, webDir string) http.Handler {
-	s := &Server{lib: lib, token: token, ctx: ctx, files: web.FS}
-	if webDir != "" {
-		s.files = os.DirFS(webDir)
-	}
+// Server serves one library.
+type Server struct {
+	lib    *gallery.Library
+	backup *backup.Runner
+	cfg    *config.Config
+	token  string
+	ctx    context.Context
+	files  fs.FS // UI files: embedded, or a folder during development
+}
+
+// New creates the HTTP handler.
+func New(ctx context.Context, o Options) http.Handler {
+	s := &Server{lib: o.Lib, backup: o.Backup, cfg: o.Config, token: o.Token, ctx: ctx, files: UIFiles(o.WebDir)}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", s.page)
-	mux.Handle("GET /assets/", http.StripPrefix("/assets/", s.assets()))
+	mux.Handle("GET /assets/", http.StripPrefix("/assets/", assetHandler(s.files)))
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok\n")) })
+	mux.HandleFunc("GET /api/config", s.config)
 	mux.HandleFunc("GET /api/status", s.status)
 	mux.HandleFunc("GET /api/items", s.items)
 	mux.HandleFunc("GET /api/item/{id}", s.item)
 	mux.HandleFunc("GET /api/search", s.search)
 	mux.HandleFunc("GET /api/suggest", s.suggest)
+	mux.HandleFunc("GET /api/facets", s.facets)
 	mux.HandleFunc("GET /api/places", s.places)
 	mux.HandleFunc("GET /api/albums", s.albums)
 	mux.HandleFunc("GET /api/people", s.people)
@@ -58,11 +71,25 @@ func New(ctx context.Context, lib *gallery.Library, token, webDir string) http.H
 	mux.HandleFunc("POST /api/fav", s.fav)
 	mux.HandleFunc("POST /api/rescan", s.rescan)
 	mux.HandleFunc("POST /api/zip", s.zip)
+	mux.HandleFunc("GET /api/backup", s.backupStatus)
+	mux.HandleFunc("POST /api/backup/run", s.backupRun)
 	mux.HandleFunc("GET /t/{id}/{variant}", s.thumb)
 	mux.HandleFunc("GET /f/{id}/{idx}", s.face)
 	mux.HandleFunc("GET /o/{id}", s.original)
 	mux.HandleFunc("GET /v/{id}", s.video)
+	if o.Setup != nil {
+		mux.Handle("/setup", o.Setup)
+		mux.Handle("/api/setup/", o.Setup)
+	}
 	return s.auth(mux)
+}
+
+// UIFiles returns the embedded UI, or dir during development.
+func UIFiles(dir string) fs.FS {
+	if dir != "" {
+		return os.DirFS(dir)
+	}
+	return web.FS
 }
 
 // --- auth ---------------------------------------------------------------------
@@ -89,11 +116,15 @@ func (s *Server) auth(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+		if r.URL.Path == "/healthz" || strings.HasPrefix(r.URL.Path, "/assets/") {
+			next.ServeHTTP(w, r)
+			return
+		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusUnauthorized)
 		fmt.Fprint(w, `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width">`+
 			`<title>Schuhkarton</title><body style="font:16px system-ui;padding:2rem;background:#111;color:#eee">`+
-			`<h1>Schuhkarton</h1><p>Bitte den vollständigen Link mit <code>?t=…</code> öffnen, den <code>schuhkarton</code> ausgibt.</p>`)
+			`<h1>Schuhkarton</h1><p>Bitte den vollständigen Link mit <code>?t=…</code> öffnen. Er steht in der Ausgabe von <code>schuhkarton</code> und auf der Einstellungsseite.</p>`)
 	})
 }
 
@@ -140,8 +171,8 @@ func (s *Server) page(w http.ResponseWriter, r *http.Request) {
 	w.Write(b)
 }
 
-func (s *Server) assets() http.Handler {
-	fsrv := http.FileServer(http.FS(s.files))
+func assetHandler(files fs.FS) http.Handler {
+	fsrv := http.FileServer(http.FS(files))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-cache")
 		fsrv.ServeHTTP(w, r)
@@ -150,9 +181,45 @@ func (s *Server) assets() http.Handler {
 
 // --- API ----------------------------------------------------------------------
 
+// config tells the UI what it needs to know about this installation.
+func (s *Server) config(w http.ResponseWriter, r *http.Request) {
+	c := s.cfg
+	writeJSON(w, r, map[string]any{
+		"title": c.UI.Title, "theme": c.UI.Theme, "mapTiles": c.UI.MapTiles, "mapAttribution": c.UI.MapAttribution,
+		"faces": c.Faces.Mode, "videoPreviews": c.Media.VideoPreviews, "transcode": c.Media.Transcode,
+		"version": version.String(), "folders": len(c.Library.Folders),
+	})
+}
+
+// facets lists what the filter panel offers: years, places, cameras, categories.
+func (s *Server) facets(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, r, s.lib.Facets())
+}
+
+func (s *Server) backupStatus(w http.ResponseWriter, r *http.Request) {
+	if s.backup == nil {
+		writeJSON(w, r, backup.Status{})
+		return
+	}
+	writeJSON(w, r, s.backup.Status())
+}
+
+func (s *Server) backupRun(w http.ResponseWriter, r *http.Request) {
+	if s.backup == nil {
+		http.Error(w, "kein Sicherungsordner eingestellt", http.StatusBadRequest)
+		return
+	}
+	s.backup.Trigger()
+	writeJSON(w, r, map[string]any{"ok": true})
+}
+
 func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	st := s.lib.Status()
-	writeJSON(w, r, map[string]any{"status": st, "scanning": s.lib.Scanning()})
+	res := map[string]any{"status": st, "scanning": s.lib.Scanning()}
+	if s.backup != nil {
+		res["backup"] = s.backup.Status()
+	}
+	writeJSON(w, r, res)
 }
 
 type compactItem struct {
@@ -265,8 +332,8 @@ func (s *Server) albums(w http.ResponseWriter, r *http.Request) { writeJSON(w, r
 
 func (s *Server) people(w http.ResponseWriter, r *http.Request) {
 	st := s.lib.Status()
-	writeJSON(w, r, map[string]any{"people": s.lib.People(), "detection": st.FaceOK,
-		"recognition": st.FaceRec, "faces": st.Faces, "faceTodo": st.FaceTodo})
+	writeJSON(w, r, map[string]any{"people": s.lib.People(), "mode": st.FaceMode, "detection": st.FaceOK,
+		"recognition": st.FaceRec, "error": st.FaceErr, "faces": st.Faces, "faceTodo": st.FaceTodo})
 }
 
 func (s *Server) namePerson(w http.ResponseWriter, r *http.Request) {
@@ -478,6 +545,10 @@ func (s *Server) video(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.URL.Query().Get("h264") == "" {
 		s.serveOriginal(w, r, it)
+		return
+	}
+	if !s.cfg.Media.Transcode {
+		http.Error(w, "Umwandeln ist ausgeschaltet", http.StatusNotFound)
 		return
 	}
 	cached := s.lib.CachePath(it, gallery.VarH264)

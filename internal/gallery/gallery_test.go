@@ -1,6 +1,7 @@
 package gallery
 
 import (
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -41,6 +42,13 @@ func TestFinishItemFolder(t *testing.T) {
 	if it.Place != "" || it.TakenSrc != "exif" {
 		t.Errorf("camera folder: place %q src %q", it.Place, it.TakenSrc)
 	}
+	// the root itself is a year folder
+	l2 := &Library{opt: Options{Roots: []Root{{Name: "2025", Path: "/x/Bilder/2025"}}}}
+	it = &Item{Rel: "11 November Lübbecke/DSC1.JPG", Kind: Photo, MetaTaken: time.Date(2000, 1, 1, 9, 0, 0, 0, time.UTC).Unix()}
+	l2.finishItem(it)
+	if it.Place != "Lübbecke" || time.Unix(it.Taken, 0).UTC().Year() != 2025 {
+		t.Errorf("year root: place %q taken %v", it.Place, time.Unix(it.Taken, 0).UTC())
+	}
 	// collections: the tail is a category, not a place
 	it = &Item{Rel: "Dokumente/2016/03 März Rezepte/IMG_1.jpg", Kind: Photo}
 	l.finishItem(it)
@@ -79,7 +87,8 @@ func TestClusterNamed(t *testing.T) {
 	a := normalize([]float32{1, 0, 0, 0})
 	a2 := normalize([]float32{0.95, 0.1, 0, 0})
 	b := normalize([]float32{0, 1, 0, 0})
-	s := &peopleStore{labels: map[string]string{"i1:0": "Anna"}, byID: map[string]*Person{}, byFace: map[string]string{}}
+	s := newPeopleStore("", 0.48, 0.42)
+	s.labels["i1:0"] = "Anna"
 	snap := []faceSnap{
 		{id: "i1", faces: []Face{{Emb: a, Score: 0.9, W: .2, H: .2}}},
 		{id: "i2", faces: []Face{{Emb: a2, Score: 0.9, W: .2, H: .2}}},
@@ -91,5 +100,53 @@ func TestClusterNamed(t *testing.T) {
 	}
 	if s.byFace["i3:0"] != "" {
 		t.Errorf("single unrelated face should stay alone, got %q", s.byFace["i3:0"])
+	}
+}
+
+func TestDateWords(t *testing.T) {
+	l := &Library{opt: Options{Roots: []Root{{Name: "B", Path: "/x"}}}}
+	it := &Item{Rel: "2019/07 Juli Lübbecke/a.jpg", Kind: Photo, Taken: time.Date(2019, 7, 6, 19, 30, 0, 0, time.UTC).Unix(), TakenSrc: "exif"}
+	d := l.buildDoc(it)
+	for _, want := range []string{"samstag", "wochenende", "sommer", "abends", "juli"} {
+		if !strings.Contains(d.date, want) {
+			t.Errorf("date words %q lack %q", d.date, want)
+		}
+	}
+	for _, q := range []string{"tag:wochenende", "jahreszeit:sommer", "tageszeit:abends", "wochentag:samstag"} {
+		terms := parseQuery(q)
+		if s, _ := matchTerm(d, "", it, terms[0]); s == 0 {
+			t.Errorf("%s does not match", q)
+		}
+	}
+	if s, _ := matchTerm(d, "", it, parseQuery("tag:werktag")[0]); s != 0 {
+		t.Error("werktag must not match a Saturday")
+	}
+}
+
+func TestSearchOrWithinField(t *testing.T) {
+	l := &Library{opt: Options{Roots: []Root{{Name: "B", Path: "/x"}}}, byID: map[string]*Item{}, favs: map[string]bool{}}
+	l.people = newPeopleStore("", 0.48, 0.42)
+	mk := func(id, rel string, y int) *Item {
+		it := &Item{ID: id, Rel: rel, Kind: Photo, MetaTaken: time.Date(y, 6, 1, 10, 0, 0, 0, time.UTC).Unix()}
+		l.finishItem(it)
+		return it
+	}
+	l.setItems([]*Item{mk("a", "2018/06 Juni Lübbecke/a.jpg", 2018), mk("b", "2019/06 Juni Dresden/b.jpg", 2019), mk("c", "2019/06 Juni Lübbecke/c.jpg", 2019)})
+	ids := func(q string) string {
+		var out []string
+		for _, h := range l.Search(q) {
+			out = append(out, h.ID)
+		}
+		sort.Strings(out)
+		return strings.Join(out, ",")
+	}
+	if got := ids("ort:Lübbecke ort:Dresden"); got != "a,b,c" {
+		t.Errorf("or within field: %q", got)
+	}
+	if got := ids("ort:Lübbecke jahr:2019"); got != "c" {
+		t.Errorf("and across fields: %q", got)
+	}
+	if got := ids("lübbecke -jahr:2018"); got != "c" {
+		t.Errorf("exclusion: %q", got)
 	}
 }

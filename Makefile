@@ -15,9 +15,31 @@ help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
 		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
 
+GORELEASER_VERSION ?= v2.13.3
+GORELEASER := $(shell command -v goreleaser 2>/dev/null || echo "$(GO) run github.com/goreleaser/goreleaser/v2@$(GORELEASER_VERSION)")
+TARGETS := linux/amd64 linux/arm64 linux/arm/7 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64
+
 .PHONY: build
 build: ## Build ./schuhkarton (UI embedded)
 	$(GO) build -trimpath -ldflags "-s -w" -o $(BINARY) $(MAIN)
+
+.PHONY: build-all
+build-all: ## Cross-compile every release target (CGO off) into dist/
+	@for t in $(TARGETS); do \
+		os=$${t%%/*}; rest=$${t#*/}; arch=$${rest%%/*}; arm=$$( [ "$$rest" != "$$arch" ] && echo $${rest#*/} ); \
+		ext=$$( [ $$os = windows ] && echo .exe ); \
+		echo "  $$t"; \
+		GOOS=$$os GOARCH=$$arch GOARM=$$arm CGO_ENABLED=0 $(GO) build -trimpath -ldflags "-s -w" \
+			-o dist/$(BINARY)_$${os}_$${arch}$${arm:+v$$arm}$$ext $(MAIN) || exit 1; \
+	done
+
+.PHONY: snapshot
+snapshot: ## GoReleaser snapshot build (no publishing)
+	$(GORELEASER) release --snapshot --clean
+
+.PHONY: faces-image
+faces-image: ## Build the face detection container (schuhkarton-faces)
+	docker build -f Dockerfile.faces -t schuhkarton-faces .
 
 .PHONY: install
 install: build ## Install the binary into $(PREFIX)
@@ -44,4 +66,4 @@ check: ## gofmt, vet, node syntax check, tests
 
 .PHONY: clean
 clean: ## Remove build output
-	rm -f $(BINARY)
+	rm -rf $(BINARY) dist

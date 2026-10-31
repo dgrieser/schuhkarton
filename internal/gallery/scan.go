@@ -48,7 +48,7 @@ func (l *Library) Scan(ctx context.Context) error {
 				}
 				return nil
 			}
-			if d.IsDir() || kindOf(name) == 0 {
+			if d.IsDir() || KindOf(name) == 0 {
 				return nil
 			}
 			info, err := d.Info()
@@ -80,7 +80,7 @@ func (l *Library) Scan(ctx context.Context) error {
 			items = append(items, it)
 			continue
 		}
-		it := &Item{ID: id, Root: f.root, RootName: rname, Rel: f.rel, Kind: kindOf(f.rel), Size: f.size, MTime: f.mtime}
+		it := &Item{ID: id, Root: f.root, RootName: rname, Rel: f.rel, Kind: KindOf(f.rel), Size: f.size, MTime: f.mtime}
 		it.key = itemKey(rname, f.rel, f.size, f.mtime)
 		items = append(items, it)
 		todo = append(todo, it)
@@ -177,7 +177,11 @@ func (l *Library) finishItem(it *Item) {
 		dir = ""
 	}
 	it.Album = dir
-	parts := strings.Split(dir, "/")
+	// the root's own name counts too: a root ".../Bilder/2025" holds "11 November Ort"
+	parts := []string{path.Base(filepath.ToSlash(l.opt.Roots[it.Root].Path))}
+	if dir != "" {
+		parts = append(parts, strings.Split(dir, "/")...)
+	}
 	it.Place, it.Category = "", ""
 	folderYear, folderMonth := 0, 0
 	// <Jahr>/<MM Monat Ort>  or  <Sammlung>/<Jahr>/<MM Monat Kategorie>
@@ -195,7 +199,7 @@ func (l *Library) finishItem(it *Item) {
 			folderMonth = 0
 		}
 		if tail := strings.TrimSpace(m[3]); tail != "" {
-			if i == 0 {
+			if i <= 1 {
 				if !noPlace[strings.ToLower(tail)] {
 					it.Place = tail
 				}
@@ -206,7 +210,7 @@ func (l *Library) finishItem(it *Item) {
 		break
 	}
 	if folderYear == 0 {
-		for _, p := range parts {
+		for _, p := range parts[1:] {
 			if reYear.MatchString(p) {
 				folderYear = atoi(p)
 				break
