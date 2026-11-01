@@ -170,6 +170,7 @@ func TestRulesReplanAfterEdit(t *testing.T) {
 		t.Fatal(err)
 	}
 	l.rulesJob.running.Store(true)
+	l.bg.Add(1)
 	l.rulesLoop(c, stale, gen, "")
 	if byRel(l, "Berlin/a.jpg") == nil {
 		t.Fatalf("stale destination used: %v", rels(l))
@@ -215,5 +216,23 @@ func TestRulesReplanMidRun(t *testing.T) {
 	}
 	if d, todo := l.rulesJob.done.Load(), l.rulesJob.todo.Load(); d != todo {
 		t.Fatalf("progress %d/%d", d, todo)
+	}
+}
+
+func TestRulesSkipExcludedFolders(t *testing.T) {
+	l, _ := testLib(t, "a.jpg")
+	l.opt.Exclude = []string{"#recycle"}
+	p := l.PreviewRules(RuleSet{Locale: "de", List: []Rule{{Path: "#recycle/{jahr}"}}})
+	if p.Moves != 0 || p.Rules[0].Excluded != 1 {
+		t.Fatalf("excluded folder not refused: %+v", p)
+	}
+}
+
+func TestRulesStopOnClose(t *testing.T) {
+	l, _ := testLib(t, "2019/06 Juni Lübbecke/a.jpg")
+	l.SetRules(RuleSet{Locale: "de", List: []Rule{{Path: "{ort}"}}})
+	l.Close()
+	if _, err := l.ApplyRules(""); err == nil {
+		t.Fatal("filing started on a closed library")
 	}
 }

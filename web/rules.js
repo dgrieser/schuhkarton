@@ -28,7 +28,7 @@
     [F('{jahr}', '{year}'), 'Jahr'], [F('{datum:MM}', '{date:MM}'), 'Monat (07)'], [F('{datum:MMMM}', '{date:MMMM}'), 'Monatsname'],
     [F('{datum:MMM}', '{date:MMM}'), 'Monat kurz'], [F('{datum:dd}', '{date:dd}'), 'Tag'], [F('{datum:yyyy-MM-dd}', '{date:yyyy-MM-dd}'), 'Datum'],
     [F('{ort}', '{place}'), 'Ort'], [F('{kategorie}', '{category}'), 'Kategorie'], [F('{kamera}', '{camera}'), 'Kamera'],
-    [F('{typ}', '{kind}'), 'Typ'], [F('{schlagwort}', '{keyword}'), 'Schlagwort'], ['{person}', 'Personen'], ['{album}', 'Bisheriger Ordner'],
+    [F('{typ}', '{kind}'), 'Typ'], [F('{schlagwort}', '{keyword}'), 'Schlagwort'], ['{person}', 'Personen'],
   ];
   const SAMPLE = F('{jahr}/{datum:MM MMMM} {ort}', '{year}/{date:MM MMMM} {place}');
   const FORMATS = [
@@ -87,7 +87,7 @@
         <p>${t('{a} setzt einen Wert ein, {b} nimmt den Text, wenn der Wert fehlt, {c} formatiert das Aufnahmedatum mit Unicode-Datumssymbolen (wie in ICU, Java oder Excel). Text in einfachen Anführungszeichen bleibt, wie er ist.',
           { a: `<code>${F('{feld}', '{field}')}</code>`, b: `<code>${F('{feld|Text}', '{field|text}')}</code>`, c: `<code>${F('{datum:Format}', '{date:format}')}</code>` })}</p>
         <div class="ru-fmt">${FORMATS.map(([f, ex]) => `<code>${esc(f)}</code><span>${esc(ex)}</span>`).join('')}</div>
-        <p class="faint">${esc(t('Felder: jahr, monat, datum, ort, kategorie, kamera, typ, schlagwort, person, album – auch englisch (year, month, date, place, category …).'))}</p>
+        <p class="faint">${esc(t('Felder: jahr, monat, datum, ort, kategorie, kamera, typ, schlagwort, person – auch englisch (year, month, date, place, category …).'))}</p>
       </details>
       <div class="ru-bar"><div class="ru-sum"></div>
         <button class="btn" data-save>${esc(t('Speichern'))}</button>
@@ -198,6 +198,7 @@
       if (st.error) { el.innerHTML = `<div class="ru-err">${icon('info')}<span>${esc(t(st.error))}</span></div>`; return; }
       if (!st.matches) { el.innerHTML = `<div class="ru-stat faint">${esc(t('Keine Datei – frühere Regeln greifen zuerst, oder die Bedingung passt nicht.'))}</div>`; return; }
       el.innerHTML = `<div class="ru-stat"><b>${esc(pl(st.matches, '{n} Datei', '{n} Dateien'))}</b> · ${esc(pl(st.folders, '{n} Ordner', '{n} Ordner'))} · ${st.moves ? `<span class="ru-mv">${esc(pl(st.moves, '{n} wird verschoben', '{n} werden verschoben'))}</span>` : esc(t('alle liegen schon richtig'))}</div>
+        ${st.excluded ? `<div class="ru-stat ru-blocked">${icon('info')}<span>${esc(pl(st.excluded, '{n} bleibt liegen: das Einlesen übergeht diesen Ordner (Ausnahmen in den Einstellungen)', '{n} bleiben liegen: das Einlesen übergeht diesen Ordner (Ausnahmen in den Einstellungen)'))}</span></div>` : ''}
         ${st.blocked ? `<div class="ru-stat ru-blocked">${icon('info')}<span>${esc(pl(st.blocked, '{n} bleibt liegen: Dokumente bleiben in Dokument-Ordnern, Fotos und Videos außerhalb', '{n} bleiben liegen: Dokumente bleiben in Dokument-Ordnern, Fotos und Videos außerhalb'))}</span></div>` : ''}
         <ul class="ru-ex">${st.examples.map((x) => `<li>${pathHTML(x.to)}${x.from !== x.to ? `<small>${esc(t('bisher'))}: ${esc(x.from)}</small>` : ''}</li>`).join('')}</ul>`;
     });

@@ -36,7 +36,6 @@ var Fields = []Field{
 	{Name: "monat", Aliases: []string{"month"}, Date: true, Default: "MM"},
 	{Name: "ort", Aliases: []string{"place"}},
 	{Name: "kategorie", Aliases: []string{"category"}},
-	{Name: "album", Aliases: []string{"folder", "ordner"}},
 	{Name: "kamera", Aliases: []string{"camera"}},
 	{Name: "typ", Aliases: []string{"kind", "type"}},
 	{Name: "schlagwort", Aliases: []string{"keyword"}},

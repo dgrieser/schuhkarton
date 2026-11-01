@@ -218,6 +218,7 @@ type Library struct {
 	rules    atomic.Pointer[compiledRules]
 	rulesJob rulesJob
 	editGen  atomic.Int64 // counts metadata edits, so plans notice them
+	closing  atomic.Bool  // Close has begun: no new filing runs
 	// rulesChunkHook runs before each chunk of a filing run (tests only)
 	rulesChunkHook func(start int)
 	editMu         sync.Mutex           // guards edits
@@ -294,6 +295,9 @@ func Open(opt Options) (*Library, error) {
 
 // Close stops helpers and writes pending state.
 func (l *Library) Close() {
+	l.rulesJob.mu.Lock()
+	l.closing.Store(true)
+	l.rulesJob.mu.Unlock()
 	if l.stopBG != nil {
 		l.stopBG()
 	}

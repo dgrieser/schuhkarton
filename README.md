@@ -225,9 +225,8 @@ Dokumente/{jahr}/{datum:MM MMMM} {kategorie}     → Dokumente/2023/03 März Rec
 ```
 
 - Fields: `jahr`, `monat`, `datum`, `ort`, `kategorie`, `kamera`, `typ`,
-  `schlagwort`, `person`, `album` (the current folder); the English names
-  `year`, `month`, `date`, `place`, `category`, `camera`, `kind`, `keyword`
-  work as well.
+  `schlagwort`, `person`; the English names `year`, `month`, `date`, `place`,
+  `category`, `camera`, `kind`, `keyword` work as well.
 - `{datum:…}` formats the capture date with Unicode (CLDR/ICU) date symbols:
   `yyyy` 2025, `yy` 25, `MM` 07, `M` 7, `MMMM` Juli, `MMM` Jul, `dd` 05,
   `EEEE` Samstag, `QQQ` Q3, `ww` ISO week; text in single quotes stays as it is.
@@ -246,8 +245,8 @@ place or category, several files at once in the background. Live Photo videos
 move with their photo, emptied folders are removed, and a place, date or
 category that so far came only from a folder name is kept as an edit.
 Documents are told by their folder, so a rule never moves a document out of
-a documents folder or a photo into one; such files stay and the preview says
-how many.
+a documents folder or a photo into one, nor a file into a folder the scan
+skips (`library.exclude`); such files stay and the preview says how many.
 
 ## Image descriptions (optional)
 
