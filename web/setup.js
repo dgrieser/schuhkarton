@@ -125,6 +125,12 @@
           ${lockNote('library.write_files')}
           <label class="field"><span>${t('Papierkorb nach so vielen Tagen leeren (0 = nie)')}</span>
             <input type="number" id="ftrash" min="0" max="3650" value="${C.library.trash_days ?? 30}" ${dis('library.trash_days')}>${lockNote('library.trash_days')}</label>
+          <label class="check"><input type="checkbox" id="fdupes" ${(C.dupes?.mode || 'on') === 'on' ? 'checked' : ''} ${dis('dupes.mode')}>
+            <span><b>${t('Duplikate suchen')}</b><br><span class="muted">${t('Vergleicht die Vorschaubilder (auch gedreht, verkleinert, neu gespeichert) und zeigt Admins doppelte Fotos und Serien. Läuft im Hintergrund, braucht kaum Rechenzeit.')}</span></span></label>
+          ${lockNote('dupes.mode')}
+          <label class="field"><span>${t('Empfindlichkeit')}</span><select id="fdsens" ${dis('dupes.sensitivity')}>
+            ${[['strict', t('streng – nur sehr sichere Treffer')], ['normal', t('normal')], ['loose', t('großzügig – mehr Treffer, mehr prüfen')]].map(([v, l]) => `<option value="${v}" ${(C.dupes?.sensitivity || 'normal') === v ? 'selected' : ''}>${l}</option>`).join('')}
+          </select>${lockNote('dupes.sensitivity')}</label>
           <label class="field"><span>${t('Ordner mit Dokumenten (Scans, Belege; standardmäßig ausgeblendet, kommagetrennt)')}</span>
           <input id="fdocs" value="${esc((C.library.documents || []).join(', '))}" ${dis('library.documents')}>${lockNote('library.documents')}</label>
           <label class="field"><span>${t('Diese Datei- und Ordnernamen auslassen (Muster, kommagetrennt)')}</span>
@@ -172,6 +178,9 @@
     $('#fmeta', el).onchange = (e) => { C.library.folder_meta = e.target.checked; };
     $('#fwrite', el).onchange = (e) => { C.library.write_files = e.target.checked; };
     $('#ftrash', el).oninput = (e) => { C.library.trash_days = Math.max(0, +e.target.value || 0); };
+    C.dupes ||= { mode: 'on', sensitivity: 'normal', similar_minutes: 10 };
+    $('#fdupes', el).onchange = (e) => { C.dupes.mode = e.target.checked ? 'on' : 'off'; };
+    $('#fdsens', el).onchange = (e) => { C.dupes.sensitivity = e.target.value; };
   }
 
   // --- step 2: storage ------------------------------------------------------------

@@ -144,6 +144,9 @@
     }
   }
 
+  // the building blocks for social.js and dupes.js
+  SK.ui = { dialog, confirmDlg, menu, snack, call, report, refreshAfter: (...a) => refreshAfter(...a), trashCount: () => trashCount() };
+
   // ---------------------------------------------------------------------------
   // edit: date, place, category, position, text
   // ---------------------------------------------------------------------------

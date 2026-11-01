@@ -223,6 +223,8 @@ func libOptions(cfg *config.Config) gallery.Options {
 			Python: python, ModelsDir: cfg.Faces.ModelsDir,
 		},
 		AI: aiOptions(cfg),
+		Dupes: gallery.DupeOptions{Off: cfg.Dupes.Mode == "off", Sensitivity: cfg.Dupes.Sensitivity,
+			SimilarWindow: time.Duration(cfg.Dupes.SimilarMinutes) * time.Minute},
 	}
 }
 

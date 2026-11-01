@@ -38,6 +38,14 @@ or another one.
   people keep their own favorites and name faces. Anybody can register; an
   admin approves new accounts or creates them. Admins also manage the
   settings and the photos.
+- **Duplicates:** finds identical files, the same picture in other copies
+  (smaller, recompressed, turned, another format, WhatsApp) and series of
+  nearly the same shot, and suggests the best copy. Admins compare side by
+  side and clean up with one tap; what the copies knew moves to the one that
+  stays.
+- **Notes and marks:** people with an account leave notes on photos (for
+  everybody, searchable) and mark photos for deletion (hidden for them, an
+  admin decides).
 - German and English (the browser's language, switchable in the sidebar); the
   search syntax works in both (`ort:`/`place:`, `monat:juni`/`month:june`).
 - Light, dark or system theme. Pinch the grid to resize it, long press to
@@ -139,6 +147,47 @@ switches above every gallery add documents or hide photos or videos, in any
 mix, remembered per device. A search that hits hidden documents says so and
 offers to show them; `typ:dokument` (`type:document`), `kategorie:` and
 `album:Dokumente` always include them. *Alben* shows everything.
+
+## Duplicates (admins)
+
+Schuhkarton compares the thumbnails in the background (a few milliseconds
+per photo, no container needed): several perceptual hashes for every turn
+and mirror image, plus colours and aspect ratio. *Duplikate* in the sidebar
+shows what it found:
+
+- **Identisch:** the same file, byte for byte.
+- **Gleich:** the same picture as another copy: smaller, saved again,
+  turned or mirrored, in another format, without metadata (WhatsApp).
+- **Ähnlich:** a series: nearly the same shot within a few minutes. Two
+  photos with camera times seconds apart are never "gleich".
+
+Each group suggests the best copy and says why (resolution, original
+format, camera date, position, Live Photo, favorites, named people …).
+Compare the copies side by side (differences highlighted; tap a picture to
+zoom), pick what stays, apply. On a desktop: ←/→ groups, 1–9 pick, Enter
+apply, I "Keine Duplikate". *Alle Vorschläge übernehmen* cleans up every
+identical and same group at once. The copies that go land in the trash
+(undo there); favorites of every account, names of faces, place, category,
+text, position, a camera date, notes and the AI description move to the
+copy that stays. "Keine Duplikate" remembers that photos only look alike.
+
+`dupes.sensitivity` (strict, normal, loose) trades sure matches for more
+matches; `dupes.mode: off` switches the search off. Photos of the same scene
+with a different framing are beyond perceptual hashes.
+
+## Notes and marks for deletion
+
+Everybody with an account can write notes on a photo or video (in the
+details: who, what, where). Everybody who can see the photo reads them; the
+search finds them in plain words, with `notiz:` / `note:` and with
+`typ:notiz` / `type:note`. Authors change and delete their own notes,
+admins any.
+
+The flag in the viewer (key **M**) or in the selection marks photos for
+deletion: they disappear for the account that marked them and show up in
+*Vorgemerkt*, where they can be brought back. Admins see every account's
+marks there (*Alle Konten*, the most marked first) and move them to the
+trash or remove the marks.
 
 ## Editing (admins)
 
@@ -283,6 +332,10 @@ ui:
   language: auto              # default for new devices: auto (the browser's), de, en
   map_tiles: https://tile.openstreetmap.org/{z}/{x}/{y}.png
   map_attribution: © OpenStreetMap
+dupes:
+  mode: "on"                  # search for duplicates; off
+  sensitivity: normal         # strict, normal, loose
+  similar_minutes: 10         # a series: photos at most this far apart
 backup:
   dir: ""                     # e.g. /media/usb/schuhkarton; empty: no backup
   interval: 24h               # 0: only with "Jetzt sichern"
@@ -318,7 +371,7 @@ Originals change only when an admin edits, rotates, moves or deletes them
 (see [Editing](#editing-admins)). Everything derived lives in the cache:
 `index.gob.gz`, `thumbs/` (thumbnails, previews, video previews, transcodes),
 `faces/` (crops), `people.json` (names), `favorites.json` (per account),
-`edits.json` (admin edits), `trash.json`, `token`. One process per cache; a second one refuses to start. Accounts are
+`edits.json` (admin edits), `trash.json`, `notes.json`, `marks.json` (per account), `dupes.json` (hashes), `token`. One process per cache; a second one refuses to start. Accounts are
 not in the cache but in `users.json` next to the settings.
 
 Any folder layout works; Schuhkarton never sorts or renames files on its own.

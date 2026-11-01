@@ -81,6 +81,7 @@ func New(ctx context.Context, o Options) http.Handler {
 	mux.HandleFunc("GET /o/{id}", s.original)
 	mux.HandleFunc("GET /v/{id}", s.video)
 	s.accountRoutes(mux)
+	s.socialRoutes(mux)
 	s.adminRoutes(mux, s.requireAdmin)
 	if o.Setup != nil {
 		mux.Handle("/setup", o.Setup)
@@ -226,6 +227,8 @@ type compactItem struct {
 	Pp     []string `json:"pp,omitempty"`
 	Approx bool     `json:"ap,omitempty"`
 	Doc    bool     `json:"dc,omitempty"`
+	Mark   bool     `json:"mk,omitempty"` // marked for deletion by the signed-in account (hidden for it)
+	Notes  int      `json:"nt,omitempty"` // number of notes
 }
 
 func (s *Server) items(w http.ResponseWriter, r *http.Request) {
@@ -239,7 +242,7 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 		c := compactItem{ID: it.ID, K: uint8(it.Kind), T: it.Taken, A: round(it.Aspect, 3), V: it.Key()[:8],
 			P: it.Place, Al: s.lib.AlbumOf(it), C: it.Category, D: round(it.Duration, 1),
 			F: s.lib.IsFav(user, it), X: it.Desc != "", Approx: it.TakenSrc == "folder" || it.TakenSrc == "mtime",
-			Doc: s.lib.IsDocument(it)}
+			Doc: s.lib.IsDocument(it), Mark: s.lib.IsMarked(user, it), Notes: s.lib.NoteCount(it)}
 		if it.GPS {
 			c.La, c.Lo = round(it.Lat, 5), round(it.Lon, 5)
 		}
@@ -294,6 +297,15 @@ func (s *Server) item(w http.ResponseWriter, r *http.Request) {
 	}
 	if ed := s.lib.EditedFields(it); len(ed) > 0 {
 		res["edited"] = ed
+	}
+	res["notes"] = notesOut(s.lib.NotesOf(it))
+	if u := userName(r); u != "" {
+		res["marked"] = s.lib.IsMarked(u, it)
+	}
+	if isAdmin(r) {
+		if m := s.lib.MarkedBy(it); len(m) > 0 {
+			res["markedBy"] = m
+		}
 	}
 	if a := s.lib.AIOf(it); a != nil {
 		res["ai"] = map[string]any{"de": a.De, "en": a.En, "tagsDe": a.TagsDe, "tagsEn": a.TagsEn, "people": a.People, "model": a.Model}

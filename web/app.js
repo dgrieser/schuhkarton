@@ -103,9 +103,11 @@
 
   async function loadItems() {
     const res = await api('/api/items');
-    S.items = res.items;
-    for (const it of S.items) it.dc = !!it.dc; // the server knows the document folders
-    S.byId = new Map(S.items.map((it) => [it.id, it]));
+    for (const it of res.items) it.dc = !!it.dc; // the server knows the document folders
+    // what this account marked for deletion is hidden everywhere but in "Vorgemerkt"
+    S.items = res.items.filter((it) => !it.mk);
+    S.marked = res.items.filter((it) => it.mk);
+    S.byId = new Map(res.items.map((it) => [it.id, it]));
     S.version = res.version;
     S.loadedAt = Date.now();
     updateCounts();
@@ -1372,14 +1374,14 @@
     weekday: 'wochentag', day: 'tag', time: 'tageszeit', zeit: 'tageszeit', type: 'typ', kind: 'typ', camera: 'kamera', category: 'kategorie', date: 'datum', file: 'datei' };
   const KEY_EN = { ort: 'place', jahr: 'year', monat: 'month', jahreszeit: 'season', wochentag: 'weekday', tag: 'day', tageszeit: 'time', typ: 'type',
     kamera: 'camera', kategorie: 'category', album: 'folder', datum: 'date', datei: 'file' };
-  const KIND_LABEL = { foto: 'Fotos', video: 'Videos', live: 'Live Photos', selfie: 'Selfies', screenshot: 'Screenshots', panorama: 'Panoramen', text: 'Mit Text im Bild', gps: 'Mit Ortsangabe', favorit: 'Favoriten' };
+  const KIND_LABEL = { foto: 'Fotos', video: 'Videos', live: 'Live Photos', selfie: 'Selfies', screenshot: 'Screenshots', panorama: 'Panoramen', text: 'Mit Text im Bild', notiz: 'Mit Notiz', gps: 'Mit Ortsangabe', favorit: 'Favoriten' };
   // words of the date and kind filters: German (canonical) → English
   const WORD_EN = {
     ...Object.fromEntries(MONTHS_DE.map((m, i) => [m.toLowerCase(), ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'][i]])),
     ...Object.fromEntries(DAYS_DE.map((d, i) => [d.toLowerCase(), ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'][i]])),
     frühling: 'spring', sommer: 'summer', herbst: 'autumn', winter: 'winter', wochenende: 'weekend', werktag: 'workday',
     morgens: 'morning', mittags: 'noon', nachmittags: 'afternoon', abends: 'evening', nachts: 'night',
-    foto: 'photo', video: 'video', live: 'live', selfie: 'selfie', screenshot: 'screenshot', panorama: 'panorama', text: 'text', gps: 'gps', favorit: 'favorite',
+    foto: 'photo', video: 'video', live: 'live', selfie: 'selfie', screenshot: 'screenshot', panorama: 'panorama', text: 'text', notiz: 'note', gps: 'gps', favorit: 'favorite',
   };
   const WORD_DE = Object.fromEntries(Object.entries(WORD_EN).map(([de, en]) => [en, de]));
   Object.assign(WORD_DE, { fall: 'herbst', weekday: 'werktag', midday: 'mittags', photos: 'foto', favourite: 'favorit', favorites: 'favorit', fruhling: 'frühling', marz: 'märz' });
@@ -1704,7 +1706,7 @@
         let items = [];
         for (const h of res.hits || []) {
           const it = S.byId.get(h.id);
-          if (!it) continue;
+          if (!it || it.mk) continue;
           items.push(it);
           if (h.snip) snips.set(h.id, h.snip);
         }
@@ -1974,6 +1976,7 @@
         if (!s.aiError) bar(t('Beschreibungen'), s.aiDone, s.aiTodo, s.aiFail || 0);
         else if (Account.can('admin')) rows.push(`<div class="row"><span class="bad" title="${esc(t(s.aiError))}">${t('Beschreibungen angehalten')}: ${esc(t(s.aiError))}</span></div>`);
       }
+      if (s.dupeMode === 'on' && Account.can('admin')) bar(t('Duplikate prüfen'), s.dupeDone, s.dupeTodo);
       const bk = res.backup;
       if (bk?.running) { busy = true; rows.push(`<div class="row"><span>${t('Sicherung')}: ${esc(t(bk.phase || ''))} · ${t('{n} kopiert', { n: num(bk.copied) })}</span></div>`); }
       if (!rows.length) rows.push(`<div class="row"><span>${pl(s.photos, '{n} Foto', '{n} Fotos')} · ${pl(s.videos, '{n} Video', '{n} Videos')}${s.people ? ` · ${pl(s.people, '{n} Person', '{n} Personen')}` : ''}</span>${missing ? `<span class="faint" title="${t('Diese Dateien lassen sich nicht lesen')}">${num(missing)} ${t('ohne Vorschau')}</span>` : ''}</div>`);
@@ -2131,6 +2134,7 @@
     t, LANG, S, VIEWS, Viewer, Gallery, Account, api, post, toast, esc, icon, $, $$, num, plural, pl, clamp, debounce,
     fmtLong, fmtTime, fmtMonth, thumbURL, largeURL, tileLayer, galleryView,
     route: () => route, render, rerender, loadItems, loadPeople, scheduleReload, selectionChanged, endSelection, updateCounts,
+    fmtSize, fmtDay, shown,
   };
 
   // ---------------------------------------------------------------------------

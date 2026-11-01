@@ -22,6 +22,12 @@ func (s *Server) adminRoutes(mux *http.ServeMux, admin func(http.HandlerFunc) ht
 	mux.HandleFunc("POST /api/admin/folders", admin(s.adminMkdir))
 	mux.HandleFunc("POST /api/admin/move", admin(s.adminMove))
 	mux.HandleFunc("POST /api/admin/describe", admin(s.adminDescribe))
+	mux.HandleFunc("GET /api/admin/marks", admin(s.adminMarks))
+	mux.HandleFunc("POST /api/admin/marks/clear", admin(s.adminClearMarks))
+	mux.HandleFunc("GET /api/admin/dupes", admin(s.adminDupes))
+	mux.HandleFunc("POST /api/admin/dupes/resolve", admin(s.adminResolveDupes))
+	mux.HandleFunc("POST /api/admin/dupes/ignore", admin(s.adminIgnoreDupes))
+	mux.HandleFunc("POST /api/admin/dupes/rescan", admin(s.adminRescanDupes))
 }
 
 // adminDescribe drops the AI descriptions of ids so they are made again.
