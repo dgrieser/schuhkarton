@@ -338,6 +338,18 @@
   }
   SK.redescribe = redescribe;
 
+  // text recognition: forget the texts so the background job reads them again
+  const ocrOn = () => !!S.config.ocr && S.config.ocr !== 'off';
+  async function rerecognize(ids) {
+    if (!admin() || !ids.length) return;
+    if (!ocrOn()) { toast(t('Texterkennung ist ausgeschaltet')); return; }
+    const r = await call('/api/admin/ocr', { ids });
+    if (!r) return;
+    toast(!r.changed ? t('Liegt außerhalb der Texterkennung (nur Dokumente)') : r.changed === 1 ? t('Text wird neu erkannt') : t('Text von {n} Elementen wird neu erkannt', { n: num(r.changed) }));
+    if (ids.length > 1) SK.endSelection();
+  }
+  SK.rerecognize = rerecognize;
+
   function rotateMenu(anchor, ids) {
     menu(anchor, [
       { icon: 'rotl', label: t('90° nach links'), run: () => rotate(ids, 270) },
@@ -469,6 +481,7 @@
     ] : []),
     { icon: 'move', label: t('Verschieben'), run: () => moveDialog(cur()) },
     ...(aiOn() ? [{ icon: 'spark', label: t('Neu beschreiben (KI)'), run: () => redescribe(cur()) }] : []),
+    ...(ocrOn() && V.it?.k === 1 ? [{ icon: 'file', label: t('Text neu erkennen'), run: () => rerecognize(cur()) }] : []),
     { icon: 'trash', label: t('In den Papierkorb'), danger: true, run: () => remove(cur()) },
   ]);
   $('#vEdit').onclick = (e) => (phone() ? vMenu(e.currentTarget) : editDialog(cur()));

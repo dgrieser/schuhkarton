@@ -56,7 +56,7 @@
       { id: 'fotos', title: t('Fotos'), render: renderFolders, ok: () => C.library.folders.length > 0 && C.library.folders.every((f) => { const c = checks.get(f.path); return !c || c.exists; }) },
       { id: 'speicher', title: t('Speicher'), render: renderStorage, ok: () => !!C.cache.dir },
       { id: 'gesichter', title: t('Gesichter'), render: renderFaces, ok: () => C.faces.mode !== 'remote' || !!C.faces.url },
-      { id: 'ki', title: t('KI'), render: renderAI, ok: () => C.ai.mode !== 'on' || (/^https?:\/\//.test(C.ai.url || '') && !!C.ai.model) },
+      { id: 'ki', title: t('KI'), render: renderAI, ok: () => !aiUsed() || (/^https?:\/\//.test(C.ai.url || '') && (C.ai.mode !== 'on' || !!C.ai.model) && (!ocrOn() || !!C.ai.ocr_model)) },
       { id: 'sicherung', title: t('Sicherung'), render: renderBackup, ok: () => true },
       { id: 'zugriff', title: t('Zugriff'), render: renderAccess, ok: () => /:\d+$/.test(C.server.listen) },
       S.needAdmin ? { id: 'konto', title: t('Admin'), render: renderAdmin, ok: adminOK }
@@ -351,25 +351,35 @@
     };
   }
 
-  // --- step 3b: AI descriptions ------------------------------------------------------
+  // --- step 3b: AI: descriptions and text recognition ---------------------------------
   const MITTWALD = 'https://llm.aihosting.mittwald.de/v1';
-  const aiPreset = () => (C.ai.mode !== 'on' ? 'off' : (C.ai.url || MITTWALD).replace(/\/$/, '') === MITTWALD ? 'mittwald' : 'custom');
+  const ocrOn = () => !!C.ai.ocr && C.ai.ocr !== 'off';
+  const aiUsed = () => C.ai.mode === 'on' || ocrOn();
+  const aiPreset = () => (!aiUsed() ? 'off' : (C.ai.url || MITTWALD).replace(/\/$/, '') === MITTWALD ? 'mittwald' : 'custom');
+  let ocrTest = null; // last text recognition test
+  let connTest = null; // last model list or connection error
   function renderAI(el) {
     const preset = aiPreset();
     if (aiKeyField === null) aiKeyField = C.ai.api_key_env ? `$${C.ai.api_key_env}` : (C.ai.api_key || '');
     const langs = C.ai.languages || ['de', 'en'];
     const models = aiModels || [];
-    const choice = (v, title, text) => `<label class="choice ${preset === v ? 'on' : ''}"><input type="radio" name="aim" value="${v}" ${preset === v ? 'checked' : ''} ${dis('ai.mode')}>
+    const choice = (name, v, cur, title, text, off) => `<label class="choice ${cur === v ? 'on' : ''}"><input type="radio" name="${name}" value="${v}" ${cur === v ? 'checked' : ''} ${off}>
       <b>${title}</b><span class="muted">${text}</span></label>`;
+    const modelField = (id, value, key) => (models.length
+      ? `<select id="${id}" ${dis(key)}>${[...new Set([value, ...models])].filter(Boolean).map((m) => `<option ${m === value ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select>`
+      : `<input id="${id}" value="${esc(value || '')}" spellcheck="false" ${dis(key)}>`);
+    const ocr = C.ai.ocr || 'off';
+    // the service can be chosen unless both uses are fixed (e.g. descriptions locked off, text recognition free)
+    const svcDis = locked('ai.mode') && locked('ai.ocr') ? 'disabled' : '';
     el.innerHTML = `
       <section class="card">
-        <h2>${t('Fotos beschreiben lassen?')}</h2>
-        <p class="muted">${t('Ein KI-Modell schreibt zu jedem Foto eine kurze Beschreibung und Stichwörter, auf Deutsch und Englisch. Dann findet die Suche auch „Hund im Schnee“ oder „birthday cake“. Dafür wird jedes Foto verkleinert an den gewählten Dienst geschickt. Ohne KI funktioniert alles andere genauso.')}</p>
+        <h2>${t('KI für Beschreibungen und Text?')}</h2>
+        <p class="muted">${t('Ein KI-Modell kann zu jedem Foto eine kurze Beschreibung und Stichwörter schreiben (Deutsch und Englisch) und den Text in Dokumenten und Fotos lesen, auch Handschrift. Die Suche findet dann „Hund im Schnee“ oder Wörter auf einem Zettel. Dafür werden die Bilder verkleinert an den gewählten Dienst geschickt. Ohne KI funktioniert alles andere genauso.')}</p>
         <div class="choices">
-          ${choice('off', t('Aus'), t('Keine Beschreibungen. Später jederzeit einschaltbar.'))}
-          ${choice('mittwald', t('mittwald AI hosting'), t('Gehostete Modelle in Deutschland, braucht einen API-Schlüssel.'))}
-          ${choice('custom', t('Eigener Dienst'), t('OpenAI-kompatible API, z.B. vLLM oder Ollama im eigenen Netz.'))}
-        </div>${lockNote('ai.mode')}
+          ${choice('aim', 'off', preset, t('Aus'), t('Keine Beschreibungen, keine Texterkennung. Später jederzeit einschaltbar.'), svcDis)}
+          ${choice('aim', 'mittwald', preset, t('mittwald AI hosting'), t('Gehostete Modelle in Deutschland, braucht einen API-Schlüssel. Texterkennung mit GLM-OCR.'), svcDis)}
+          ${choice('aim', 'custom', preset, t('Eigener Dienst'), t('OpenAI-kompatible API, z.B. vLLM oder Ollama im eigenen Netz.'), svcDis)}
+        </div>${svcDis ? lockNote('ai.mode') : ''}
       </section>
       ${preset === 'off' ? '' : `<section class="card">
         <h2>${t('Verbindung')}</h2>
@@ -379,11 +389,14 @@
           ${S.aiKey?.mittwaldEnv && aiKeyField !== '$MITTWALD_LLM_API_KEY' ? `<button class="btn" id="aenv" title="${t('Den Schlüssel aus der Umgebungsvariablen nehmen; er wird dann nicht gespeichert.')}">$MITTWALD_LLM_API_KEY</button>` : ''}</div>
           <span class="muted small">${t('Den Schlüssel selbst eintragen oder eine Umgebungsvariable wie {v}; dann bleibt er nur dort.', { v: '<code>$MITTWALD_LLM_API_KEY</code>' })}</span>
           ${lockNote('ai.api_key')}</label>
-        <div class="row2">
-          <label class="field"><span>${t('Modell')}</span>
-            ${models.length ? `<select id="amodel" ${dis('ai.model')}>${[...new Set([C.ai.model, ...models])].filter(Boolean).map((m) => `<option ${m === C.ai.model ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select>`
-              : `<input id="amodel" value="${esc(C.ai.model || '')}" spellcheck="false" ${dis('ai.model')}>`}
-            ${lockNote('ai.model')}</label>
+        <div class="addrow"><button class="btn" id="amodels">${t('Modelle laden')}</button></div>
+        <div class="stat" id="cres"></div>
+      </section>
+      <section class="card">
+        <h2>${t('Fotos beschreiben')}</h2>
+        <label class="check"><input type="checkbox" id="adesc" ${C.ai.mode === 'on' ? 'checked' : ''} ${dis('ai.mode')}><span>${t('Jedes Foto und Video bekommt eine Beschreibung und Stichwörter')}</span></label>
+        ${C.ai.mode !== 'on' ? '' : `<div class="row2">
+          <label class="field"><span>${t('Modell')}</span>${modelField('amodel', C.ai.model, 'ai.model')}${lockNote('ai.model')}</label>
           <label class="field"><span>${t('Gleichzeitige Anfragen')}</span><input type="number" id="awork" min="1" max="16" value="${C.ai.workers || 2}" ${dis('ai.workers')}></label>
         </div>
         <div class="field"><span>${t('Sprachen')}</span>
@@ -391,24 +404,60 @@
             <label class="check"><input type="checkbox" data-lang="de" ${langs.includes('de') ? 'checked' : ''} ${dis('ai.languages')}><span>${t('Deutsch')}</span></label>
             <label class="check"><input type="checkbox" data-lang="en" ${langs.includes('en') ? 'checked' : ''} ${dis('ai.languages')}><span>${t('Englisch')}</span></label>
           </div></div>
-        <div class="addrow"><button class="btn" id="amodels">${t('Modelle laden')}</button><button class="btn primary" id="atest">${t('Verbindung testen')}</button></div>
+        <div class="addrow"><button class="btn primary" id="atest">${t('Beschreibung testen')}</button></div>
         <div class="stat" id="ares"></div>
-        <p class="muted small">${t('Der Test schickt ein kleines gezeichnetes Bild, kein Foto. Für Bilder braucht es ein Modell, das Bilder versteht (z.B. {m}).', { m: '<code>Qwen3.8-27B-NVFP4</code>' })}</p>
-      </section>`}`;
+        <p class="muted small">${t('Der Test schickt ein kleines gezeichnetes Bild, kein Foto. Für Bilder braucht es ein Modell, das Bilder versteht (z.B. {m}).', { m: '<code>Qwen3.8-27B-NVFP4</code>' })}</p>`}
+      </section>
+      <section class="card">
+        <h2>${t('Text erkennen (OCR)')}</h2>
+        <p class="muted">${t('Liest den Text in Bildern: Briefe, Rezepte, Notizen, Schilder. Der Text wird durchsucht und in den Details gezeigt. GLM-OCR liest auch Handschrift.')}</p>
+        <div class="choices">
+          ${choice('aocr', 'off', ocr, t('Aus'), t('Kein Text wird gelesen.'), dis('ai.ocr'))}
+          ${choice('aocr', 'documents', ocr, t('Nur Dokumente'), t('Bilder in Dokumente-Ordnern.'), dis('ai.ocr'))}
+          ${choice('aocr', 'all', ocr, t('Alle Fotos'), t('Jedes Foto; dauert länger und kostet mehr Tokens.'), dis('ai.ocr'))}
+        </div>${lockNote('ai.ocr')}
+        ${ocr === 'off' ? '' : `<div class="row2">
+          <label class="field"><span>${t('Modell')}</span>${modelField('omodel', C.ai.ocr_model, 'ai.ocr_model')}${lockNote('ai.ocr_model')}</label>
+          <label class="field"><span>${t('Gleichzeitige Anfragen')}</span><input type="number" id="owork" min="1" max="16" value="${C.ai.ocr_workers || 2}" ${dis('ai.ocr_workers')}></label>
+        </div>
+        <div class="addrow"><button class="btn primary" id="otest">${t('Texterkennung testen')}</button></div>
+        <div class="stat" id="ores"></div>
+        <p class="muted small">${t('Der Test schickt ein kleines gezeichnetes Bild mit Text, kein Foto. Empfohlen: {m}.', { m: '<code>GLM-OCR</code>' })}</p>`}
+      </section>
+      ${S.mode === 'settings' ? `<section class="card" id="aprogcard" hidden><h2>${t('Fortschritt')}</h2><div id="aprog"></div></section>` : ''}`}`;
     for (const r of $$('input[name=aim]', el)) r.onchange = () => {
-      if (r.value === 'off') C.ai.mode = 'off';
-      else {
-        C.ai.mode = 'on';
+      if (r.value === 'off') {
+        if (!locked('ai.mode')) C.ai.mode = 'off';
+        if (!locked('ai.ocr')) C.ai.ocr = 'off';
+      } else {
+        const wasOff = !aiUsed();
         if (r.value === 'mittwald') C.ai.url = MITTWALD;
         else if ((C.ai.url || MITTWALD) === MITTWALD) C.ai.url = 'http://localhost:8000/v1';
+        if (wasOff) {
+          if (!locked('ai.mode')) C.ai.mode = 'on';
+          // text recognition with GLM-OCR at mittwald; elsewhere only when descriptions cannot be switched on
+          if (!locked('ai.ocr') && (r.value === 'mittwald' || C.ai.mode !== 'on')) C.ai.ocr = 'documents';
+        }
         C.ai.model ||= 'Qwen3.8-27B-NVFP4';
+        C.ai.ocr_model ||= 'GLM-OCR';
       }
-      aiModels = null; aiTest = null;
+      aiModels = null; aiTest = null; ocrTest = null;
       renderAI(el);
       validate();
-      if (C.ai.mode === 'on') loadModels(el, true);
+      if (aiUsed()) loadModels(el, true);
     };
     if (preset === 'off') return;
+    drawAIProgress(el);
+    const keyHint = (r) => (r?.hasKey === false && preset === 'mittwald' ? `<div class="muted">${t('Kein API-Schlüssel angegeben.')}</div>` : '');
+    // connection: models found, or why not
+    const showConn = () => {
+      const r = connTest, box = $('#cres', el);
+      if (!r || !box) return;
+      const res = r.result || {};
+      box.innerHTML = res.error ? `<span class="bad">${icon('warn')}${esc(t(res.error))}</span>${keyHint(r)}`
+        : res.models ? `<span class="good">${icon('check')}${t('{n} Modelle gefunden', { n: res.models.length })}</span>` : '';
+    };
+    // description test: the answer for the drawn picture
     const showRes = () => {
       const r = aiTest, box = $('#ares', el);
       if (!r || !box) return;
@@ -420,43 +469,118 @@
         box.innerHTML = `<span class="good">${icon('check')}${t('Antwort in {s} s', { s: (res.ms / 1000).toFixed(1) })}${a.tokens ? ` · ${t('{n} Tokens', { n: num(a.tokens) })}` : ''}</span>
           <div class="muted">„${esc(txt)}“</div><div class="chips">${tags.slice(0, 10).map((x) => `<span class="chip">${esc(x)}</span>`).join('')}</div>`;
       } else if (res.error) {
-        box.innerHTML = `<span class="bad">${icon('warn')}${esc(t(res.error))}</span>${r.hasKey === false && preset === 'mittwald' ? `<div class="muted">${t('Kein API-Schlüssel angegeben.')}</div>` : ''}`;
-      } else if (res.models) {
-        box.innerHTML = `<span class="good">${icon('check')}${t('{n} Modelle gefunden', { n: res.models.length })}</span>`;
+        box.innerHTML = `<span class="bad">${icon('warn')}${esc(t(res.error))}</span>${keyHint(r)}`;
       }
     };
-    showRes();
-    const url = $('#aurl', el), key = $('#akey', el), model = $('#amodel', el);
+    // text recognition test: what the model read
+    const showOCR = () => {
+      const r = ocrTest, box = $('#ores', el);
+      if (!r || !box) return;
+      if (r.busy) { box.textContent = r.busy; return; }
+      const o = r.ocr || {};
+      box.innerHTML = o.error ? `<span class="bad">${icon('warn')}${esc(t(o.error))}</span>${keyHint(r)}`
+        : `<span class="good">${icon('check')}${t('Antwort in {s} s', { s: ((o.ms || 0) / 1000).toFixed(1) })}</span><div class="muted ocr-test">„${esc(o.text || '')}“</div>`;
+    };
+    showConn(); showRes(); showOCR();
+    const url = $('#aurl', el), key = $('#akey', el);
     if (url) url.oninput = () => { C.ai.url = url.value.trim(); aiModels = null; validate(); };
     key.oninput = () => { aiKeyField = key.value.trim(); C.ai.api_key = aiKeyField; };
     const envBtn = $('#aenv', el);
     if (envBtn) envBtn.onclick = () => { aiKeyField = '$MITTWALD_LLM_API_KEY'; C.ai.api_key = aiKeyField; aiModels = null; renderAI(el); loadModels(el, true); };
-    model.oninput = model.onchange = () => { C.ai.model = model.value.trim(); validate(); };
-    $('#awork', el).oninput = (e) => { C.ai.workers = Math.max(1, Math.min(16, +e.target.value || 1)); };
-    for (const c of $$('[data-lang]', el)) c.onchange = () => {
-      const l = $$('[data-lang]', el).filter((x) => x.checked).map((x) => x.dataset.lang);
-      if (!l.length) { c.checked = true; return; }
-      C.ai.languages = l;
-    };
     $('#amodels', el).onclick = () => loadModels(el, false);
-    $('#atest', el).onclick = async () => {
-      aiTest = { busy: t('Das Modell beschreibt ein Testbild …') };
-      showRes();
-      aiTest = await api('/api/setup/ai', { url: C.ai.url, key: aiKeyField, model: C.ai.model, describe: true }).catch((e) => ({ result: { error: e.message } }));
-      if (aiTest.result?.models?.length) aiModels = aiTest.result.models;
-      const keep = aiTest;
+    $('#adesc', el).onchange = (e) => {
+      C.ai.mode = e.target.checked ? 'on' : 'off';
+      C.ai.model ||= 'Qwen3.8-27B-NVFP4';
+      aiTest = null;
       renderAI(el);
-      aiTest = keep;
-      showRes();
+      validate();
     };
+    const model = $('#amodel', el);
+    if (model) {
+      model.oninput = model.onchange = () => { C.ai.model = model.value.trim(); validate(); };
+      $('#awork', el).oninput = (e) => { C.ai.workers = Math.max(1, Math.min(16, +e.target.value || 1)); };
+      for (const c of $$('[data-lang]', el)) c.onchange = () => {
+        const l = $$('[data-lang]', el).filter((x) => x.checked).map((x) => x.dataset.lang);
+        if (!l.length) { c.checked = true; return; }
+        C.ai.languages = l;
+      };
+      $('#atest', el).onclick = async () => {
+        aiTest = { busy: t('Das Modell beschreibt ein Testbild …') };
+        showRes();
+        aiTest = await api('/api/setup/ai', { url: C.ai.url, key: aiKeyField, model: C.ai.model, describe: true }).catch((e) => ({ result: { error: e.message } }));
+        if (aiTest.result?.models?.length) aiModels = aiTest.result.models;
+        const keep = aiTest;
+        renderAI(el);
+        aiTest = keep;
+        showRes();
+      };
+    }
+    for (const r of $$('input[name=aocr]', el)) r.onchange = () => {
+      C.ai.ocr = r.value;
+      C.ai.ocr_model ||= 'GLM-OCR';
+      ocrTest = null;
+      renderAI(el);
+      validate();
+    };
+    const omodel = $('#omodel', el);
+    if (omodel) {
+      omodel.oninput = omodel.onchange = () => { C.ai.ocr_model = omodel.value.trim(); validate(); };
+      $('#owork', el).oninput = (e) => { C.ai.ocr_workers = Math.max(1, Math.min(16, +e.target.value || 1)); };
+      $('#otest', el).onclick = async () => {
+        ocrTest = { busy: t('Das Modell liest ein Testbild …') };
+        showOCR();
+        ocrTest = await api('/api/setup/ai', { url: C.ai.url, key: aiKeyField, model: C.ai.ocr_model, ocr: true }).catch((e) => ({ ocr: { error: e.message } }));
+        showOCR();
+      };
+    }
+  }
+  // progress of the running jobs (settings only), every 5 s while the card
+  // is on the page; one timer, so rerenders do not add polls
+  let aiProgT = 0;
+  async function drawAIProgress(el) {
+    clearTimeout(aiProgT);
+    const card = $('#aprogcard', el), box = $('#aprog', el);
+    if (!card || !document.contains(card)) return;
+    const st = (await api('/api/status').catch(() => null))?.status;
+    if (!document.contains(card)) return; // replaced by a newer render, which polls itself
+    clearTimeout(aiProgT);
+    aiProgT = setTimeout(() => drawAIProgress(el), 5000);
+    const pl = (n, one, many) => t(n === 1 ? one : many, { n: num(n) });
+    const roughly = (h) => {
+      const minutes = Math.max(1, Math.round(h * 60));
+      if (h < 1) return pl(minutes, '{n} Minute', '{n} Minuten');
+      return h < 48 ? pl(Math.round(h), '{n} Stunde', '{n} Stunden') : pl(Math.round(h / 24), '{n} Tag', '{n} Tage');
+    };
+    // one block per job: ai (descriptions), ocr (text recognition)
+    const block = (p, done, stopped) => {
+      const lines = [], todo = st[`${p}Todo`], n = st[`${p}Done`], rate = st[`${p}Rate`];
+      if (st[`${p}PausedUntil`]) {
+        const until = new Date(st[`${p}PausedUntil`] * 1000).toLocaleTimeString(LANG === 'en' ? 'en-GB' : 'de-DE', { hour: '2-digit', minute: '2-digit' });
+        lines.push(`<span title="${esc(t(st[`${p}Error`] || ''))}">${t('Dienst ausgelastet, weiter um {t}', { t: until })}</span>`);
+      } else if (st[`${p}Error`]) {
+        lines.push(`<span class="bad">${icon('warn')}${stopped}: ${esc(t(st[`${p}Error`]))}</span>`);
+      } else if (rate > 0 && n < todo) {
+        lines.push(`${rate >= 60 ? t('{n} pro Minute', { n: num(Math.round(rate / 60)) }) : t('{n} pro Stunde', { n: num(Math.round(rate)) })} · ${t('noch etwa {d}', { d: roughly((todo - n) / rate) })}`);
+      }
+      if (st[`${p}Fail`]) lines.push(pl(st[`${p}Fail`], '{n} fehlgeschlagen', '{n} fehlgeschlagen'));
+      if (st[`${p}Tokens`]) lines.push(t('{n} Tokens bisher', { n: num(st[`${p}Tokens`]) }));
+      return `<p>${done}</p><div class="bar"><i style="width:${Math.min(100, (n / todo) * 100)}%"></i></div>
+        ${lines.length ? `<p class="muted small">${lines.join(' · ')}</p>` : ''}`;
+    };
+    const parts = [];
+    if (st?.aiMode === 'on' && st.aiTodo) parts.push(block('ai', t('{a} von {b} Fotos und Videos beschrieben', { a: num(st.aiDone), b: num(st.aiTodo) }), t('Beschreibungen angehalten')));
+    if (st?.ocrMode && st.ocrMode !== 'off' && st.ocrTodo) parts.push(block('ocr', t('Text in {a} von {b} Bildern gelesen', { a: num(st.ocrDone), b: num(st.ocrTodo) }), t('Texterkennung angehalten')));
+    card.hidden = !parts.length; // nothing started yet: look again
+    box.innerHTML = parts.join('');
   }
   async function loadModels(el, quiet) {
     const r = await api('/api/setup/ai', { url: C.ai.url, key: aiKeyField ?? '', model: C.ai.model, describe: false }).catch((e) => ({ result: { error: e.message } }));
     if (r.result?.models?.length) {
       aiModels = r.result.models;
       if (!aiModels.includes(C.ai.model) && aiModels.includes('Qwen3.8-27B-NVFP4')) C.ai.model = 'Qwen3.8-27B-NVFP4';
+      if (!aiModels.includes(C.ai.ocr_model) && aiModels.includes('GLM-OCR')) C.ai.ocr_model = 'GLM-OCR';
     }
-    if (!quiet || !r.result?.models) aiTest = r;
+    if (!quiet || !r.result?.models) connTest = r;
     if (STEPS[step]?.id === 'ki') { renderAI(el); validate(); }
   }
 
@@ -715,7 +839,9 @@
           ${row(t('Cache'), esc(C.cache.dir) + (importPath ? `<br><span class="muted">${t('übernimmt {x}', { x: esc(importPath) })}</span>` : ''))}
           ${row(t('Vorschauen'), [C.cache.previews ? t('große vorab') : t('große bei Bedarf'), C.media.video_previews ? t('animierte Videos') : t('Videos ohne Animation'), C.media.transcode ? t('HEVC umwandeln') : ''].filter(Boolean).join(' · '))}
           ${row(t('Gesichter'), C.faces.mode === 'off' ? t('aus') : C.faces.mode === 'remote' ? `${t('Container')} ${esc(C.faces.url)}` : t('Python auf diesem Rechner'))}
-          ${row(t('KI'), C.ai.mode !== 'on' ? t('aus') : `${esc(aiPreset() === 'mittwald' ? 'mittwald AI hosting' : C.ai.url)} · ${esc(C.ai.model)} · ${(C.ai.languages || []).join(', ')}`)}
+          ${row(t('KI'), !aiUsed() ? t('aus') : [esc(aiPreset() === 'mittwald' ? 'mittwald AI hosting' : C.ai.url),
+            C.ai.mode === 'on' ? `${t('Beschreibungen')}: ${esc(C.ai.model)} (${(C.ai.languages || []).join(', ')})` : '',
+            ocrOn() ? `${t('Texterkennung')}: ${esc(C.ai.ocr_model)} (${C.ai.ocr === 'all' ? t('alle Fotos') : t('Dokumente')})` : ''].filter(Boolean).join(' · '))}
           ${row(t('Sicherung'), C.backup.dir ? `${esc(C.backup.dir)} <span class="muted">${{ '1h': t('stündlich'), '24h': t('täglich'), '168h': t('wöchentlich'), '0': t('auf Knopfdruck') }[C.backup.interval] || esc(C.backup.interval)}</span>` : t('aus'))}
           ${row(t('Adresse'), esc(C.server.listen) + (tokenMode === 'off' ? ` · ${t('ohne Schlüssel')}` : tokenMode === 'new' ? ` · ${t('neuer Schlüssel')}` : ''))}
           ${row(t('Konten'), [S.needAdmin ? `${t('Admin')}: ${esc(admin.name)}` : '', C.access.anonymous ? t('ansehen ohne Konto') : t('nur mit Konto'), C.access.register ? t('Registrieren mit Freigabe') : t('Konten nur durch Admins')].filter(Boolean).join(' · '))}

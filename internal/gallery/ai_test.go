@@ -7,12 +7,14 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestParseAIAnswer(t *testing.T) {
@@ -73,6 +75,14 @@ func (f *fakeAI) server(t *testing.T) *httptest.Server {
 			if _, ok := req["chat_template_kwargs"]; ok && f.noKwarg {
 				w.WriteHeader(400)
 				io.WriteString(w, `{"error":{"message":"Unrecognized request argument: chat_template_kwargs"}}`)
+				return
+			}
+			if req["model"] == "GLM-OCR" { // text recognition: plain text, in a code fence like some models do
+				b, _ := json.Marshal(map[string]any{
+					"choices": []any{map[string]any{"message": map[string]any{"content": "```\nEinkaufszettel\n\n\nMilch  \nBrot\n```"}}},
+					"usage":   map[string]any{"total_tokens": 900},
+				})
+				w.Write(b)
 				return
 			}
 			if req["model"] != "vision-1" {
@@ -227,5 +237,105 @@ func TestAIDescriptionsSearchAndMove(t *testing.T) {
 	l2.aiJob.client.opt.Key = "nope"
 	if err := l2.describeAll(ctx); err == nil {
 		t.Fatal("expected the pass to stop on a wrong key")
+	}
+}
+
+func TestJobRate(t *testing.T) {
+	var r jobRate
+	t0 := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+	if got := r.perHour(t0); got != 0 {
+		t.Errorf("before the start: %v", got)
+	}
+	r.begin(t0)
+	for i := range 30 {
+		r.add(t0.Add(time.Duration(i+1) * 10 * time.Second))
+	}
+	if got := r.perHour(t0.Add(2 * time.Minute)); got != 0 {
+		t.Errorf("too early to tell: %v", got)
+	}
+	if got := r.perHour(t0.Add(10 * time.Minute)); got != 180 {
+		t.Errorf("30 in 10 minutes: %v, want 180/h", got)
+	}
+	// only the last hour counts
+	r.add(t0.Add(90 * time.Minute))
+	if got := r.perHour(t0.Add(100 * time.Minute)); got != 1 {
+		t.Errorf("one in the last hour: %v", got)
+	}
+}
+
+func TestAILoopPausesWhenBusy(t *testing.T) {
+	f := &fakeAI{}
+	srv := f.server(t)
+	root := t.TempDir()
+	writeTestJPEG(t, filepath.Join(root, "2020/a.jpg"), 64, 48)
+	l, err := Open(Options{Roots: []Root{{Name: "B", Path: root}}, CacheDir: t.TempDir(), Workers: 1,
+		AI: AIOptions{URL: srv.URL + "/v1", Key: "test-key", Model: "vision-1", Workers: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := l.Scan(ctx); err != nil {
+		t.Fatal(err)
+	}
+	f.status.Store(429)
+	l.bg.Add(1)
+	go l.aiLoop(ctx)
+	defer cancel()
+	l.kickAI()
+	waitFor := func(what string, ok func(Status) bool) Status {
+		t.Helper()
+		for range 200 {
+			if st := l.Status(); ok(st) {
+				return st
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		t.Fatalf("%s: %+v", what, l.Status())
+		return Status{}
+	}
+	st := waitFor("pause", func(s Status) bool { return s.AIPaused > 0 })
+	if st.AIError == "" || st.AIPaused < time.Now().Unix() || st.AIDone != 0 || st.AITodo != 1 {
+		t.Errorf("paused status: %+v", st)
+	}
+	// the service is back; a kick (a new scan) starts the job again
+	f.status.Store(0)
+	l.kickAI()
+	st = waitFor("done", func(s Status) bool { return s.AIDone == 1 })
+	if st.AIPaused != 0 || st.AIError != "" {
+		t.Errorf("after the pause: %+v", st)
+	}
+}
+
+func TestAIFailuresStayCounted(t *testing.T) {
+	f := &fakeAI{}
+	srv := f.server(t)
+	root := t.TempDir()
+	writeTestJPEG(t, filepath.Join(root, "2020/a.jpg"), 64, 48)
+	if err := os.WriteFile(filepath.Join(root, "2020/broken.jpg"), []byte("not a picture"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	l, err := Open(Options{Roots: []Root{{Name: "B", Path: root}}, CacheDir: t.TempDir(), Workers: 1,
+		AI: AIOptions{URL: srv.URL + "/v1", Key: "test-key", Model: "vision-1", Workers: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	ctx := context.Background()
+	if err := l.Scan(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.describeAll(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if st := l.Status(); st.AIDone != 2 || st.AITodo != 2 || st.AIFail != 1 {
+		t.Fatalf("first pass: %+v", st)
+	}
+	// the next pass does not try it again for a week, but still reports it
+	if err := l.describeAll(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if st := l.Status(); st.AIDone != 2 || st.AIFail != 1 || f.calls.Load() != 1 {
+		t.Errorf("second pass: %+v, calls %d", st, f.calls.Load())
 	}
 }

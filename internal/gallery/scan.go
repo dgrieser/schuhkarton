@@ -285,6 +285,7 @@ func (l *Library) Scan(ctx context.Context) error {
 	l.scannedOnce.Store(true)
 	l.media.kick()
 	l.kickAI()
+	l.ocrJob.kick()
 	l.PurgeTrash()
 	return nil
 }

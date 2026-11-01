@@ -29,6 +29,10 @@ func (l *Library) Start(ctx context.Context) {
 		l.bg.Add(1)
 		go l.aiLoop(ctx)
 	}
+	if l.ocrJob.client != nil {
+		l.bg.Add(1)
+		go l.ocrLoop(ctx)
+	}
 	if !l.opt.Dupes.Off {
 		l.bg.Add(1)
 		go l.dupeLoop(ctx)

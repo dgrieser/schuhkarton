@@ -1370,6 +1370,15 @@ func (l *Library) mergeInto(keep *Item, rem []*Item, by string, res *EditResult)
 			}
 		}
 	}
+	// the recognized text
+	if l.ocrOf(keep) == nil {
+		for _, it := range rem {
+			if o := l.ocrOf(it); o != nil {
+				l.setOCR(keep, o)
+				break
+			}
+		}
+	}
 }
 
 func iou(a, b Face) float64 {

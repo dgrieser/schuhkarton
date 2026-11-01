@@ -212,3 +212,33 @@ func TestDataFolderRelative(t *testing.T) {
 		t.Fatalf("after saving: %s", c.Cache.Dir)
 	}
 }
+
+func TestOCRSettings(t *testing.T) {
+	c := Defaults()
+	c.Library.Folders = []Folder{{Path: "/tmp"}}
+	c.normalize()
+	if c.AI.OCR != "off" || c.AI.OCRModel != "GLM-OCR" || c.AI.OCRWorkers != 2 || c.AI.Used() {
+		t.Fatalf("defaults: %+v", c.AI)
+	}
+	c.AI.OCR = "Documents"
+	c.normalize()
+	if c.AI.OCR != "documents" || !c.AI.Used() || c.Validate() != nil {
+		t.Fatalf("documents: %q used=%v err=%v", c.AI.OCR, c.AI.Used(), c.Validate())
+	}
+	c.AI.URL = "ftp://x"
+	if c.Validate() == nil {
+		t.Error("text recognition needs an http(s) address")
+	}
+	c.AI.URL, c.AI.OCR = MittwaldAIURL, "sometimes"
+	if c.Validate() == nil {
+		t.Error("unknown ai.ocr should be refused")
+	}
+	if err := c.applyEnv(func(k string) (string, bool) {
+		if k == "SCHUHKARTON_AI_OCR" {
+			return "all", true
+		}
+		return "", false
+	}); err != nil || c.AI.OCR != "all" || c.Locked("ai.ocr") == "" {
+		t.Errorf("env: %q %v", c.AI.OCR, err)
+	}
+}

@@ -838,12 +838,16 @@
       const shot = [d.fnumber ? `f/${d.fnumber}` : '', exp, d.iso ? `ISO ${d.iso}` : '', d.focal ? `${Math.round(d.focal * 10) / 10} mm` : ''].filter(Boolean).join(' · ');
       const mp = d.w && d.h ? `${d.w} × ${d.h}${d.kind === 1 ? ` · ${(d.w * d.h / 1e6).toFixed(1)} MP` : ''}` : '';
       const q = currentQuery();
-      let text = esc(d.desc || '');
-      if (q && text) {
-        for (const w of q.split(/\s+/).filter((x) => x.length > 2 && !x.includes(':'))) {
-          text = text.replace(new RegExp(`(${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi'), '<mark>$1</mark>');
+      const marked = (raw) => {
+        let h = esc(raw || '');
+        if (q && h) {
+          for (const w of q.split(/\s+/).filter((x) => x.length > 2 && !x.includes(':'))) {
+            h = h.replace(new RegExp(`(${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi'), '<mark>$1</mark>');
+          }
         }
-      }
+        return h;
+      };
+      const text = marked(d.desc), ocrText = marked(d.ocr);
       // AI description in the viewer's language (the other one as fallback)
       const ai = d.ai || null;
       let aiText = '', aiTags = [];
@@ -874,7 +878,10 @@
           ${aiText ? `<div class="ai-desc">${aiText}</div>` : ''}
           ${aiTags.length ? `<div class="chips">${aiTags.map((k) => `<a class="chip" href="#/suche/${encodeURIComponent(k)}">${esc(k)}</a>`).join('')}</div>` : ''}
           ${Account.can('admin') && S.config.ai === 'on' ? `<button class="link ai-redo" data-redesc>${t('Neu beschreiben')}</button>` : ''}` : ''}
-        ${d.desc ? `<h3>${t('Text im Bild')}</h3><div class="text">${text}</div>` : ''}
+        ${d.ocr ? `<h3>${t('Text im Bild')} <span class="ai-badge" title="${t('Von einem KI-Modell gelesen')}">${t('erkannt')}</span></h3><div class="text ocr">${ocrText}</div>
+          ${Account.can('admin') && d.ocrOn ? `<button class="link ai-redo" data-reocr>${t('Neu erkennen')}</button>` : ''}`
+          : Account.can('admin') && d.ocrOn ? `<button class="link ai-redo" data-reocr>${t('Text neu erkennen')}</button>` : ''}
+        ${d.desc ? `<h3>${d.ocr ? t('Text aus der Datei') : t('Text im Bild')}</h3><div class="text">${text}</div>` : ''}
         ${d.keywords?.length || d.category ? `<h3>${t('Stichwörter')}</h3><div class="chips">${[d.category, ...(d.keywords || [])].filter((v, i, a) => v && a.indexOf(v) === i).map((k) => `<a class="chip" href="#/suche/${encodeURIComponent(k)}">${icon('tag')}${esc(k)}</a>`).join('')}</div>` : ''}
         ${camera || shot ? `<h3>${t('Kamera')}</h3><div class="kv">${icon('camera')}<div>${esc(camera || t('Unbekannt'))}${d.lens ? `<div class="muted">${esc(d.lens)}</div>` : ''}${shot ? `<div class="muted">${esc(shot)}</div>` : ''}</div></div>` : ''}
         <h3>${t('Datei')}</h3>
@@ -887,6 +894,7 @@
         L.circleMarker([d.lat, d.lon], { radius: 7, color: '#fff', weight: 2, fillColor: '#f3b549', fillOpacity: 1 }).addTo(mm);
       }
       $('[data-redesc]', p)?.addEventListener('click', () => window.SK?.redescribe?.([it.id]));
+      $('[data-reocr]', p)?.addEventListener('click', () => window.SK?.rerecognize?.([it.id]));
       for (const a of $$('[data-face]', p)) {
         a.onclick = (e) => {
           const f = d.faces[+a.dataset.face];
@@ -2011,6 +2019,29 @@
   // ---------------------------------------------------------------------------
   // status, theme, menu
   // ---------------------------------------------------------------------------
+  // how long something takes, roughly: "40 Min.", "5 Std.", "3 Tage"
+  function roughly(hours) {
+    const minutes = Math.max(1, Math.round(hours * 60));
+    if (hours < 1) return pl(minutes, '{n} Minute', '{n} Minuten');
+    if (hours < 48) return pl(Math.round(hours), '{n} Stunde', '{n} Stunden');
+    return pl(Math.round(hours / 24), '{n} Tag', '{n} Tage');
+  }
+
+  // the line below a remote job's bar (descriptions: ai, text recognition: ocr):
+  // paused until …, or speed and time left, and failures
+  function jobNote(s, p) {
+    const parts = [], paused = s[`${p}PausedUntil`], rate = s[`${p}Rate`], fail = s[`${p}Fail`];
+    if (paused) {
+      const until = new Date(paused * 1000).toLocaleTimeString(LANG === 'en' ? 'en-GB' : 'de-DE', { hour: '2-digit', minute: '2-digit' });
+      parts.push(`<span title="${esc(t(s[`${p}Error`] || ''))}">${t('Dienst ausgelastet, weiter um {t}', { t: until })}</span>`);
+    } else if (rate > 0) {
+      const left = (s[`${p}Todo`] - s[`${p}Done`]) / rate;
+      parts.push(`<span>${rate >= 60 ? t('{n} pro Minute', { n: num(Math.round(rate / 60)) }) : t('{n} pro Stunde', { n: num(Math.round(rate)) })} · ${t('noch etwa {d}', { d: roughly(left) })}</span>`);
+    }
+    if (fail) parts.push(`<span class="faint" title="${esc(t('Diese Dateien ließen sich nicht lesen; sie werden nach einer Woche noch einmal versucht.'))}">${pl(fail, '{n} fehlgeschlagen', '{n} fehlgeschlagen')}</span>`);
+    return parts.join('');
+  }
+
   let statusT = 0;
   const stalled = {}; // progress label -> last count and since when
   const scheduleReload = debounce(async () => { await loadItems(); if (!Viewer.open_) rerender(); }, 300);
@@ -2023,15 +2054,18 @@
       S.status = s;
       const rows = [];
       // files that cannot be read (broken videos …) count as done: from the server (…Fail), or when nothing moved for 90 s
-      let missing = 0;
-      const bar = (label, a, b, fail = 0) => {
+      let missing = 0, noAI = 0, noOCR = 0, first = null; // first: share done of the first running job, for the ring in the narrow sidebar
+      // steady: a slow job (descriptions) that is never taken for unreadable files; note: a line below the bar
+      const bar = (label, a, b, fail = 0, { steady = false, note = '' } = {}) => {
         if (!(b > 0)) return;
         if (a + fail >= b) { missing = Math.max(missing, fail); return; }
         const st = stalled[label], now = Date.now();
         if (!st || st.a !== a || st.b !== b) stalled[label] = { a, b, t: now };
-        else if (!scanning && now - st.t > 90000) { missing = Math.max(missing, b - a); return; }
+        else if (!steady && !scanning && now - st.t > 90000) { missing = Math.max(missing, b - a); return; }
         busy = true;
+        first ??= a / b;
         rows.push(`<div class="row"><span>${label} ${num(a)} / ${num(b)}</span><span class="bar"><i style="width:${(a / b) * 100}%"></i></span></div>`);
+        if (note) rows.push(`<div class="row sub">${note}</div>`);
       };
       if (scanning) {
         busy = true;
@@ -2042,10 +2076,19 @@
       bar(t('Vorschaubilder'), s.thumbs + s.posters, s.photos + s.videos + liveVideos, s.thumbFail || 0);
       bar(t('Video-Vorschauen'), s.previews, s.videos + liveVideos, s.previewFail || 0);
       if (s.faceDetection && s.faceTodo) bar(t('Gesichter'), s.faces, s.faceTodo);
-      if (s.aiMode === 'on') {
-        if (!s.aiError) bar(t('Beschreibungen'), s.aiDone, s.aiTodo, s.aiFail || 0);
-        else if (Account.can('admin')) rows.push(`<div class="row"><span class="bad" title="${esc(t(s.aiError))}">${t('Beschreibungen angehalten')}: ${esc(t(s.aiError))}</span></div>`);
-      }
+      // remote jobs: descriptions and text recognition; failures go into the summary once all is tried
+      const remote = (p, label, stopped) => {
+        if (s[`${p}Error`] && !s[`${p}PausedUntil`]) {
+          if (Account.can('admin')) rows.push(`<div class="row"><span class="bad" title="${esc(t(s[`${p}Error`]))}">${stopped}: ${esc(t(s[`${p}Error`]))}</span></div>`);
+          return 0;
+        }
+        const wasBusy = busy;
+        bar(label, s[`${p}Done`], s[`${p}Todo`], 0, { steady: true, note: jobNote(s, p) });
+        if (s[`${p}PausedUntil`]) busy = wasBusy; // nothing moves until the pause ends
+        return s[`${p}Done`] >= s[`${p}Todo`] && Account.can('admin') ? s[`${p}Fail`] || 0 : 0;
+      };
+      if (s.aiMode === 'on') noAI = remote('ai', t('Beschreibungen'), t('Beschreibungen angehalten'));
+      if (s.ocrMode && s.ocrMode !== 'off') noOCR = remote('ocr', t('Texterkennung'), t('Texterkennung angehalten'));
       if (s.dupeMode === 'on' && Account.can('admin')) bar(t('Duplikate prüfen'), s.dupeDone, s.dupeTodo);
       if (s.rulesRunning && Account.can('admin')) { busy = true; bar(t('Einsortieren'), s.rulesDone, s.rulesTodo, s.rulesFail || 0); }
       if (s.offline?.length) rows.push(`<div class="row"><span class="bad" title="${esc(t('Der bisherige Stand bleibt, bis der Ordner wieder da ist.'))}">${t('Nicht erreichbar')}: ${esc(s.offline.join(', '))}</span></div>`);
@@ -2055,8 +2098,12 @@
       }
       const bk = res.backup;
       if (bk?.running) { busy = true; rows.push(`<div class="row"><span>${t('Sicherung')}: ${esc(t(bk.phase || ''))} · ${t('{n} kopiert', { n: num(bk.copied) })}</span></div>`); }
-      if (!rows.length) rows.push(`<div class="row"><span>${pl(s.photos, '{n} Foto', '{n} Fotos')} · ${pl(s.videos, '{n} Video', '{n} Videos')}${s.people ? ` · ${pl(s.people, '{n} Person', '{n} Personen')}` : ''}</span>${missing ? `<span class="faint" title="${t('Diese Dateien lassen sich nicht lesen')}">${num(missing)} ${t('ohne Vorschau')}</span>` : ''}</div>`);
+      if (!rows.length) rows.push(`<div class="row"><span>${pl(s.photos, '{n} Foto', '{n} Fotos')} · ${pl(s.videos, '{n} Video', '{n} Videos')}${s.people ? ` · ${pl(s.people, '{n} Person', '{n} Personen')}` : ''}</span>${missing ? `<span class="faint" title="${t('Diese Dateien lassen sich nicht lesen')}">${num(missing)} ${t('ohne Vorschau')}</span>` : ''}${noAI ? `<span class="faint" title="${esc(t('Diese Dateien ließen sich nicht lesen; sie werden nach einer Woche noch einmal versucht.'))}">${num(noAI)} ${t('ohne Beschreibung')}</span>` : ''}${noOCR ? `<span class="faint" title="${esc(t('Diese Dateien ließen sich nicht lesen; sie werden nach einer Woche noch einmal versucht.'))}">${num(noOCR)} ${t('ohne Texterkennung')}</span>` : ''}</div>`);
       $('#status').innerHTML = rows.join('');
+      const mini = $('#statusMini');
+      mini.hidden = first === null;
+      mini.style.setProperty('--p', Math.round((first ?? 0) * 100));
+      mini.title = first === null ? '' : $$('#status .row').map((r) => [...r.children].map((c) => c.textContent).filter(Boolean).join(' · ')).join('\n');
       if (s.version !== S.version) {
         const age = Date.now() - S.loadedAt;
         if (!S.items.length || age > (busy ? 30000 : 3000)) {

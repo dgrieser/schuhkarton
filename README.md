@@ -372,11 +372,43 @@ name): then only the name is stored and the key stays in the environment.
 the model describe a small drawn picture (no photo).
 
 Descriptions are made in the background after the thumbnails, newest photos
-first, a few at a time (`ai.workers`); the sidebar shows the progress. They
-live in `ai.json` in the cache and follow moved and edited photos. A wrong
-key or model stops the job with a message in the sidebar; a busy service
-pauses it. Admins can have single photos or a selection described again.
-Names of people are never asked for or stored.
+first, a few at a time (`ai.workers`). The sidebar shows the progress with
+the speed over the last hour and the time left (in the narrow sidebar a ring,
+details on hover); *Einstellungen → KI* shows the same with failures and
+tokens used. They live in `ai.json` in the cache and follow moved and edited
+photos. A wrong key or model stops the job with a message in the sidebar. A
+busy service (rate limit, HTTP 429 or 5xx) pauses it for a minute, then up
+to 30 minutes, and the sidebar says until when. Admins can have single photos
+or a selection described again. Names of people are never asked for or
+stored.
+
+### Text recognition (OCR)
+
+The same service can read the text in pictures: letters, recipes, notes,
+receipts, signs, handwriting too. *Einstellungen → KI → Text erkennen*
+switches it on for **documents only** (pictures in documents folders) or
+**all photos**; it also works with descriptions off. The default model is
+`GLM-OCR` at mittwald AI hosting, which reads handwriting far better than
+classic OCR (Tesseract, PaddleOCR). Any vision model of an own service works
+too; models other than GLM-OCR get a plain "write down the text" prompt.
+
+Photos are sent from the original file, at most 2048 px on the long edge.
+The text lives in `ocr.json` in the cache, follows moved files, is found by
+the search (`text:` searches only text in pictures) and shows under *Text
+im Bild* in the details. A description in the file (`XMP-dc:Description`)
+shows below it as *Text aus der Datei*. Admins can have a picture read again
+(*Neu erkennen*). Progress, pauses and failures show like those of the
+descriptions.
+
+```yaml
+ai:
+  url: https://llm.aihosting.mittwald.de/v1
+  api_key_env: MITTWALD_LLM_API_KEY
+  mode: "off"        # descriptions
+  ocr: documents     # off | documents | all
+  ocr_model: GLM-OCR
+  ocr_workers: 2
+```
 
 ## Face recognition container
 
@@ -538,7 +570,7 @@ Originals change only when an admin edits, rotates, moves or deletes them
 (see [Editing](#editing-admins)). Everything derived lives in the cache:
 `index.gob.gz`, `thumbs/` (thumbnails, previews, video previews, transcodes),
 `faces/` (crops), `people.json` (names), `favorites.json` (per account),
-`edits.json` (admin edits), `trash.json`, `notes.json`, `marks.json` (per account), `dupes.json` (hashes), `token`. One process per cache; a second one refuses to start. Accounts are
+`edits.json` (admin edits), `trash.json`, `ai.json` (descriptions), `ocr.json` (text in pictures), `notes.json`, `marks.json` (per account), `dupes.json` (hashes), `token`. One process per cache; a second one refuses to start. Accounts are
 not in the cache but in `users.json` next to the settings.
 
 Any folder layout works; Schuhkarton never sorts or renames files on its own.
