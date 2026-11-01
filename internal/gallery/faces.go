@@ -280,7 +280,7 @@ func (s *peopleStore) cluster(items []faceSnap) {
 	}
 	s.mu.RUnlock()
 
-	people := buildPeople(items, labels, s.threshNew, s.threshNamed)
+	people := buildPeople(items, labels, s.threshNew, s.threshNamed, false)
 	byID := map[string]*Person{}
 	byFace := map[string]string{}
 	for _, p := range people {
@@ -336,8 +336,10 @@ func newPerson(refs []*faceRec, id, name string, taken map[string]int64) *Person
 	return p
 }
 
-// buildPeople groups the faces: named people from labels, the rest by similarity.
-func buildPeople(items []faceSnap, labels map[string]string, threshNew, threshNamed float32) []*Person {
+// buildPeople groups the faces: named people from labels, the rest by
+// similarity. Unnamed groups smaller than minCluster faces or with only one
+// photo are left out unless keepSmall is set.
+func buildPeople(items []faceSnap, labels map[string]string, threshNew, threshNamed float32, keepSmall bool) []*Person {
 	taken, all := faceRecs(items, labels)
 
 	// 1. named people from labels
@@ -405,7 +407,7 @@ func buildPeople(items []faceSnap, labels map[string]string, threshNew, threshNa
 	// build people
 	var people []*Person
 	mk := func(c *cluster, id, name string) {
-		if p := newPerson(c.refs, id, name, taken); p != nil && (name != "" || (p.Faces >= minCluster && p.Count >= 2)) {
+		if p := newPerson(c.refs, id, name, taken); p != nil && (name != "" || keepSmall || (p.Faces >= minCluster && p.Count >= 2)) {
 			p.cent = c.cent
 			people = append(people, p)
 		}

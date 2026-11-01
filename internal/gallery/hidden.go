@@ -28,11 +28,15 @@ type HiddenPerson struct {
 	Cover  FaceRef   `json:"cover"`
 	Sample []FaceRef `json:"sample"` // a few more faces to recognise the group
 	At     int64     `json:"at,omitempty"`
+	Loose  bool      `json:"loose,omitempty"` // single hidden faces of different people, shown together
 	keys   []string
 	recID  string
 }
 
-const hiddenSample = 6
+const (
+	hiddenSample = 6
+	looseID      = "h-einzeln"
+)
 
 // HidePerson hides all faces of a person and returns the id of the hidden
 // group, for ShowHidden.
@@ -113,7 +117,22 @@ func (s *peopleStore) show(items []faceSnap, id string) error {
 	var prior map[string]string
 	if i := slices.IndexFunc(s.hidden, func(h hiddenRec) bool { return h.ID == g.recID }); g.recID != "" && i >= 0 {
 		prior = s.hidden[i].Faces
-		s.hidden = slices.Delete(s.hidden, i, i+1)
+		// faces not shown now (their photo is in the trash, say) stay remembered
+		shown := map[string]bool{}
+		for _, k := range g.keys {
+			shown[k] = true
+		}
+		rest := map[string]string{}
+		for k, v := range prior {
+			if !shown[k] && s.labels[k] == labelHidden {
+				rest[k] = v
+			}
+		}
+		if len(rest) > 0 {
+			s.hidden[i].Faces = rest
+		} else {
+			s.hidden = slices.Delete(s.hidden, i, i+1)
+		}
 	}
 	for _, k := range g.keys {
 		if s.labels[k] != labelHidden {
@@ -173,16 +192,30 @@ func (s *peopleStore) hiddenGroups(items []faceSnap) []*HiddenPerson {
 			out = append(out, hiddenOf(p, r.At, r.ID))
 		}
 	}
-	// the other hidden faces, grouped among themselves
+	// the other hidden faces, grouped among themselves; groups too small to
+	// count as a person are listed together, so every hidden face can come back
 	only := make(map[string]string, len(all))
 	for _, f := range all {
 		if k := f.ref.key(); labels[k] != labelHidden || claimed[k] {
 			only[k] = labelHidden
 		}
 	}
-	for _, p := range buildPeople(items, only, s.threshNew, s.threshNamed) {
+	var loose []*faceRec
+	for _, p := range buildPeople(items, only, s.threshNew, s.threshNamed, true) {
+		if p.Faces < minCluster || p.Count < 2 {
+			for _, r := range p.refs {
+				loose = append(loose, byKey[r.key()])
+			}
+			continue
+		}
 		p.ID = "h-" + p.ID
 		out = append(out, hiddenOf(p, 0, ""))
+	}
+	sort.Slice(loose, func(a, b int) bool { return loose[a].quality > loose[b].quality })
+	if p := newPerson(loose, looseID, "", taken); p != nil {
+		h := hiddenOf(p, 0, "")
+		h.Loose = true
+		out = append(out, h)
 	}
 	return out
 }

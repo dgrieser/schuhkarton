@@ -396,6 +396,7 @@ window.I18N.en = {
   "ausgeblendet am {d}": "hidden on {d}",
   "früher ausgeblendet": "hidden earlier",
   "Ohne Namen": "Unnamed",
+  "Einzelne Gesichter": "Single faces",
   "Wieder zeigen": "Show again",
   "{n} – die Gesichter bleiben erhalten und lassen sich wieder zeigen.": "{n} – the faces are kept and can be shown again.",
   "Nichts ausgeblendet": "Nothing hidden",

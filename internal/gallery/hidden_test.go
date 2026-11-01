@@ -61,12 +61,44 @@ func TestHideAndShowPerson(t *testing.T) {
 	if len(s.hidden) != 0 {
 		t.Fatalf("record not removed: %+v", s.hidden)
 	}
-	// the old hidden face is listed as a group of its own only when large enough
-	for _, h := range s.hiddenGroups(snap) {
-		t.Fatalf("unexpected hidden group %+v", h)
+	// the single old hidden face is listed with the loose faces and can come back
+	hidden = s.hiddenGroups(snap)
+	if len(hidden) != 1 || !hidden[0].Loose || hidden[0].ID != looseID || hidden[0].Faces != 1 {
+		t.Fatalf("loose faces: %+v", hidden)
+	}
+	if err := s.show(snap, looseID); err != nil || s.labels["i5:0"] != "" {
+		t.Fatalf("loose face not shown: %v %q", err, s.labels["i5:0"])
 	}
 	if err := s.show(snap, "h-nope"); err == nil {
 		t.Fatal("unknown id accepted")
+	}
+}
+
+func TestShowHiddenWhilePhotoAway(t *testing.T) {
+	a := normalize([]float32{1, 0, 0, 0})
+	face := Face{Emb: a, Score: 0.9, W: .2, H: .2}
+	snap := []faceSnap{{id: "i1", faces: []Face{face}}, {id: "i2", faces: []Face{face}}, {id: "i3", faces: []Face{face}}}
+	s := newPeopleStore("", 0.48, 0.42)
+	s.labels["i1:0"] = "Anna"
+	s.labels["i3:0"] = "Anna"
+	s.cluster(snap)
+	hid, err := s.hide("n-anna")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// i3 is in the trash while the group is shown again
+	if err := s.show(snap[:2], hid); err != nil {
+		t.Fatal(err)
+	}
+	if s.labels["i1:0"] != "Anna" || s.labels["i3:0"] != labelHidden || len(s.hidden) != 1 {
+		t.Fatalf("after partial show: labels %v records %+v", s.labels, s.hidden)
+	}
+	// back from the trash: its face can be shown again with its name
+	if err := s.show(snap, hid); err != nil {
+		t.Fatal(err)
+	}
+	if s.labels["i3:0"] != "Anna" || len(s.hidden) != 0 {
+		t.Fatalf("after full show: labels %v records %+v", s.labels, s.hidden)
 	}
 }
 

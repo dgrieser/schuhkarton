@@ -1881,8 +1881,8 @@
       const when = (h) => h.at ? t('ausgeblendet am {d}', { d: fmtLong(h.at) }) : t('früher ausgeblendet');
       const card = (h) => `<div class="hperson" data-hid="${esc(h.id)}">
         <span class="face"><img src="${faceURL(h.cover.item, h.cover.idx)}" alt="" loading="lazy"></span>
-        <div class="hinfo"><b class="${h.name ? '' : 'unnamed'}">${esc(h.name || t('Ohne Namen'))}</b>
-          <span>${pl(h.count, '{n} Foto', '{n} Fotos')} · ${when(h)}</span>
+        <div class="hinfo"><b class="${h.name || h.loose ? '' : 'unnamed'}">${esc(h.loose ? t('Einzelne Gesichter') : h.name || t('Ohne Namen'))}</b>
+          <span>${h.loose ? pl(h.faces, '{n} Gesicht', '{n} Gesichter') : pl(h.count, '{n} Foto', '{n} Fotos')} · ${when(h)}</span>
           <div class="hsample">${h.sample.map((f) => `<img src="${faceURL(f.item, f.idx)}" alt="" loading="lazy">`).join('')}</div></div>
         <button class="btn" type="button" data-show>${icon('eye')}<span>${t('Wieder zeigen')}</span></button></div>`;
       view.innerHTML = head(list.length ? t('{n} – die Gesichter bleiben erhalten und lassen sich wieder zeigen.', { n: pl(list.length, '{n} Gruppe', '{n} Gruppen') }) : '')
