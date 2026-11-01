@@ -309,14 +309,10 @@ func (c *Config) normalize() {
 	c.Server.Token = cmpOr(c.Server.Token, "auto")
 	c.Faces.Mode = cmpOr(strings.ToLower(c.Faces.Mode), "off")
 	c.Library.Rules.Locale = cmpOr(strings.ToLower(strings.TrimSpace(c.Library.Rules.Locale)), d.Library.Rules.Locale)
-	var rules []Rule
-	for _, r := range c.Library.Rules.List {
-		r.Name, r.When, r.Path = strings.TrimSpace(r.Name), strings.TrimSpace(r.When), strings.TrimSpace(r.Path)
-		if r.Path != "" {
-			rules = append(rules, r)
-		}
+	for i, r := range c.Library.Rules.List {
+		// a rule without path stays, so Validate reports it instead of it vanishing
+		c.Library.Rules.List[i] = Rule{Name: strings.TrimSpace(r.Name), When: strings.TrimSpace(r.When), Path: strings.TrimSpace(r.Path)}
 	}
-	c.Library.Rules.List = rules
 	c.AI.Mode = cmpOr(strings.ToLower(c.AI.Mode), "off")
 	c.Dupes.Mode = cmpOr(strings.ToLower(c.Dupes.Mode), d.Dupes.Mode)
 	c.Dupes.Sensitivity = cmpOr(strings.ToLower(c.Dupes.Sensitivity), d.Dupes.Sensitivity)

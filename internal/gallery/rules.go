@@ -143,20 +143,37 @@ func (l *Library) PreviewRules(rs RuleSet) RulePreview {
 		folders[i] = map[string]bool{}
 	}
 	stay := make([][]RuleExample, len(rs.List)) // examples of files already in place
-	// names in the target folders, so the preview shows the " (2)" a move will add
+	// names in the folders as the moves go, in the order a run moves them,
+	// so the preview shows the " (2)" a move will add
 	taken := map[string]map[string]bool{}
-	claim := func(it *Item, dir string) (string, bool) {
-		abs := filepath.Join(l.opt.Roots[it.Root].Path, filepath.FromSlash(dir))
+	left := map[string]bool{} // files that moved away before (folder/name)
+	names := func(abs string) map[string]bool {
 		m := taken[abs]
 		if m == nil {
 			m = map[string]bool{}
 			if es, err := os.ReadDir(abs); err == nil {
 				for _, e := range es {
-					m[e.Name()] = true
+					if !left[filepath.Join(abs, e.Name())] {
+						m[e.Name()] = true
+					}
 				}
 			}
 			taken[abs] = m
 		}
+		return m
+	}
+	leave := func(it *Item) {
+		for _, x := range []*Item{it, l.Get(it.LiveVideo)} {
+			if x == nil {
+				continue
+			}
+			fp := l.Path(x)
+			left[fp] = true
+			delete(names(filepath.Dir(fp)), filepath.Base(fp))
+		}
+	}
+	claim := func(it *Item, dir string) (string, bool) {
+		m := names(filepath.Join(l.opt.Roots[it.Root].Path, filepath.FromSlash(dir)))
 		name := path.Base(it.Rel)
 		ext := path.Ext(name)
 		stem := strings.TrimSuffix(name, ext)
@@ -203,6 +220,7 @@ func (l *Library) PreviewRules(rs RuleSet) RulePreview {
 		ex := RuleExample{ID: it.ID, From: it.Rel, To: joinRel(dir, path.Base(it.Rel))}
 		if ex.From != ex.To {
 			name, renamed := claim(it, dir)
+			leave(it)
 			if renamed {
 				ex.To = joinRel(dir, name)
 				st.Renamed++

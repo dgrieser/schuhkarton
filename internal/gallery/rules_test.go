@@ -291,3 +291,23 @@ func TestRulesChangeStopsRun(t *testing.T) {
 		t.Fatalf("progress %d/%d", d, todo)
 	}
 }
+
+func TestRulesPreviewFreedNames(t *testing.T) {
+	l, _ := testLib(t, "2019/06 Juni Lübbecke/a.jpg", "Archiv/a.jpg")
+	old := time.Date(2019, 6, 1, 12, 0, 0, 0, time.UTC).Unix()
+	// Archiv/a.jpg is newer, so it moves out before the other one moves in
+	rs := RuleSet{Locale: "de", List: []Rule{{When: "ort:Lübbecke", Path: "Archiv"}, {Path: "Rest"}}}
+	if it := byRel(l, "2019/06 Juni Lübbecke/a.jpg"); it.Taken != old {
+		t.Fatalf("setup: taken %d", it.Taken)
+	}
+	p := l.PreviewRules(rs)
+	if p.Moves != 2 || p.Rules[0].Renamed != 0 || p.Rules[0].Examples[0].To != "Archiv/a.jpg" {
+		t.Fatalf("preview: %+v", p)
+	}
+	l.SetRules(rs)
+	l.ApplyRules("")
+	waitRules(t, l)
+	if byRel(l, "Archiv/a.jpg") == nil || byRel(l, "Rest/a.jpg") == nil {
+		t.Fatalf("apply differs from preview: %v", rels(l))
+	}
+}
