@@ -636,6 +636,7 @@ body.has-scrubber .view { padding-right: 64px; }
   /* the drawer covers the tab bar, so its footer (progress, theme) stays visible */
   .side { z-index: 45; overflow-y: auto; padding-bottom: calc(14px + env(safe-area-inset-bottom)); }
   .v-actions { gap: 0; }
+  #vPrint { display: none; } /* the title needs the room; phones print from the details ("drucken") */
 }
 
 /* --- setup ------------------------------------------------------------------------ */
@@ -1156,4 +1157,20 @@ select.sel, .setup .user select, .setup #nrole, .adm-shift select {
   .ru-bar { bottom: calc(64px + env(safe-area-inset-bottom)); flex-wrap: wrap; }
   .ru-sum { flex-basis: 100%; }
   .ru-bar .btn { flex: 1; justify-content: center; }
+}
+
+/* --- printing the page while the viewer shows a picture (browser menu, share
+   menu): the picture alone, as large as the page allows. The print button
+   sends the full-size picture instead. Videos print the page as it is. */
+@media print {
+  body:has(> #viewer:not([hidden]) .v-media > img) > :not(#viewer),
+  #viewer:not([hidden]):has(.v-media > img) :is(.v-top, .v-nav, .v-strip, .v-info, .v-grip, .v-faces, .live-v) { display: none !important; }
+  #viewer:not([hidden]):has(.v-media > img), #viewer:not([hidden]):has(.v-media > img) :is(.v-main, .v-stage, .v-media) {
+    position: static !important; inset: auto !important; display: block !important; transform: none !important; will-change: auto !important;
+    width: auto !important; height: auto !important; background: none !important; overflow: visible !important;
+  }
+  #viewer:not([hidden]) .v-media > img {
+    position: fixed !important; inset: 0 !important; width: 100% !important; height: 100% !important;
+    max-width: none !important; max-height: none !important; object-fit: contain; filter: none !important; margin: 0 !important;
+  }
 }

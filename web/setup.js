@@ -56,7 +56,7 @@
       { id: 'fotos', title: t('Fotos'), render: renderFolders, ok: () => C.library.folders.length > 0 && C.library.folders.every((f) => { const c = checks.get(f.path); return !c || c.exists; }) },
       { id: 'speicher', title: t('Speicher'), render: renderStorage, ok: () => !!C.cache.dir },
       { id: 'gesichter', title: t('Gesichter'), render: renderFaces, ok: () => C.faces.mode !== 'remote' || !!C.faces.url },
-      { id: 'ki', title: t('KI'), render: renderAI, ok: () => !aiUsed() || (/^https?:\/\//.test(C.ai.url || '') && (C.ai.mode !== 'on' || !!C.ai.model) && (!ocrOn() || !!C.ai.ocr_model)) },
+      { id: 'ki', title: t('KI'), render: renderAI, ok: () => !aiUsed() || (/^https?:\/\//.test(C.ai.url || '') && (C.ai.mode !== 'on' || !!C.ai.model) && (!ocrOn() || !!C.ai.ocr_model) && (!speechOn() || !!C.ai.speech_model)) },
       { id: 'sicherung', title: t('Sicherung'), render: renderBackup, ok: () => true },
       { id: 'zugriff', title: t('Zugriff'), render: renderAccess, ok: () => /:\d+$/.test(C.server.listen) },
       S.needAdmin ? { id: 'konto', title: t('Admin'), render: renderAdmin, ok: adminOK }
@@ -107,7 +107,7 @@
     el.innerHTML = `
       <section class="card">
         <h2>${t('Welche Fotos sollen in den Schuhkarton?')}</h2>
-        <p class="muted">${t('Ordner mit Fotos und Videos. Unterordner werden mitgenommen. Schuhkarton zwingt keine Ordnerstruktur auf; Originale ändern sich nur, wenn ein Admin bearbeitet, dreht, verschiebt oder löscht.')}</p>
+        <p class="muted">${t('Ordner mit Fotos und Videos. Unterordner werden mitgenommen. Schuhkarton zwingt keine Ordnerstruktur auf; Originale ändern sich nur, wenn ein Admin bearbeitet, dreht, verschiebt oder löscht, und wenn Erkanntes in ihre Metadaten geschrieben wird (abschaltbar unten).')}</p>
         ${lockedF ? `<p class="lock">${t('Die Ordner sind festgelegt durch {x}.', { x: esc(lockedF) })}</p>` : ''}
         <div class="folders" id="flist"></div>
         ${lockedF ? '' : `<div class="addrow">
@@ -132,6 +132,9 @@
           <label class="check"><input type="checkbox" id="fwrite" ${C.library.write_files ? 'checked' : ''} ${dis('library.write_files')}>
             <span><b>${t('Änderungen in die Dateien schreiben')}</b><br><span class="muted">${t('Datum, Ort, GPS, Text und Drehung, die Admins ändern, landen mit exiftool in den Fotos selbst. Aus: nur im Schuhkarton gespeichert.')}</span></span></label>
           ${lockNote('library.write_files')}
+          <label class="check"><input type="checkbox" id="fxmp" ${C.library.write_metadata ? 'checked' : ''} ${dis('library.write_metadata')}>
+            <span><b>${t('Erkanntes in die Dateien schreiben')}</b><br><span class="muted">${t('KI-Beschreibungen und Stichwörter, erkannter und gesprochener Text und die Namen der Personen landen in den XMP-Metadaten der Dateien (bei RAW und Formaten, die exiftool nicht schreibt, in einer .xmp-Datei daneben). Andere Programme sehen sie, und der Schuhkarton liest sie wieder ein, wenn der Cache fehlt.')}</span></span></label>
+          ${lockNote('library.write_metadata')}
           <label class="field"><span>${t('Papierkorb nach so vielen Tagen leeren (0 = nie)')}</span>
             <input type="number" id="ftrash" min="0" max="3650" value="${C.library.trash_days ?? 30}" ${dis('library.trash_days')}>${lockNote('library.trash_days')}</label>
           <label class="check"><input type="checkbox" id="fdupes" ${(C.dupes?.mode || 'on') === 'on' ? 'checked' : ''} ${dis('dupes.mode')}>
@@ -207,6 +210,7 @@
     $('#fdocs', el).oninput = (e) => { C.library.documents = e.target.value.split(',').map((x) => x.trim()).filter(Boolean); };
     $('#fmeta', el).onchange = (e) => { C.library.folder_meta = e.target.checked; };
     $('#fwrite', el).onchange = (e) => { C.library.write_files = e.target.checked; };
+    $('#fxmp', el).onchange = (e) => { C.library.write_metadata = e.target.checked; };
     $('#ftrash', el).oninput = (e) => { C.library.trash_days = Math.max(0, +e.target.value || 0); };
     C.dupes ||= { mode: 'on', sensitivity: 'normal', similar_minutes: 10 };
     $('#fdupes', el).onchange = (e) => { C.dupes.mode = e.target.checked ? 'on' : 'off'; };
@@ -354,9 +358,11 @@
   // --- step 3b: AI: descriptions and text recognition ---------------------------------
   const MITTWALD = 'https://llm.aihosting.mittwald.de/v1';
   const ocrOn = () => !!C.ai.ocr && C.ai.ocr !== 'off';
-  const aiUsed = () => C.ai.mode === 'on' || ocrOn();
+  const speechOn = () => C.ai.speech === 'on';
+  const aiUsed = () => C.ai.mode === 'on' || ocrOn() || speechOn();
   const aiPreset = () => (!aiUsed() ? 'off' : (C.ai.url || MITTWALD).replace(/\/$/, '') === MITTWALD ? 'mittwald' : 'custom');
   let ocrTest = null; // last text recognition test
+  let speechTest = null; // last speech recognition test
   let connTest = null; // last model list or connection error
   function renderAI(el) {
     const preset = aiPreset();
@@ -370,7 +376,7 @@
       : `<input id="${id}" value="${esc(value || '')}" spellcheck="false" ${dis(key)}>`);
     const ocr = C.ai.ocr || 'off';
     // the service can be chosen unless both uses are fixed (e.g. descriptions locked off, text recognition free)
-    const svcDis = locked('ai.mode') && locked('ai.ocr') ? 'disabled' : '';
+    const svcDis = locked('ai.mode') && locked('ai.ocr') && locked('ai.speech') ? 'disabled' : '';
     el.innerHTML = `
       <section class="card">
         <h2>${t('KI für Beschreibungen und Text?')}</h2>
@@ -424,11 +430,29 @@
         <div class="stat" id="ores"></div>
         <p class="muted small">${t('Der Test schickt ein kleines gezeichnetes Bild mit Text, kein Foto. Empfohlen: {m}.', { m: '<code>GLM-OCR</code>' })}</p>`}
       </section>
+      <section class="card">
+        <h2>${t('Sprache erkennen')}</h2>
+        <label class="check"><input type="checkbox" id="aspeech" ${speechOn() ? 'checked' : ''} ${dis('ai.speech')}><span>${t('Was in Videos und Live Photos gesagt wird, aufschreiben')}</span></label>${lockNote('ai.speech')}
+        <p class="muted">${t('Der Text wird durchsucht und in den Details gezeigt. Stille und Geräusche werden übersprungen.')}</p>
+        ${!speechOn() ? '' : `<div class="row2">
+          <label class="field"><span>${t('Modell')}</span>${modelField('smodel', C.ai.speech_model, 'ai.speech_model')}${lockNote('ai.speech_model')}</label>
+          <label class="field"><span>${t('Gleichzeitige Anfragen')}</span><input type="number" id="swork" min="1" max="16" value="${C.ai.speech_workers || 2}" ${dis('ai.speech_workers')}></label>
+        </div>
+        <label class="field"><span>${t('Zweiter Versuch, wenn das Modell in lautem Ton nichts hört')}</span>
+          ${models.length
+            ? `<select id="sfb" ${dis('ai.speech_fallback')}><option value="">${t('keiner')}</option>${[...new Set([C.ai.speech_fallback, ...models])].filter(Boolean).map((m) => `<option ${m === C.ai.speech_fallback ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select>`
+            : `<input id="sfb" value="${esc(C.ai.speech_fallback || '')}" placeholder="${t('leer: keiner')}" spellcheck="false" ${dis('ai.speech_fallback')}>`}
+          ${lockNote('ai.speech_fallback')}</label>
+        <div class="addrow"><button class="btn primary" id="stest">${t('Spracherkennung testen')}</button></div>
+        <div class="stat" id="sres"></div>
+        <p class="muted small">${t('Der Test schickt eine Sekunde Stille. Empfohlen: {m}.', { m: '<code>whisper-large-v3-turbo</code>' })}</p>`}
+      </section>
       ${S.mode === 'settings' ? `<section class="card" id="aprogcard" hidden><h2>${t('Fortschritt')}</h2><div id="aprog"></div></section>` : ''}`}`;
     for (const r of $$('input[name=aim]', el)) r.onchange = () => {
       if (r.value === 'off') {
         if (!locked('ai.mode')) C.ai.mode = 'off';
         if (!locked('ai.ocr')) C.ai.ocr = 'off';
+        if (!locked('ai.speech')) C.ai.speech = 'off';
       } else {
         const wasOff = !aiUsed();
         if (r.value === 'mittwald') C.ai.url = MITTWALD;
@@ -440,8 +464,9 @@
         }
         C.ai.model ||= 'Qwen3.8-27B-NVFP4';
         C.ai.ocr_model ||= 'GLM-OCR';
+        C.ai.speech_model ||= 'whisper-large-v3-turbo';
       }
-      aiModels = null; aiTest = null; ocrTest = null;
+      aiModels = null; aiTest = null; ocrTest = null; speechTest = null;
       renderAI(el);
       validate();
       if (aiUsed()) loadModels(el, true);
@@ -481,7 +506,16 @@
       box.innerHTML = o.error ? `<span class="bad">${icon('warn')}${esc(t(o.error))}</span>${keyHint(r)}`
         : `<span class="good">${icon('check')}${t('Antwort in {s} s', { s: ((o.ms || 0) / 1000).toFixed(1) })}</span><div class="muted ocr-test">„${esc(o.text || '')}“</div>`;
     };
-    showConn(); showRes(); showOCR();
+    // speech recognition test: the model answered
+    const showSpeech = () => {
+      const r = speechTest, box = $('#sres', el);
+      if (!r || !box) return;
+      if (r.busy) { box.textContent = r.busy; return; }
+      const o = r.speech || {};
+      box.innerHTML = o.error ? `<span class="bad">${icon('warn')}${esc(t(o.error))}</span>${keyHint(r)}`
+        : `<span class="good">${icon('check')}${t('Antwort in {s} s', { s: ((o.ms || 0) / 1000).toFixed(1) })}</span>`;
+    };
+    showConn(); showRes(); showOCR(); showSpeech();
     const url = $('#aurl', el), key = $('#akey', el);
     if (url) url.oninput = () => { C.ai.url = url.value.trim(); aiModels = null; validate(); };
     key.oninput = () => { aiKeyField = key.value.trim(); C.ai.api_key = aiKeyField; };
@@ -533,6 +567,26 @@
         showOCR();
       };
     }
+    $('#aspeech', el).onchange = (e) => {
+      C.ai.speech = e.target.checked ? 'on' : 'off';
+      C.ai.speech_model ||= 'whisper-large-v3-turbo';
+      speechTest = null;
+      renderAI(el);
+      validate();
+    };
+    const smodel = $('#smodel', el);
+    if (smodel) {
+      smodel.oninput = smodel.onchange = () => { C.ai.speech_model = smodel.value.trim(); validate(); };
+      $('#swork', el).oninput = (e) => { C.ai.speech_workers = Math.max(1, Math.min(16, +e.target.value || 1)); };
+      const sfb = $('#sfb', el);
+      sfb.oninput = sfb.onchange = () => { C.ai.speech_fallback = sfb.value.trim(); };
+      $('#stest', el).onclick = async () => {
+        speechTest = { busy: t('Das Modell hört eine Sekunde Stille …') };
+        showSpeech();
+        speechTest = await api('/api/setup/ai', { url: C.ai.url, key: aiKeyField, model: C.ai.speech_model, speech: true }).catch((e) => ({ speech: { error: e.message } }));
+        showSpeech();
+      };
+    }
   }
   // progress of the running jobs (settings only), every 5 s while the card
   // is on the page; one timer, so rerenders do not add polls
@@ -570,6 +624,8 @@
     const parts = [];
     if (st?.aiMode === 'on' && st.aiTodo) parts.push(block('ai', t('{a} von {b} Fotos und Videos beschrieben', { a: num(st.aiDone), b: num(st.aiTodo) }), t('Beschreibungen angehalten')));
     if (st?.ocrMode && st.ocrMode !== 'off' && st.ocrTodo) parts.push(block('ocr', t('Text in {a} von {b} Bildern gelesen', { a: num(st.ocrDone), b: num(st.ocrTodo) }), t('Texterkennung angehalten')));
+    if (st?.speechOn && st.speechTodo) parts.push(block('speech', t('{a} von {b} Videos und Live Photos angehört', { a: num(st.speechDone), b: num(st.speechTodo) }), t('Spracherkennung angehalten')));
+    if (st?.xmpOn && st.xmpTodo) parts.push(block('xmp', t('{a} von {b} Dateien mit allen Angaben beschrieben', { a: num(st.xmpDone), b: num(st.xmpTodo) }), t('Schreiben in Dateien angehalten')));
     card.hidden = !parts.length; // nothing started yet: look again
     box.innerHTML = parts.join('');
   }
@@ -579,6 +635,8 @@
       aiModels = r.result.models;
       if (!aiModels.includes(C.ai.model) && aiModels.includes('Qwen3.8-27B-NVFP4')) C.ai.model = 'Qwen3.8-27B-NVFP4';
       if (!aiModels.includes(C.ai.ocr_model) && aiModels.includes('GLM-OCR')) C.ai.ocr_model = 'GLM-OCR';
+      if (!aiModels.includes(C.ai.speech_model) && aiModels.includes('whisper-large-v3-turbo')) C.ai.speech_model = 'whisper-large-v3-turbo';
+      if (C.ai.speech_fallback && !aiModels.includes(C.ai.speech_fallback)) C.ai.speech_fallback = ''; // the service does not have it
     }
     if (!quiet || !r.result?.models) connTest = r;
     if (STEPS[step]?.id === 'ki') { renderAI(el); validate(); }
@@ -841,7 +899,8 @@
           ${row(t('Gesichter'), C.faces.mode === 'off' ? t('aus') : C.faces.mode === 'remote' ? `${t('Container')} ${esc(C.faces.url)}` : t('Python auf diesem Rechner'))}
           ${row(t('KI'), !aiUsed() ? t('aus') : [esc(aiPreset() === 'mittwald' ? 'mittwald AI hosting' : C.ai.url),
             C.ai.mode === 'on' ? `${t('Beschreibungen')}: ${esc(C.ai.model)} (${(C.ai.languages || []).join(', ')})` : '',
-            ocrOn() ? `${t('Texterkennung')}: ${esc(C.ai.ocr_model)} (${C.ai.ocr === 'all' ? t('alle Fotos') : t('Dokumente')})` : ''].filter(Boolean).join(' · '))}
+            ocrOn() ? `${t('Texterkennung')}: ${esc(C.ai.ocr_model)} (${C.ai.ocr === 'all' ? t('alle Fotos') : t('Dokumente')})` : '',
+            speechOn() ? `${t('Spracherkennung')}: ${esc(C.ai.speech_model)}${C.ai.speech_fallback ? ` + ${esc(C.ai.speech_fallback)}` : ''}` : ''].filter(Boolean).join(' · '))}
           ${row(t('Sicherung'), C.backup.dir ? `${esc(C.backup.dir)} <span class="muted">${{ '1h': t('stündlich'), '24h': t('täglich'), '168h': t('wöchentlich'), '0': t('auf Knopfdruck') }[C.backup.interval] || esc(C.backup.interval)}</span>` : t('aus'))}
           ${row(t('Adresse'), esc(C.server.listen) + (tokenMode === 'off' ? ` · ${t('ohne Schlüssel')}` : tokenMode === 'new' ? ` · ${t('neuer Schlüssel')}` : ''))}
           ${row(t('Konten'), [S.needAdmin ? `${t('Admin')}: ${esc(admin.name)}` : '', C.access.anonymous ? t('ansehen ohne Konto') : t('nur mit Konto'), C.access.register ? t('Registrieren mit Freigabe') : t('Konten nur durch Admins')].filter(Boolean).join(' · '))}

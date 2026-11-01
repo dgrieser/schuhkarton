@@ -162,6 +162,7 @@ func (l *Library) Rerecognize(ids []string) int {
 	l.ocr.ver.Add(1)
 	l.markOCRDirty()
 	l.ocrJob.kick()
+	l.kickXMP() // the old result leaves the files too
 	return n
 }
 
@@ -233,8 +234,9 @@ func (l *Library) recognizeOne(ctx context.Context, it *Item) error {
 		return nil
 	}
 	l.setOCR(it, o)
-	l.search.updateText(it.ID, it.Desc, o.Text)
+	l.search.updateText(it.ID, it.Desc, o.Text, l.SpeechText(it))
 	j.handled(false, o.Tokens)
+	l.kickXMP()
 	return nil
 }
 

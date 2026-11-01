@@ -17,12 +17,14 @@ or another one.
   OCR text). Text matches are highlighted on the tiles.
 - **Syntax for power users:** `ort:`, `person:`, `jahr:2019`, `monat:juni`,
   `jahreszeit:sommer`, `wochentag:samstag`, `tag:wochenende|werktag`,
-  `tageszeit:abends`, `typ:video|live|selfie|screenshot|panorama|text|gps|favorit`,
+  `tageszeit:abends`, `typ:video|live|selfie|screenshot|panorama|text|gesprochen|gps|favorit`,
   `kamera:`, `kategorie:`, `album:`, `text:`, `datum:2018-06`; `-` excludes
   (`-typ:screenshot`), quotes group words (`ort:"Porta Westfalica"`).
 - **Viewer:** zoom (wheel, pinch, double tap), swipe, slideshow, filmstrip, and
   details with a mini map, camera data, people and the full picture text. Also
-  face boxes with naming, Live Photos, favorites and download.
+  face boxes with naming, Live Photos, favorites, download and printing
+  (full resolution, turned like on screen, HEIC and RAW too; `P` or Ctrl+P
+  in the viewer).
 - **Videos:** animated previews made from short snippets of each video, and
   on-the-fly H.264 for browsers that cannot play HEVC.
 - **Descriptions (optional):** an AI model (mittwald AI hosting, vLLM,
@@ -400,6 +402,23 @@ shows below it as *Text aus der Datei*. Admins can have a picture read again
 (*Neu erkennen*). Progress, pauses and failures show like those of the
 descriptions.
 
+### Speech recognition
+
+*Einstellungen → KI → Sprache erkennen* writes down what is said in videos
+and Live Photos with a transcription model behind `/audio/transcriptions`;
+the default is `whisper-large-v3-turbo` at mittwald AI hosting. When it
+hears nothing although the sound is loud enough for speech, a second model
+listens (`ai.speech_fallback`, default `cohere-transcribe-03-2026`): it catches
+speech in noisy clips that whisper drops, but gives no confidence values, so
+it only gets loud sound. ffmpeg takes the sound as
+small mono MP3 (at most 30 minutes per video). Videos without sound or with
+very quiet sound are skipped, and what the models tend to invent for silence
+and noise ("Vielen Dank.", "*Musik*", "Untertitel im Auftrag des ZDF",
+endless repetitions, segments the model was unsure of) is dropped. The text
+lives in `speech.json`, is found by the search (`typ:gesprochen` finds videos
+with speech) and shows under *Gesprochen* in the details; admins can have it
+recognized again.
+
 ```yaml
 ai:
   url: https://llm.aihosting.mittwald.de/v1
@@ -408,6 +427,41 @@ ai:
   ocr: documents     # off | documents | all
   ocr_model: GLM-OCR
   ocr_workers: 2
+  speech: "on"       # off | on
+  speech_model: whisper-large-v3-turbo
+  speech_fallback: cohere-transcribe-03-2026  # second try; empty: none
+  speech_workers: 2
+```
+
+### Metadata in the files
+
+With `library.write_metadata` on (the default; *Einstellungen → Bibliothek*),
+Schuhkarton writes what it found out into the files' XMP metadata with
+exiftool, so other programs see it and a lost cache does not lose it:
+
+| What | Where |
+|---|---|
+| AI description | `XMP-iptcCore:AltTextAccessibility` (x-default in the first AI language, `de`, `en`) |
+| AI keywords | `XMP-dc:Subject`, next to the keywords already there |
+| People | `XMP-iptcExt:PersonInImage`, and named faces as MWG regions (`XMP-mwg-rs:RegionInfo`) |
+| Recognized and spoken text, models, dates | the `XMP-schuhkarton` namespace (`https://github.com/dgrieser/schuhkarton/ns/1.0/`) |
+
+Keywords, names and face regions from other programs stay; Schuhkarton
+only replaces what it wrote itself (remembered in `XMP-schuhkarton:Tags`,
+`People` and `Regions`). `XMP-dc:Description` is left to people. RAW files and
+formats exiftool cannot write (AVI, BMP, …) get a sidecar beside them
+(`IMG_1.ARW.xmp`), which moves with the file. The file times stay (photos
+without a date in their metadata are dated by them); the backup still sees
+the change by the inode change time and copies the file again.
+
+`XMP-schuhkarton:Sig` marks what was written; files whose mark matches are not
+touched again. When the cache is new, a scan reads descriptions, texts and
+the mark back from the files, so nothing is sent to the AI service twice and
+nothing is written again. The exiftool definition of the namespace is
+`exiftool.config` in the cache:
+
+```sh
+exiftool -config ~/.cache/schuhkarton/exiftool.config -XMP-schuhkarton:all IMG_1.jpg
 ```
 
 ## Face recognition container
@@ -478,6 +532,7 @@ library:
   rescan: ""                  # e.g. 1h; empty: only at start
   folder_meta: true           # read date, place and category from folder names like 2019/06 Juni Ort
   write_files: true           # write admin edits into the files (exiftool); false: cache only
+  write_metadata: true        # write descriptions, keywords, texts and names into the files' XMP
   trash_days: 30              # empty the trash after this many days; 0: never
   documents: [Dokumente, Documents, Scans, Belege]  # folders whose files are documents
   import:                     # import folder (see "Import folder")
@@ -567,10 +622,11 @@ when the folder names are the same.
 ## Data
 
 Originals change only when an admin edits, rotates, moves or deletes them
-(see [Editing](#editing-admins)). Everything derived lives in the cache:
+(see [Editing](#editing-admins)), and when descriptions, texts and names are
+written into their metadata (see [Metadata in the files](#metadata-in-the-files)). Everything derived lives in the cache:
 `index.gob.gz`, `thumbs/` (thumbnails, previews, video previews, transcodes),
 `faces/` (crops), `people.json` (names), `favorites.json` (per account),
-`edits.json` (admin edits), `trash.json`, `ai.json` (descriptions), `ocr.json` (text in pictures), `notes.json`, `marks.json` (per account), `dupes.json` (hashes), `token`. One process per cache; a second one refuses to start. Accounts are
+`edits.json` (admin edits), `trash.json`, `ai.json` (descriptions), `ocr.json` (text in pictures), `speech.json` (spoken text), `exiftool.config` (the XMP-schuhkarton tags), `notes.json`, `marks.json` (per account), `dupes.json` (hashes), `token`. One process per cache; a second one refuses to start. Accounts are
 not in the cache but in `users.json` next to the settings.
 
 Any folder layout works; Schuhkarton never sorts or renames files on its own.

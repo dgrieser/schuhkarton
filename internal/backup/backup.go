@@ -82,6 +82,10 @@ type fileSig struct {
 	Size  int64 `json:"s"`
 	MTime int64 `json:"t"` // source time, unix nanoseconds
 	Copy  int64 `json:"c"` // the copy's time as the backup keeps it
+	// Change is the source's inode change time (0: unknown): a write that
+	// keeps size and modification time (metadata of the same length,
+	// exiftool -P) still moves it.
+	Change int64 `json:"x,omitempty"`
 }
 
 const copiedFile = "schuhkarton-copied.json"
@@ -215,7 +219,7 @@ func (r *Runner) backup(ctx context.Context) error {
 	}
 	if r.opt.Cache && r.opt.CacheDir != "" {
 		r.set(func(s *Status) { s.Phase = "Cache" })
-		for _, f := range []string{"index.gob.gz", "people.json", "favorites.json", "edits.json", "trash.json", "ai.json", "ocr.json", "marks.json", "notes.json", "dupes.json", "import.json", "roots.json"} {
+		for _, f := range []string{"index.gob.gz", "people.json", "favorites.json", "edits.json", "trash.json", "ai.json", "ocr.json", "speech.json", "marks.json", "notes.json", "dupes.json", "import.json", "roots.json"} {
 			if _, err := os.Stat(filepath.Join(r.opt.CacheDir, f)); err == nil {
 				r.copyIfChanged(filepath.Join(r.opt.CacheDir, f), filepath.Join(r.opt.Dir, "cache", f))
 			}
@@ -298,12 +302,13 @@ func (r *Runner) copyIfChanged(src, dst string) {
 	key, _ := filepath.Rel(r.opt.Dir, dst)
 	key = filepath.ToSlash(key)
 	if di, err := os.Stat(dst); err == nil && di.Size() == si.Size() {
-		now := fileSig{si.Size(), si.ModTime().UnixNano(), di.ModTime().UnixNano()}
+		now := fileSig{si.Size(), si.ModTime().UnixNano(), di.ModTime().UnixNano(), changeTime(si)}
 		last, known := r.copied[key]
 		// exactly the source copied last time onto a copy nobody touched;
 		// without that record (an older backup) only an exactly equal time
 		// counts, so a share that keeps whole seconds gets one more copy
 		untouched := known && last.Size == now.Size && last.MTime == now.MTime &&
+			(last.Change == 0 || now.Change == 0 || last.Change == now.Change) &&
 			(now.Copy == last.Copy || // a share may round the copy's time later, to whole seconds
 				(now.Copy%int64(time.Second) == 0 && time.Duration(now.Copy-last.Copy).Abs() < mtimeWindow))
 		if untouched || (!known && si.ModTime().Equal(di.ModTime())) {
@@ -317,7 +322,7 @@ func (r *Runner) copyIfChanged(src, dst string) {
 		return
 	}
 	if di, err := os.Stat(dst); err == nil { // the copy's time as the backup keeps it
-		r.copied[key] = fileSig{si.Size(), si.ModTime().UnixNano(), di.ModTime().UnixNano()}
+		r.copied[key] = fileSig{si.Size(), si.ModTime().UnixNano(), di.ModTime().UnixNano(), changeTime(si)}
 	}
 	r.set(func(s *Status) { s.Copied++; s.Bytes += si.Size() })
 }

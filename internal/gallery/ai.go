@@ -161,6 +161,7 @@ func (l *Library) Redescribe(ids []string) int {
 	l.ai.ver.Add(1)
 	l.markAIDirty()
 	l.kickAI()
+	l.kickXMP() // the old result leaves the files too
 	return n
 }
 
@@ -231,6 +232,7 @@ func (l *Library) describeOne(ctx context.Context, it *Item) error {
 	l.setAI(it, info)
 	l.search.updateAI(it.ID, info)
 	j.handled(false, info.Tokens)
+	l.kickXMP()
 	return nil
 }
 
@@ -238,36 +240,7 @@ func (l *Library) describeOne(ctx context.Context, it *Item) error {
 // long edge (0: 1024). original reads photos from the file even when a large
 // preview exists (text recognition wants every pixel up to n).
 func (l *Library) jobImage(ctx context.Context, it *Item, n int, original bool) ([]byte, error) {
-	if n <= 0 {
-		n = 1024
-	}
-	var img image.Image
-	var err error
-	src := l.Path(it)
-	isPhoto := it.Kind == Photo && !rawExt[strings.ToLower(filepath.Ext(src))]
-	switch large := l.CachePath(it, VarLarge); {
-	case exists(large) && !(original && isPhoto):
-		img, err = decodeFile(large) // oriented and rotated already
-	case isPhoto:
-		img, err = decodeFile(src)
-		if err == nil {
-			img = orient(resizeFit(img, n, n), l.displayOrient(it, src))
-		}
-	default:
-		var p string
-		if p, err = l.Ensure(ctx, it, VarLarge); err == nil {
-			img, err = decodeFile(p)
-		}
-	}
-	if err != nil {
-		return nil, err
-	}
-	img = resizeFit(img, n, n)
-	var buf bytes.Buffer
-	if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: 82}); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
+	return l.renderJPEG(ctx, it, cmpInt(n, 1024), original, 82)
 }
 
 // --- client -------------------------------------------------------------------
@@ -305,20 +278,28 @@ func (e *aiError) Error() string {
 }
 
 func (c *aiClient) do(ctx context.Context, method, path string, body any, out any) error {
+	if body == nil {
+		return c.send(ctx, method, path, "", nil, out)
+	}
+	b, err := json.Marshal(body)
+	if err != nil {
+		return err
+	}
+	return c.send(ctx, method, path, "application/json", b, out)
+}
+
+// send makes one API call with a ready body and decodes the JSON answer.
+func (c *aiClient) send(ctx context.Context, method, path, contentType string, body []byte, out any) error {
 	var rd io.Reader
 	if body != nil {
-		b, err := json.Marshal(body)
-		if err != nil {
-			return err
-		}
-		rd = bytes.NewReader(b)
+		rd = bytes.NewReader(body)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, c.opt.URL+path, rd)
 	if err != nil {
 		return &aiError{msg: "Adresse ungültig: " + err.Error(), fatal: true}
 	}
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
 	}
 	if c.opt.Key != "" {
 		req.Header.Set("Authorization", "Bearer "+c.opt.Key)

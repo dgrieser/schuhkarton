@@ -242,3 +242,37 @@ func TestOCRSettings(t *testing.T) {
 		t.Errorf("env: %q %v", c.AI.OCR, err)
 	}
 }
+
+func TestSpeechAndMetadataSettings(t *testing.T) {
+	c := Defaults()
+	c.Library.Folders = []Folder{{Path: "/tmp"}}
+	c.normalize()
+	if c.AI.Speech != "off" || c.AI.SpeechModel != "whisper-large-v3-turbo" || c.AI.SpeechFallback != "cohere-transcribe-03-2026" ||
+		c.AI.SpeechWorkers != 2 || c.AI.Used() {
+		t.Fatalf("defaults: %+v", c.AI)
+	}
+	if !c.Library.WriteMetadata {
+		t.Error("writing into the files is on by default")
+	}
+	c.AI.Speech = "ON"
+	c.normalize()
+	if c.AI.Speech != "on" || !c.AI.Used() || c.Validate() != nil {
+		t.Fatalf("on: %q used=%v err=%v", c.AI.Speech, c.AI.Used(), c.Validate())
+	}
+	c.AI.Speech = "maybe"
+	if c.Validate() == nil {
+		t.Error("unknown ai.speech should be refused")
+	}
+	c.AI.Speech = "off"
+	if err := c.applyEnv(func(k string) (string, bool) {
+		switch k {
+		case "SCHUHKARTON_AI_SPEECH":
+			return "on", true
+		case "SCHUHKARTON_LIBRARY_WRITE_METADATA":
+			return "false", true
+		}
+		return "", false
+	}); err != nil || c.AI.Speech != "on" || c.Library.WriteMetadata || c.Locked("library.write_metadata") == "" {
+		t.Errorf("env: %q %v %v", c.AI.Speech, c.Library.WriteMetadata, err)
+	}
+}

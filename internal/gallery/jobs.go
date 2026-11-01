@@ -33,6 +33,14 @@ func (l *Library) Start(ctx context.Context) {
 		l.bg.Add(1)
 		go l.ocrLoop(ctx)
 	}
+	if l.speechJob.client != nil {
+		l.bg.Add(1)
+		go l.speechLoop(ctx)
+	}
+	if l.xmpJob.on {
+		l.bg.Add(1)
+		go l.xmpLoop(ctx)
+	}
 	if !l.opt.Dupes.Off {
 		l.bg.Add(1)
 		go l.dupeLoop(ctx)
@@ -180,6 +188,7 @@ func (l *Library) scanFaces(it *Item) {
 	l.mu.Lock()
 	it.Faces, it.FacesDone = faces, true
 	l.mu.Unlock()
+	l.applyMetaFaces(it) // names from the file's metadata (a new cache)
 	l.markDirty()
 }
 

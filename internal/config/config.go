@@ -84,6 +84,11 @@ type Library struct {
 	// WriteFiles writes edits by admins (date, place, GPS, text, rotation)
 	// into the files with exiftool; false keeps them in the cache only.
 	WriteFiles bool `yaml:"write_files" json:"write_files"`
+	// WriteMetadata writes what Schuhkarton finds out about a file into the
+	// file's XMP metadata: AI descriptions and keywords, recognized text and
+	// the names of the people in it (an .xmp file beside RAW and other files
+	// exiftool cannot write). Schuhkarton reads it back after the cache is lost.
+	WriteMetadata bool `yaml:"write_metadata" json:"write_metadata"`
 	// TrashDays empties deleted files from the trash after this many days
 	// (0: only by hand).
 	TrashDays int `yaml:"trash_days" json:"trash_days"`
@@ -198,11 +203,22 @@ type AI struct {
 	OCR        string `yaml:"ocr" json:"ocr"`
 	OCRModel   string `yaml:"ocr_model" json:"ocr_model"`
 	OCRWorkers int    `yaml:"ocr_workers" json:"ocr_workers"`
+	// Speech writes down what is said in videos and Live Photos with a
+	// transcription model (e.g. whisper-large-v3-turbo at mittwald), over
+	// the same service and key: off or on. The text is searched and shown.
+	Speech      string `yaml:"speech" json:"speech"`
+	SpeechModel string `yaml:"speech_model" json:"speech_model"`
+	// SpeechFallback listens again when SpeechModel hears nothing in loud
+	// sound (e.g. cohere-transcribe-03-2026); empty: no second try.
+	SpeechFallback string `yaml:"speech_fallback" json:"speech_fallback"`
+	SpeechWorkers  int    `yaml:"speech_workers" json:"speech_workers"`
 }
 
-// Used reports whether anything is sent to the service (descriptions or
-// text recognition).
-func (a AI) Used() bool { return a.Mode == "on" || (a.OCR != "" && a.OCR != "off") }
+// Used reports whether anything is sent to the service (descriptions, text
+// or speech recognition).
+func (a AI) Used() bool {
+	return a.Mode == "on" || (a.OCR != "" && a.OCR != "off") || a.Speech == "on"
+}
 
 // Dupes is the search for duplicates (perceptual hashes of the thumbnails;
 // cheap enough to run inside the gallery).
@@ -264,7 +280,7 @@ func Defaults() *Config {
 		Access: Access{Anonymous: true, Register: true},
 		Library: Library{
 			Exclude:    []string{"_Duplikate", ".*", "@eaDir", "#recycle", "$RECYCLE.BIN", "System Volume Information", "*.tmp"},
-			FolderMeta: true, WriteFiles: true, TrashDays: 30, Rules: Rules{Locale: "de", Auto: true},
+			FolderMeta: true, WriteFiles: true, WriteMetadata: true, TrashDays: 30, Rules: Rules{Locale: "de", Auto: true},
 			Documents: []string{"Dokumente", "Documents", "Scans", "Belege"},
 		},
 		Cache: Cache{Dir: DefaultCacheDir()},
@@ -274,7 +290,8 @@ func Defaults() *Config {
 		},
 		Faces: Faces{Mode: "off", Workers: max(1, runtime.NumCPU()/4), MinScore: 0.86, ClusterThreshold: 0.48, NamedThreshold: 0.42},
 		AI: AI{Mode: "off", URL: MittwaldAIURL, Model: "Qwen3.8-27B-NVFP4", Workers: 2, Languages: []string{"de", "en"}, ImageSize: 1024,
-			OCR: "off", OCRModel: "GLM-OCR", OCRWorkers: 2},
+			OCR: "off", OCRModel: "GLM-OCR", OCRWorkers: 2,
+			Speech: "off", SpeechModel: "whisper-large-v3-turbo", SpeechFallback: "cohere-transcribe-03-2026", SpeechWorkers: 2},
 		Dupes: Dupes{Mode: "on", Sensitivity: "normal", SimilarMinutes: 10},
 		UI: UI{Title: "Schuhkarton", Theme: "system", Language: "auto",
 			MapTiles: "https://tile.openstreetmap.org/{z}/{x}/{y}.png", MapAttribution: "© OpenStreetMap"},
@@ -349,6 +366,12 @@ func (c *Config) normalize() {
 	c.AI.OCRModel = cmpOr(strings.TrimSpace(c.AI.OCRModel), d.AI.OCRModel)
 	if c.AI.OCRWorkers <= 0 {
 		c.AI.OCRWorkers = d.AI.OCRWorkers
+	}
+	c.AI.Speech = cmpOr(strings.ToLower(strings.TrimSpace(c.AI.Speech)), "off")
+	c.AI.SpeechModel = cmpOr(strings.TrimSpace(c.AI.SpeechModel), d.AI.SpeechModel)
+	c.AI.SpeechFallback = strings.TrimSpace(c.AI.SpeechFallback)
+	if c.AI.SpeechWorkers <= 0 {
+		c.AI.SpeechWorkers = d.AI.SpeechWorkers
 	}
 	c.Dupes.Mode = cmpOr(strings.ToLower(c.Dupes.Mode), d.Dupes.Mode)
 	c.Dupes.Sensitivity = cmpOr(strings.ToLower(c.Dupes.Sensitivity), d.Dupes.Sensitivity)
@@ -460,6 +483,11 @@ func (c *Config) Validate() error {
 	case "off", "documents", "all":
 	default:
 		errs = append(errs, fmt.Sprintf("ai.ocr %q: off, documents oder all", c.AI.OCR))
+	}
+	switch c.AI.Speech {
+	case "off", "on":
+	default:
+		errs = append(errs, fmt.Sprintf("ai.speech %q: off oder on", c.AI.Speech))
 	}
 	if c.AI.Used() && !strings.HasPrefix(c.AI.URL, "http://") && !strings.HasPrefix(c.AI.URL, "https://") {
 		errs = append(errs, fmt.Sprintf("ai.url %q: http(s)://… erwartet", c.AI.URL))

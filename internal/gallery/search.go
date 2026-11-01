@@ -107,6 +107,7 @@ type searchIndex struct {
 	aiVer   int64
 	noteVer int64
 	ocrVer  int64
+	spVer   int64 // speech
 	docs    map[string]*doc
 	tags    map[string]map[string]int // language -> AI tag -> photos
 	facets  []facet
@@ -153,9 +154,12 @@ func (l *Library) buildDoc(it *Item) *doc {
 	if it.GPS {
 		kind += " gps ort"
 	}
-	ocrText := l.OCRText(it)
+	ocrText, spoken := l.OCRText(it), l.SpeechText(it)
 	if it.Desc != "" || ocrText != "" {
 		kind += " text"
+	}
+	if spoken != "" {
+		kind += " gesprochen spoken"
 	}
 	if l.IsDocument(it) {
 		kind += " dokument document"
@@ -172,7 +176,7 @@ func (l *Library) buildDoc(it *Item) *doc {
 		date:  date,
 		cam:   fold(it.Make + " " + it.Model + " " + it.Lens),
 		kw:    fold(strings.Join(it.Keywords, " ")),
-		desc:  fold(joinText(it.Desc, ocrText)),
+		desc:  fold(joinText(it.Desc, ocrText, spoken)),
 		kind:  kind,
 		notes: fold(notes),
 	}
@@ -180,23 +184,30 @@ func (l *Library) buildDoc(it *Item) *doc {
 	return d
 }
 
-// joinText is the text of a picture: its description from the file and the
-// recognized text.
-func joinText(desc, ocr string) string {
-	if desc == "" || ocr == "" {
-		return desc + ocr
+// joinText is the text of a file: its description from the file, the
+// recognized text and what was said.
+func joinText(parts ...string) string {
+	var out []string
+	for _, p := range parts {
+		if p != "" {
+			out = append(out, p)
+		}
 	}
-	return desc + "\n" + ocr
+	return strings.Join(out, "\n")
 }
 
-// updateText puts newly recognized text into the index without rebuilding it.
-func (si *searchIndex) updateText(id, desc, ocr string) {
+// updateText puts newly recognized text into the index without rebuilding
+// it: desc, recognized text, spoken text.
+func (si *searchIndex) updateText(id, desc, ocr, spoken string) {
 	si.mu.Lock()
 	defer si.mu.Unlock()
 	if d := si.docs[id]; d != nil {
-		d.desc = fold(joinText(desc, ocr))
+		d.desc = fold(joinText(desc, ocr, spoken))
 		if ocr != "" && !strings.Contains(d.kind, " text") {
 			d.kind += " text"
+		}
+		if spoken != "" && !strings.Contains(d.kind, " gesprochen") {
+			d.kind += " gesprochen spoken"
 		}
 	}
 }
@@ -219,12 +230,13 @@ func (l *Library) index() *searchIndex {
 	aiVer := l.ai.ver.Load()
 	noteVer := l.notes.ver.Load()
 	ocrVer := l.ocr.ver.Load()
+	spVer := l.speech.ver.Load()
 	// new descriptions reach the docs right away (updateAI); the tag list
 	// for suggestions is refreshed at most once a minute. Notes count at once.
 	// new texts reach the docs right away too (updateText); forgotten ones
 	// (recognize again) need a rebuild, also at most once a minute.
 	if si.ver == ver && si.noteVer == noteVer && (si.aiVer == aiVer || time.Since(si.builtAt) < time.Minute) &&
-		(si.ocrVer == ocrVer || time.Since(si.builtAt) < time.Minute) {
+		((si.ocrVer == ocrVer && si.spVer == spVer) || time.Since(si.builtAt) < time.Minute) {
 		return si
 	}
 	docs := make(map[string]*doc, len(items))
@@ -270,7 +282,7 @@ func (l *Library) index() *searchIndex {
 	add(years, "jahr", "jahr:")
 	sort.Slice(facets, func(a, b int) bool { return facets[a].Count > facets[b].Count })
 	si.docs, si.facets, si.ver, si.builtAt, si.aiVer, si.tags = docs, facets, ver, time.Now(), aiVer, tags
-	si.noteVer, si.ocrVer = noteVer, ocrVer
+	si.noteVer, si.ocrVer, si.spVer = noteVer, ocrVer, spVer
 	return si
 }
 
@@ -472,7 +484,7 @@ func (l *Library) Search(q, user, lang string) []Hit {
 		}
 		h := Hit{ID: it.ID, Score: score}
 		if snipWord != "" {
-			h.Snip = snippet(joinText(it.Desc, l.OCRText(it)), snipWord)
+			h.Snip = snippet(joinText(it.Desc, l.OCRText(it), l.SpeechText(it)), snipWord)
 			if h.Snip == "" && d.notes != "" {
 				h.Snip = snippet(l.noteText(it), snipWord)
 			}
