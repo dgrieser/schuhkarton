@@ -160,12 +160,26 @@ func (l *Library) PreviewRules(rs RuleSet) RulePreview {
 		name := path.Base(it.Rel)
 		ext := path.Ext(name)
 		stem := strings.TrimSuffix(name, ext)
-		n := name
-		for i := 2; m[n]; i++ { // like freeStem
-			n = fmt.Sprintf("%s (%d)%s", stem, i, ext)
+		exts := []string{ext}
+		// a Live Photo video of the same name needs its name free as well (see moveGroup)
+		if lv := l.Get(it.LiveVideo); lv != nil && strings.TrimSuffix(path.Base(lv.Rel), path.Ext(lv.Rel)) == stem {
+			exts = append(exts, path.Ext(lv.Rel))
 		}
-		m[n] = true
-		return n, n != name
+		cand := stem
+		for i := 2; ; i++ { // like freeStem
+			free := true
+			for _, x := range exts {
+				free = free && !m[cand+x]
+			}
+			if free {
+				break
+			}
+			cand = fmt.Sprintf("%s (%d)", stem, i)
+		}
+		for _, x := range exts {
+			m[cand+x] = true
+		}
+		return cand + ext, cand != stem
 	}
 	l.walkRules(c, nil, func(it *Item, rule int, dir string, blocked string) {
 		p.Total++
@@ -437,9 +451,18 @@ func (l *Library) rulesLoop(c *compiledRules, moves []RuleMove, gen int64, by st
 				l.rulesChunkHook(start)
 			}
 			l.opMu.Lock()
-			// metadata or rules changed since the plan: plan the rest again
-			if cur := l.rules.Load(); cur != c || l.editGen.Load() != gen {
-				c, gen = cur, l.editGen.Load()
+			if cur := l.rules.Load(); cur != c {
+				// other rules: stop here, they apply with the next run
+				l.logf("Regeln geändert: Einsortieren nach %d Dateien angehalten", start)
+				j.todo.Add(-int64(len(moves) - start))
+				moves = moves[:start]
+				c = cur
+				l.opMu.Unlock()
+				break
+			}
+			// metadata changed since the plan: plan the rest again
+			if l.editGen.Load() != gen {
+				gen = l.editGen.Load()
 				rest := map[string]bool{}
 				for _, m := range moves[start:] {
 					rest[m.ID] = true

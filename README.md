@@ -246,7 +246,9 @@ move with their photo, emptied folders are removed, and a place, date or
 category that so far came only from a folder name is kept as an edit.
 Documents are told by their folder, so a rule never moves a document out of
 a documents folder or a photo into one, nor a file into a folder the scan
-skips (`library.exclude`); such files stay and the preview says how many.
+skips (`library.exclude`); such files stay and the preview says how many. Saving
+other rules during a run stops it after the current batch; the new rules
+apply with the next run.
 
 ## Image descriptions (optional)
 

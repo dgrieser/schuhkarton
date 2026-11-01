@@ -258,3 +258,36 @@ func TestRulesIgnoreUnrelatedEdits(t *testing.T) {
 		t.Fatalf("a text edit filed the photo: %+v %v %v", res, err, rels(l))
 	}
 }
+
+func TestRulesChangeStopsRun(t *testing.T) {
+	var files []string
+	for i := range 2*rulesChunk + 10 {
+		files = append(files, fmt.Sprintf("2019/06 Juni Lübbecke/%03d.jpg", i))
+	}
+	l, _ := testLib(t, files...)
+	l.SetRules(RuleSet{Locale: "de", List: []Rule{{Path: "{ort}"}}})
+	l.rulesChunkHook = func(start int) {
+		if start == rulesChunk {
+			l.SetRules(RuleSet{Locale: "de", List: []Rule{{Path: "Neu/{ort}"}}})
+		}
+	}
+	if _, err := l.ApplyRules(""); err != nil {
+		t.Fatal(err)
+	}
+	waitRules(t, l)
+	n := 0
+	for _, it := range l.Items() {
+		if strings.HasPrefix(it.Rel, "Lübbecke/") {
+			n++
+		}
+		if strings.HasPrefix(it.Rel, "Neu/") {
+			t.Fatalf("new rules applied without a new run: %s", it.Rel)
+		}
+	}
+	if n != rulesChunk {
+		t.Fatalf("%d files moved before the change, want %d", n, rulesChunk)
+	}
+	if d, todo := l.rulesJob.done.Load(), l.rulesJob.todo.Load(); d != todo {
+		t.Fatalf("progress %d/%d", d, todo)
+	}
+}
