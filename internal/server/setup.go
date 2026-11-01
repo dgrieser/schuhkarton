@@ -442,6 +442,21 @@ func merge(cur, in *config.Config) *config.Config {
 	set("faces.url", func() { n.Faces.URL = strings.TrimSpace(in.Faces.URL) })
 	set("faces.token", func() { n.Faces.Token = strings.TrimSpace(in.Faces.Token) })
 	set("faces.workers", func() { n.Faces.Workers = in.Faces.Workers })
+	set("dupes.mode", func() {
+		if in.Dupes.Mode != "" {
+			n.Dupes.Mode = in.Dupes.Mode
+		}
+	})
+	set("dupes.sensitivity", func() {
+		if in.Dupes.Sensitivity != "" {
+			n.Dupes.Sensitivity = in.Dupes.Sensitivity
+		}
+	})
+	set("dupes.similar_minutes", func() {
+		if in.Dupes.SimilarMinutes > 0 {
+			n.Dupes.SimilarMinutes = in.Dupes.SimilarMinutes
+		}
+	})
 	set("ai.mode", func() { n.AI.Mode = in.AI.Mode })
 	set("ai.url", func() { n.AI.URL = strings.TrimRight(strings.TrimSpace(in.AI.URL), "/") })
 	set("ai.model", func() { n.AI.Model = strings.TrimSpace(in.AI.Model) })

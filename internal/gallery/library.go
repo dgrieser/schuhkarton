@@ -65,7 +65,8 @@ type Options struct {
 	DocFolders []string
 
 	Faces FaceOptions
-	AI    AIOptions // descriptions by a vision language model; empty Model: off
+	AI    AIOptions   // descriptions by a vision language model; empty Model: off
+	Dupes DupeOptions // the search for duplicates
 }
 
 // FaceOptions configure face detection.
@@ -171,7 +172,12 @@ type Status struct {
 	AIFail   int64  `json:"aiFail"`
 	AITokens int64  `json:"aiTokens,omitempty"`
 	AIError  string `json:"aiError,omitempty"`
-	Version  int64  `json:"version"`
+	// Duplicates: hashed photos of all, and the groups found.
+	DupeMode   string `json:"dupeMode"`
+	DupeDone   int64  `json:"dupeDone"`
+	DupeTodo   int64  `json:"dupeTodo"`
+	DupeGroups int64  `json:"dupeGroups"`
+	Version    int64  `json:"version"`
 }
 
 // Library holds the index and the background workers.
@@ -198,6 +204,9 @@ type Library struct {
 	search searchIndex
 	ai     aiStore
 	aiJob  aiState
+	dupe   dupeStore
+	marks  markStore // guarded by favMu
+	notes  noteStore
 
 	opMu    sync.Mutex           // one admin operation (edit, rotate, move, trash) at a time
 	editMu  sync.Mutex           // guards edits
@@ -260,6 +269,9 @@ func Open(opt Options) (*Library, error) {
 	l.people = newPeopleStore(filepath.Join(opt.CacheDir, "people.json"), opt.Faces.ClusterThreshold, opt.Faces.NamedThreshold)
 	l.loadEdits()
 	l.loadTrash()
+	l.loadDupes()
+	l.loadMarks()
+	l.loadNotes()
 	l.loadIndex()
 	l.loadFavs()
 	l.recluster()
@@ -281,6 +293,9 @@ func (l *Library) Close() {
 	l.saveIndex()
 	if err := l.saveAI(); err != nil {
 		l.logf("ai.json: %v", err)
+	}
+	if err := l.saveDupes(); err != nil {
+		l.logf("dupes.json: %v", err)
 	}
 	if l.local != nil {
 		l.local.Close()
@@ -386,6 +401,11 @@ func (l *Library) Status() Status {
 		Errors:      l.cnt.errors.Load(),
 		Version:     l.Version(),
 	}
+	s.DupeMode = "on"
+	if l.opt.Dupes.Off {
+		s.DupeMode = "off"
+	}
+	s.DupeDone, s.DupeTodo, s.DupeGroups = l.dupe.done.Load(), l.dupe.todo.Load(), l.dupe.nGrp.Load()
 	fs := l.FaceStatus()
 	s.FaceMode, s.FaceOK, s.FaceRec, s.FaceErr = fs.Mode, fs.Detection, fs.Recognition, fs.Error
 	for _, it := range l.Items() {
@@ -642,15 +662,24 @@ func (l *Library) ClaimLegacyFavs(user string) error {
 	return l.saveFavs()
 }
 
-// DropUserFavs forgets the favorites of a deleted account.
+// DropUserFavs forgets the favorites and marks for deletion of a deleted
+// account. Its notes stay: other people may have read them.
 func (l *Library) DropUserFavs(user string) error {
 	l.favMu.Lock()
 	defer l.favMu.Unlock()
-	if _, ok := l.favs[user]; !ok {
+	_, f := l.favs[user]
+	_, m := l.marks.users[user]
+	if !f && !m {
 		return nil
 	}
 	delete(l.favs, user)
+	delete(l.marks.users, user)
 	l.bump()
+	if m {
+		if err := l.saveMarks(); err != nil {
+			return err
+		}
+	}
 	return l.saveFavs()
 }
 
@@ -661,8 +690,16 @@ func (l *Library) RenameKeys(pairs map[string]string) error {
 		return nil
 	}
 	l.renameAI(pairs)
+	l.renameDupes(pairs)
+	l.renameNotes(pairs)
 	l.favMu.Lock()
 	defer l.favMu.Unlock()
+	if l.renameMarks(pairs) {
+		if err := l.saveMarks(); err != nil {
+			l.logf("marks.json: %v", err)
+		}
+		l.bump()
+	}
 	changed := false
 	for _, set := range l.favs {
 		for from, to := range pairs {

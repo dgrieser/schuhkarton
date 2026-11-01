@@ -29,6 +29,10 @@ func (l *Library) Start(ctx context.Context) {
 		l.bg.Add(1)
 		go l.aiLoop(ctx)
 	}
+	if !l.opt.Dupes.Off {
+		l.bg.Add(1)
+		go l.dupeLoop(ctx)
+	}
 }
 
 func (m *mediaGen) kick() {
@@ -77,6 +81,7 @@ func (l *Library) generate(ctx context.Context) {
 	l.cnt.faces.Store(nFace)
 	l.cnt.faceTodo.Store(nFace + int64(len(faces))) // total, shown as faces/faceTodo
 	if len(thumbs)+len(previews)+len(faces) == 0 {
+		l.kickDupes()
 		return
 	}
 	l.logf("background: %d thumbnails, %d video previews, %d face scans", len(thumbs), len(previews), len(faces))
@@ -149,6 +154,7 @@ func (l *Library) generate(ctx context.Context) {
 		l.bump()
 	}
 	l.saveIndex()
+	l.kickDupes() // the new thumbnails can be compared now
 	l.logf("background: done")
 }
 

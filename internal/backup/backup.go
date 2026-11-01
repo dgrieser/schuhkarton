@@ -6,7 +6,7 @@
 // Layout of the backup folder:
 //
 //	originals/<folder name>/...   the photos and videos
-//	cache/...                     index.gob.gz, people.json, favorites.json, edits.json, trash.json, ai.json, thumbs/, faces/
+//	cache/...                     index.gob.gz, people.json, favorites.json, edits.json, trash.json, ai.json, marks.json, notes.json, dupes.json, thumbs/, faces/
 //	config/config.yaml            the settings (with tokens: keep the backup private)
 //	config/users.json             accounts (password hashes)
 //	schuhkarton-backup.json       the last run
@@ -173,7 +173,7 @@ func (r *Runner) backup(ctx context.Context) error {
 	}
 	if r.opt.Cache && r.opt.CacheDir != "" {
 		r.set(func(s *Status) { s.Phase = "Cache" })
-		for _, f := range []string{"index.gob.gz", "people.json", "favorites.json", "edits.json", "trash.json", "ai.json"} {
+		for _, f := range []string{"index.gob.gz", "people.json", "favorites.json", "edits.json", "trash.json", "ai.json", "marks.json", "notes.json", "dupes.json"} {
 			if _, err := os.Stat(filepath.Join(r.opt.CacheDir, f)); err == nil {
 				r.copyIfChanged(filepath.Join(r.opt.CacheDir, f), filepath.Join(r.opt.Dir, "cache", f))
 			}

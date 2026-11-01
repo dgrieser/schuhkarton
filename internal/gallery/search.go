@@ -89,6 +89,7 @@ var seasons = []string{"", "winter", "winter", "fruhling", "fruhling", "fruhling
 
 type doc struct {
 	name, album, place, cat, date, cam, kw, desc, kind string
+	notes                                              string // notes by people with an account
 	aiTags, aiDesc                                     string // AI tags (padded with spaces) and descriptions, both languages
 }
 
@@ -104,6 +105,7 @@ type searchIndex struct {
 	mu      sync.Mutex
 	ver     string
 	aiVer   int64
+	noteVer int64
 	docs    map[string]*doc
 	tags    map[string]map[string]int // language -> AI tag -> photos
 	facets  []facet
@@ -156,6 +158,10 @@ func (l *Library) buildDoc(it *Item) *doc {
 	if l.IsDocument(it) {
 		kind += " dokument document"
 	}
+	notes := l.noteText(it)
+	if notes != "" {
+		kind += " notiz note notizen notes"
+	}
 	d := &doc{
 		name:  fold(name),
 		album: fold(l.opt.Roots[it.Root].Name + "/" + it.Album),
@@ -166,6 +172,7 @@ func (l *Library) buildDoc(it *Item) *doc {
 		kw:    fold(strings.Join(it.Keywords, " ")),
 		desc:  fold(it.Desc),
 		kind:  kind,
+		notes: fold(notes),
 	}
 	d.setAI(l.AIOf(it))
 	return d
@@ -187,9 +194,10 @@ func (l *Library) index() *searchIndex {
 	items := l.Items()
 	ver := fmt.Sprintf("%d:%p", len(items), items)
 	aiVer := l.ai.ver.Load()
+	noteVer := l.notes.ver.Load()
 	// new descriptions reach the docs right away (updateAI); the tag list
-	// for suggestions is refreshed at most once a minute
-	if si.ver == ver && (si.aiVer == aiVer || time.Since(si.builtAt) < time.Minute) {
+	// for suggestions is refreshed at most once a minute. Notes count at once.
+	if si.ver == ver && si.noteVer == noteVer && (si.aiVer == aiVer || time.Since(si.builtAt) < time.Minute) {
 		return si
 	}
 	docs := make(map[string]*doc, len(items))
@@ -235,6 +243,7 @@ func (l *Library) index() *searchIndex {
 	add(years, "jahr", "jahr:")
 	sort.Slice(facets, func(a, b int) bool { return facets[a].Count > facets[b].Count })
 	si.docs, si.facets, si.ver, si.builtAt, si.aiVer, si.tags = docs, facets, ver, time.Now(), aiVer, tags
+	si.noteVer = noteVer
 	return si
 }
 
@@ -284,6 +293,8 @@ var fieldAlias = map[string]string{
 	"weekday": "date", "day": "date", "season": "date", "time": "date",
 	// AI descriptions and tags
 	"ki": "ai", "ai": "ai", "beschreibung": "ai", "description": "ai",
+	// notes by people with an account
+	"notiz": "note", "notizen": "note", "note": "note", "notes": "note",
 }
 
 // enWords maps English search words to the German words the index holds
@@ -435,6 +446,9 @@ func (l *Library) Search(q, user, lang string) []Hit {
 		h := Hit{ID: it.ID, Score: score}
 		if snipWord != "" {
 			h.Snip = snippet(it.Desc, snipWord)
+			if h.Snip == "" && d.notes != "" {
+				h.Snip = snippet(l.noteText(it), snipWord)
+			}
 			if h.Snip == "" && d.aiDesc != "" {
 				if a := l.AIOf(it); a != nil {
 					first, second := a.De, a.En
@@ -537,6 +551,15 @@ func matchTerm(d *doc, people string, it *Item, t term) (float64, string) {
 			return s, w[0]
 		}
 		return 0, ""
+	case "note":
+		if contains(d.notes, w) {
+			s := 3.0
+			if wordStart(d.notes, w) {
+				s++
+			}
+			return s, firstIn(d.notes, w)
+		}
+		return 0, ""
 	case "ai":
 		if s := aiScore(d, w); s > 0 {
 			return s + 1, firstIn(d.aiDesc, w)
@@ -576,6 +599,15 @@ func matchTerm(d *doc, people string, it *Item, t term) (float64, string) {
 				sw = x
 				break
 			}
+		}
+	}
+	if contains(d.notes, w) {
+		s += 2
+		if wordStart(d.notes, w) {
+			s++
+		}
+		if sw == "" {
+			sw = firstIn(d.notes, w)
 		}
 	}
 	// descriptions by the AI count less than what people sorted and wrote

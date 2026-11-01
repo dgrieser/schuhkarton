@@ -29,6 +29,7 @@ type Config struct {
 	Media   Media   `yaml:"media" json:"media"`
 	Faces   Faces   `yaml:"faces" json:"faces"`
 	AI      AI      `yaml:"ai" json:"ai"`
+	Dupes   Dupes   `yaml:"dupes" json:"dupes"`
 	UI      UI      `yaml:"ui" json:"ui"`
 	Backup  Backup  `yaml:"backup" json:"backup"`
 	Worker  Worker  `yaml:"worker" json:"worker"`
@@ -151,6 +152,17 @@ type AI struct {
 	Thinking bool `yaml:"thinking" json:"thinking"`
 }
 
+// Dupes is the search for duplicates (perceptual hashes of the thumbnails;
+// cheap enough to run inside the gallery).
+type Dupes struct {
+	// Mode is "on" (default) or "off".
+	Mode string `yaml:"mode" json:"mode"`
+	// Sensitivity is strict, normal or loose.
+	Sensitivity string `yaml:"sensitivity" json:"sensitivity"`
+	// SimilarMinutes: photos of a series are at most this far apart.
+	SimilarMinutes int `yaml:"similar_minutes" json:"similar_minutes"`
+}
+
 // MittwaldAIURL is the OpenAI-compatible endpoint of mittwald AI hosting.
 const MittwaldAIURL = "https://llm.aihosting.mittwald.de/v1"
 
@@ -210,6 +222,7 @@ func Defaults() *Config {
 		},
 		Faces: Faces{Mode: "off", Workers: max(1, runtime.NumCPU()/4), MinScore: 0.86, ClusterThreshold: 0.48, NamedThreshold: 0.42},
 		AI:    AI{Mode: "off", URL: MittwaldAIURL, Model: "Qwen3.8-27B-NVFP4", Workers: 2, Languages: []string{"de", "en"}, ImageSize: 1024},
+		Dupes: Dupes{Mode: "on", Sensitivity: "normal", SimilarMinutes: 10},
 		UI: UI{Title: "Schuhkarton", Theme: "system", Language: "auto",
 			MapTiles: "https://tile.openstreetmap.org/{z}/{x}/{y}.png", MapAttribution: "© OpenStreetMap"},
 		Backup: Backup{Interval: "24h", Originals: true, Cache: true, Config: true},
@@ -268,6 +281,11 @@ func (c *Config) normalize() {
 	c.Server.Token = cmpOr(c.Server.Token, "auto")
 	c.Faces.Mode = cmpOr(strings.ToLower(c.Faces.Mode), "off")
 	c.AI.Mode = cmpOr(strings.ToLower(c.AI.Mode), "off")
+	c.Dupes.Mode = cmpOr(strings.ToLower(c.Dupes.Mode), d.Dupes.Mode)
+	c.Dupes.Sensitivity = cmpOr(strings.ToLower(c.Dupes.Sensitivity), d.Dupes.Sensitivity)
+	if c.Dupes.SimilarMinutes <= 0 {
+		c.Dupes.SimilarMinutes = d.Dupes.SimilarMinutes
+	}
 	c.AI.URL = strings.TrimRight(cmpOr(strings.TrimSpace(c.AI.URL), d.AI.URL), "/")
 	c.AI.Model = cmpOr(strings.TrimSpace(c.AI.Model), d.AI.Model)
 	c.AI.APIKeyEnv = strings.TrimPrefix(strings.TrimSpace(c.AI.APIKeyEnv), "$")
@@ -363,6 +381,16 @@ func (c *Config) Validate() error {
 		}
 	default:
 		errs = append(errs, fmt.Sprintf("ai.mode %q: off oder on", c.AI.Mode))
+	}
+	switch c.Dupes.Mode {
+	case "on", "off":
+	default:
+		errs = append(errs, fmt.Sprintf("dupes.mode %q: on oder off", c.Dupes.Mode))
+	}
+	switch c.Dupes.Sensitivity {
+	case "strict", "normal", "loose":
+	default:
+		errs = append(errs, fmt.Sprintf("dupes.sensitivity %q: strict, normal oder loose", c.Dupes.Sensitivity))
 	}
 	switch c.Faces.Mode {
 	case "off", "local":
