@@ -222,10 +222,20 @@ func libOptions(cfg *config.Config) gallery.Options {
 			MinScore: cfg.Faces.MinScore, ClusterThreshold: cfg.Faces.ClusterThreshold, NamedThreshold: cfg.Faces.NamedThreshold,
 			Python: python, ModelsDir: cfg.Faces.ModelsDir,
 		},
-		AI: aiOptions(cfg),
+		AI:    aiOptions(cfg),
+		Rules: ruleSet(cfg),
 		Dupes: gallery.DupeOptions{Off: cfg.Dupes.Mode == "off", Sensitivity: cfg.Dupes.Sensitivity,
 			SimilarWindow: time.Duration(cfg.Dupes.SimilarMinutes) * time.Minute},
 	}
+}
+
+// ruleSet hands the filing rules to the library.
+func ruleSet(cfg *config.Config) gallery.RuleSet {
+	rs := gallery.RuleSet{Locale: cfg.Library.Rules.Locale, Auto: cfg.Library.Rules.Auto}
+	for _, r := range cfg.Library.Rules.List {
+		rs.List = append(rs.List, gallery.Rule{Name: r.Name, When: r.When, Path: r.Path})
+	}
+	return rs
 }
 
 // aiOptions: descriptions only with ai.mode on.

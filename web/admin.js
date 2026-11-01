@@ -298,9 +298,12 @@
       btn.textContent = t('Speichern');
       if (!r) return;
       dlg.close();
-      report(r, single ? t('Gespeichert') : t('{n} Elemente geändert', { n: num(r.changed) }));
+      let msg = single ? t('Gespeichert') : t('{n} Elemente geändert', { n: num(r.changed) });
+      if (r.moved) msg += ` · ${t('nach den Regeln einsortiert')}`;
+      else if (r.queued) msg += ` · ${t('{n} werden im Hintergrund einsortiert', { n: num(r.queued) })}`;
+      report(r, msg);
       if (!single) SK.endSelection();
-      refreshAfter();
+      refreshAfter(r.ids || {});
     };
     $('[data-save]', dlg.foot).onclick = save;
     f.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); save(); } });

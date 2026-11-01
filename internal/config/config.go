@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dgrieser/schuhkarton/internal/pathtpl"
 	"gopkg.in/yaml.v3"
 )
 
@@ -89,6 +90,33 @@ type Library struct {
 	// Documents names folders whose files count as documents (scans,
 	// receipts): galleries hide them unless documents are switched on.
 	Documents []string `yaml:"documents" json:"documents"`
+	// Rules decide from the metadata where files live. Without rules
+	// nothing moves.
+	Rules Rules `yaml:"rules" json:"rules"`
+}
+
+// Rules file photos, videos and documents into folders by their metadata.
+// The first rule whose condition matches a file decides its folder; files
+// that no rule matches stay where they are.
+type Rules struct {
+	// Locale is the language of month and weekday names (de, en, fr, es,
+	// it, nl, da, sv, pl, pt).
+	Locale string `yaml:"locale" json:"locale"`
+	// Auto moves files as soon as an admin changes their date, place or
+	// category; otherwise they move only when the rules are applied.
+	Auto bool   `yaml:"auto" json:"auto"`
+	List []Rule `yaml:"list" json:"list"`
+}
+
+// Rule is one filing rule.
+type Rule struct {
+	Name string `yaml:"name,omitempty" json:"name"`
+	// When is a search like "typ:dokument" or "ort:Berlin"; empty matches
+	// every file.
+	When string `yaml:"when,omitempty" json:"when"`
+	// Path is the folder below the library folder, a template like
+	// "{jahr}/{datum:MM MMMM} {ort}" (see internal/pathtpl).
+	Path string `yaml:"path" json:"path"`
 }
 
 // Cache is where everything derived lives.
@@ -212,7 +240,7 @@ func Defaults() *Config {
 		Access: Access{Anonymous: true, Register: true},
 		Library: Library{
 			Exclude:    []string{"_Duplikate", ".*", "@eaDir", "#recycle", "$RECYCLE.BIN", "System Volume Information", "*.tmp"},
-			FolderMeta: true, WriteFiles: true, TrashDays: 30,
+			FolderMeta: true, WriteFiles: true, TrashDays: 30, Rules: Rules{Locale: "de", Auto: true},
 			Documents: []string{"Dokumente", "Documents", "Scans", "Belege"},
 		},
 		Cache: Cache{Dir: DefaultCacheDir()},
@@ -280,6 +308,11 @@ func (c *Config) normalize() {
 	c.Server.Listen = cmpOr(c.Server.Listen, d.Server.Listen)
 	c.Server.Token = cmpOr(c.Server.Token, "auto")
 	c.Faces.Mode = cmpOr(strings.ToLower(c.Faces.Mode), "off")
+	c.Library.Rules.Locale = cmpOr(strings.ToLower(strings.TrimSpace(c.Library.Rules.Locale)), d.Library.Rules.Locale)
+	for i, r := range c.Library.Rules.List {
+		// a rule without path stays, so Validate reports it instead of it vanishing
+		c.Library.Rules.List[i] = Rule{Name: strings.TrimSpace(r.Name), When: strings.TrimSpace(r.When), Path: strings.TrimSpace(r.Path)}
+	}
 	c.AI.Mode = cmpOr(strings.ToLower(c.AI.Mode), "off")
 	c.Dupes.Mode = cmpOr(strings.ToLower(c.Dupes.Mode), d.Dupes.Mode)
 	c.Dupes.Sensitivity = cmpOr(strings.ToLower(c.Dupes.Sensitivity), d.Dupes.Sensitivity)
@@ -401,6 +434,14 @@ func (c *Config) Validate() error {
 	default:
 		errs = append(errs, fmt.Sprintf("faces.mode %q: off, remote oder local", c.Faces.Mode))
 	}
+	if !pathtpl.Supported(c.Library.Rules.Locale) {
+		errs = append(errs, fmt.Sprintf("library.rules.locale %q: %s", c.Library.Rules.Locale, strings.Join(pathtpl.LocaleCodes, ", ")))
+	}
+	for i, r := range c.Library.Rules.List {
+		if _, err := pathtpl.Parse(r.Path); err != nil {
+			errs = append(errs, fmt.Sprintf("Regel %d (%s): %v", i+1, cmpOr(r.Name, r.Path), err))
+		}
+	}
 	if c.Library.TrashDays < 0 {
 		errs = append(errs, "library.trash_days darf nicht negativ sein")
 	}
@@ -494,6 +535,7 @@ func (c *Config) Clone() *Config {
 	n.Library.Folders = append([]Folder(nil), c.Library.Folders...)
 	n.Library.Exclude = append([]string(nil), c.Library.Exclude...)
 	n.Library.Documents = append([]string(nil), c.Library.Documents...)
+	n.Library.Rules.List = append([]Rule(nil), c.Library.Rules.List...)
 	n.AI.Languages = append([]string(nil), c.AI.Languages...)
 	n.locked = c.LockedKeys()
 	return &n

@@ -112,6 +112,9 @@ func SetValue(c *Config, key, raw string) error {
 			target.Set(reflect.ValueOf(fs))
 			return nil
 		}
+		if target.Type().Elem().Kind() != reflect.String {
+			return fmt.Errorf("%s: only in the configuration file", key)
+		}
 		target.Set(reflect.ValueOf(parts))
 	default:
 		return fmt.Errorf("unsupported type %s", target.Kind())

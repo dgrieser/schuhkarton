@@ -2035,6 +2035,7 @@
         else if (Account.can('admin')) rows.push(`<div class="row"><span class="bad" title="${esc(t(s.aiError))}">${t('Beschreibungen angehalten')}: ${esc(t(s.aiError))}</span></div>`);
       }
       if (s.dupeMode === 'on' && Account.can('admin')) bar(t('Duplikate prüfen'), s.dupeDone, s.dupeTodo);
+      if (s.rulesRunning && Account.can('admin')) { busy = true; bar(t('Einsortieren'), s.rulesDone, s.rulesTodo, s.rulesFail || 0); }
       const bk = res.backup;
       if (bk?.running) { busy = true; rows.push(`<div class="row"><span>${t('Sicherung')}: ${esc(t(bk.phase || ''))} · ${t('{n} kopiert', { n: num(bk.copied) })}</span></div>`); }
       if (!rows.length) rows.push(`<div class="row"><span>${pl(s.photos, '{n} Foto', '{n} Fotos')} · ${pl(s.videos, '{n} Video', '{n} Videos')}${s.people ? ` · ${pl(s.people, '{n} Person', '{n} Personen')}` : ''}</span>${missing ? `<span class="faint" title="${t('Diese Dateien lassen sich nicht lesen')}">${num(missing)} ${t('ohne Vorschau')}</span>` : ''}</div>`);

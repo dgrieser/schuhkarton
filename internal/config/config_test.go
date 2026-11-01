@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -72,5 +73,23 @@ func TestAIKey(t *testing.T) {
 	c.AI.Mode, c.AI.URL = "on", "ftp://x"
 	if c.Validate() == nil {
 		t.Fatal("ai.url must be http(s)")
+	}
+}
+
+func TestRulesInFile(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config.yaml")
+	os.WriteFile(p, []byte("library:\n  rules:\n    list:\n      - {name: Fotos, path: \"{jahr}/{ort}\"}\n      - {name: Leer, path: \" \"}\n"), 0o600)
+	c, err := Load(p)
+	if err == nil {
+		err = c.Validate()
+	}
+	if err == nil || !strings.Contains(err.Error(), "Leer") {
+		t.Fatalf("a rule without path must be reported, got %v", err)
+	}
+	c = Defaults()
+	c.Library.Rules.List = []Rule{{Path: "{jahr}"}}
+	c.Library.Rules.Locale = "xx"
+	if c.Validate() == nil {
+		t.Error("unknown locale must fail")
 	}
 }
