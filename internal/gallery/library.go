@@ -67,6 +67,8 @@ type Options struct {
 	Faces FaceOptions
 	AI    AIOptions   // descriptions by a vision language model; empty Model: off
 	Dupes DupeOptions // the search for duplicates
+	// Rules file the files into folders by their metadata (none: nothing moves).
+	Rules RuleSet
 }
 
 // FaceOptions configure face detection.
@@ -177,7 +179,11 @@ type Status struct {
 	DupeDone   int64  `json:"dupeDone"`
 	DupeTodo   int64  `json:"dupeTodo"`
 	DupeGroups int64  `json:"dupeGroups"`
-	Version    int64  `json:"version"`
+	// Filing rules: files moved into their folders in the background.
+	RulesRunning bool  `json:"rulesRunning"`
+	RulesDone    int64 `json:"rulesDone"`
+	RulesTodo    int64 `json:"rulesTodo"`
+	Version      int64 `json:"version"`
 }
 
 // Library holds the index and the background workers.
@@ -208,11 +214,13 @@ type Library struct {
 	marks  markStore // guarded by favMu
 	notes  noteStore
 
-	opMu    sync.Mutex           // one admin operation (edit, rotate, move, trash) at a time
-	editMu  sync.Mutex           // guards edits
-	edits   map[string]*Override // root name + "/" + rel -> admin edits
-	trashMu sync.Mutex
-	trash   []*TrashEntry
+	opMu     sync.Mutex // one admin operation (edit, rotate, move, trash) at a time
+	rules    atomic.Pointer[compiledRules]
+	rulesJob rulesJob
+	editMu   sync.Mutex           // guards edits
+	edits    map[string]*Override // root name + "/" + rel -> admin edits
+	trashMu  sync.Mutex
+	trash    []*TrashEntry
 
 	faces faceBackend  // nil when face detection is off
 	local *helper.Pool // Python helper for formats Go cannot decode (mode local)
@@ -268,6 +276,9 @@ func Open(opt Options) (*Library, error) {
 	}
 	l.people = newPeopleStore(filepath.Join(opt.CacheDir, "people.json"), opt.Faces.ClusterThreshold, opt.Faces.NamedThreshold)
 	l.loadEdits()
+	if err := l.SetRules(opt.Rules); err != nil {
+		l.logf("Regeln ausgeschaltet: %v", err)
+	}
 	l.loadTrash()
 	l.loadDupes()
 	l.loadMarks()
@@ -406,6 +417,7 @@ func (l *Library) Status() Status {
 		s.DupeMode = "off"
 	}
 	s.DupeDone, s.DupeTodo, s.DupeGroups = l.dupe.done.Load(), l.dupe.todo.Load(), l.dupe.nGrp.Load()
+	s.RulesRunning, s.RulesDone, s.RulesTodo = l.rulesJob.running.Load(), l.rulesJob.done.Load(), l.rulesJob.todo.Load()
 	fs := l.FaceStatus()
 	s.FaceMode, s.FaceOK, s.FaceRec, s.FaceErr = fs.Mode, fs.Detection, fs.Recognition, fs.Error
 	for _, it := range l.Items() {

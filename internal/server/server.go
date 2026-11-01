@@ -85,6 +85,7 @@ func New(ctx context.Context, o Options) http.Handler {
 	s.accountRoutes(mux)
 	s.socialRoutes(mux)
 	s.adminRoutes(mux, s.requireAdmin)
+	s.rulesRoutes(mux, s.requireAdmin)
 	if o.Setup != nil {
 		mux.Handle("/setup", o.Setup)
 		mux.Handle("/api/setup/", o.Setup)

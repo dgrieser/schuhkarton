@@ -54,6 +54,8 @@ type EditResult struct {
 	Warnings []string          `json:"warnings,omitempty"`
 	IDs      map[string]string `json:"ids,omitempty"`     // move: old id -> new id; restore: entry -> item id
 	Entries  []string          `json:"entries,omitempty"` // delete: the new trash entries (for undo)
+	Moved    int               `json:"moved,omitempty"`   // edit: files the rules moved right away
+	Queued   int               `json:"queued,omitempty"`  // edit: files the rules move in the background
 }
 
 func (r *EditResult) warn(format string, args ...any) {
@@ -313,6 +315,11 @@ func (l *Library) EditItems(ids []string, e Edit) (EditResult, error) {
 		}
 	}
 	l.refresh(items)
+	var ids2 []string
+	for _, it := range items {
+		ids2 = append(ids2, it.ID)
+	}
+	l.fileByRules(ids2, e.By, &res)
 	return res, nil
 }
 

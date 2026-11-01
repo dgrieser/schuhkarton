@@ -1,0 +1,135 @@
+package gallery
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+)
+
+// the layout the library has today, as rules
+var layoutRules = RuleSet{Locale: "de", Auto: true, List: []Rule{
+	{Name: "Dokumente", When: "typ:dokument", Path: "Dokumente/{jahr}/{datum:MM MMMM} {kategorie}"},
+	{Name: "Fotos", Path: "{jahr}/{datum:MM MMMM} {ort|Kamera}"},
+}}
+
+func TestRulesKeepMatchingLayout(t *testing.T) {
+	l, _ := testLib(t, "2019/06 Juni Lübbecke/a.jpg", "2019/06 Juni Kamera/b.jpg", "Dokumente/2021/03 März Rechnung/c.jpg")
+	if err := l.SetRules(layoutRules); err != nil {
+		t.Fatal(err)
+	}
+	p := l.PreviewRules(layoutRules)
+	if p.Moves != 0 || p.Total != 3 || p.Rules[0].Matches != 1 || p.Rules[1].Matches != 2 {
+		t.Fatalf("the current layout should stay: %+v", p)
+	}
+	// a rule without place moves the photos; the place from the folder stays
+	flat := RuleSet{Locale: "en", Auto: true, List: []Rule{{When: "-typ:dokument", Path: "{year}/{date:MMMM}"}}}
+	p = l.PreviewRules(flat)
+	if p.Moves != 2 || p.Unmatched != 1 || p.Rules[0].Examples[0].To == "" {
+		t.Fatalf("flat preview: %+v", p)
+	}
+	if err := l.SetRules(flat); err != nil {
+		t.Fatal(err)
+	}
+	n, err := l.ApplyRules("Anna")
+	if err != nil || n != 2 {
+		t.Fatalf("apply: %d %v", n, err)
+	}
+	waitRules(t, l)
+	a := byRel(l, "2019/June/a.jpg")
+	if a == nil || a.Place != "Lübbecke" || a.TakenSrc != "edit" {
+		t.Fatalf("moved photo lost its place or date: %+v", a)
+	}
+	if byRel(l, "2019/June/b.jpg") == nil {
+		t.Fatal("second photo not moved")
+	}
+	// the emptied folders are gone, the document stayed
+	if _, err := os.Stat(filepath.Join(l.opt.Roots[0].Path, "2019/06 Juni Lübbecke")); !os.IsNotExist(err) {
+		t.Fatalf("empty folder left: %v", err)
+	}
+	if byRel(l, "Dokumente/2021/03 März Rechnung/c.jpg") == nil {
+		t.Fatal("document moved")
+	}
+	// back to the old layout
+	if err := l.SetRules(layoutRules); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := l.ApplyRules("Anna"); err != nil || n != 2 {
+		t.Fatalf("apply back: %d %v", n, err)
+	}
+	waitRules(t, l)
+	if byRel(l, "2019/06 Juni Lübbecke/a.jpg") == nil || byRel(l, "2019/06 Juni Kamera/b.jpg") == nil {
+		t.Fatalf("not back in place: %v", rels(l))
+	}
+}
+
+func TestRulesAfterEdit(t *testing.T) {
+	l, _ := testLib(t, "2019/06 Juni Lübbecke/a.jpg", "2019/06 Juni Lübbecke/b.jpg", "2019/06 Juni Lübbecke/c.jpg")
+	if err := l.SetRules(layoutRules); err != nil {
+		t.Fatal(err)
+	}
+	// one file: moved right away, the new id comes back
+	aID := byRel(l, "2019/06 Juni Lübbecke/a.jpg").ID
+	place := "Berlin"
+	res, err := l.EditItems([]string{aID}, Edit{Place: &place, By: "Anna"})
+	if err != nil || res.Moved != 1 {
+		t.Fatalf("edit: %+v %v", res, err)
+	}
+	moved := byRel(l, "2019/06 Juni Berlin/a.jpg")
+	if moved == nil || res.IDs[aID] != moved.ID {
+		t.Fatalf("not filed by place: %v ids %v", rels(l), res.IDs)
+	}
+	// two files: in the background
+	b, c := byRel(l, "2019/06 Juni Lübbecke/b.jpg"), byRel(l, "2019/06 Juni Lübbecke/c.jpg")
+	when := time.Date(2020, 1, 2, 10, 0, 0, 0, time.UTC).Unix()
+	res, err = l.EditItems([]string{b.ID, c.ID}, Edit{Taken: &when, By: "Anna"})
+	if err != nil || res.Queued != 2 {
+		t.Fatalf("edit two: %+v %v", res, err)
+	}
+	waitRules(t, l)
+	if byRel(l, "2020/01 Januar Lübbecke/b.jpg") == nil || byRel(l, "2020/01 Januar Lübbecke/c.jpg") == nil {
+		t.Fatalf("not filed by date: %v", rels(l))
+	}
+	// without auto nothing moves on edits
+	off := layoutRules
+	off.Auto = false
+	l.SetRules(off)
+	moved = byRel(l, "2019/06 Juni Berlin/a.jpg")
+	place = "Hamburg"
+	if res, _ := l.EditItems([]string{moved.ID}, Edit{Place: &place}); res.Moved+res.Queued != 0 {
+		t.Fatalf("moved without auto: %+v", res)
+	}
+}
+
+func TestRulesBadTemplate(t *testing.T) {
+	l, _ := testLib(t, "a.jpg")
+	bad := RuleSet{Locale: "de", List: []Rule{{Path: "{jahr"}}}
+	if err := l.SetRules(bad); err == nil {
+		t.Fatal("bad template accepted")
+	}
+	if p := l.PreviewRules(bad); p.Rules[0].Error == "" {
+		t.Fatalf("no error in preview: %+v", p)
+	}
+	if _, err := l.ApplyRules(""); err == nil {
+		t.Fatal("applied without rules")
+	}
+}
+
+func waitRules(t *testing.T, l *Library) {
+	t.Helper()
+	for range 500 {
+		if !l.rulesJob.running.Load() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("rules still running")
+}
+
+func rels(l *Library) []string {
+	var out []string
+	for _, it := range l.Items() {
+		out = append(out, it.Rel)
+	}
+	return out
+}

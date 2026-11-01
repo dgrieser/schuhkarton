@@ -211,6 +211,41 @@ stay in the cache (`edits.json`) only. Formats exiftool cannot rotate (HEIC,
 PNG, …) keep the rotation in the cache either way. Favorites, names of
 people and cached previews follow moved and edited files.
 
+## Filing rules (admins)
+
+Schuhkarton does not impose a folder layout: without rules nothing moves.
+*Ablage* in the sidebar sets rules for where files should live, from their
+metadata. Each rule has a condition in the search syntax (`typ:dokument`,
+`ort:Berlin`, empty for every file) and a folder template; every file follows
+the first rule that matches, files no rule matches stay where they are.
+
+```
+Dokumente/{jahr}/{datum:MM MMMM} {kategorie}     → Dokumente/2023/03 März Rechnung
+{jahr}/{datum:MM MMMM} {ort|Kamera}              → 2019/06 Juni Lübbecke
+```
+
+- Fields: `jahr`, `monat`, `datum`, `ort`, `kategorie`, `kamera`, `typ`,
+  `schlagwort`, `person`, `album` (the current folder); the English names
+  `year`, `month`, `date`, `place`, `category`, `camera`, `kind`, `keyword`
+  work as well.
+- `{datum:…}` formats the capture date with Unicode (CLDR/ICU) date symbols:
+  `yyyy` 2025, `yy` 25, `MM` 07, `M` 7, `MMMM` Juli, `MMM` Jul, `dd` 05,
+  `EEEE` Samstag, `QQQ` Q3, `ww` ISO week; text in single quotes stays as it is.
+  Month and weekday names come in the language set for the rules (de, en, fr,
+  es, it, nl, da, sv, pl, pt).
+- `{field|text}` uses the text when the value is missing. Values never create
+  folders of their own (`/` becomes `-`), folder names lose leading and
+  trailing dots and spaces.
+
+The page shows live, for every rule, how many files it decides, how many
+would move and a few resulting paths. *Wie bisher* fills in the two rules
+above, which describe the layout the library was built with. *Jetzt
+einsortieren* moves everything into place in the background (progress in the
+sidebar); with `auto` on, a file moves as soon as an admin changes its date,
+place or category, several files at once in the background. Live Photo videos
+move with their photo, emptied folders are removed, and a place, date or
+category that so far came only from a folder name is kept as an edit.
+
 ## Image descriptions (optional)
 
 An AI model can describe every photo: one or two sentences and 8–20 tags,
@@ -299,6 +334,12 @@ library:
   write_files: true           # write admin edits into the files (exiftool); false: cache only
   trash_days: 30              # empty the trash after this many days; 0: never
   documents: [Dokumente, Documents, Scans, Belege]  # folders whose files are documents
+  rules:                      # filing rules (see "Filing rules"); no list: nothing moves
+    locale: de                # language of month and weekday names
+    auto: true                # move files right after an admin edits date, place or category
+    list:
+      - {name: Dokumente, when: "typ:dokument", path: "Dokumente/{jahr}/{datum:MM MMMM} {kategorie}"}
+      - {name: Fotos, path: "{jahr}/{datum:MM MMMM} {ort|Kamera}"}
 cache:
   dir: ~/.cache/schuhkarton
   previews: false             # true: large previews in advance (slow network shares)

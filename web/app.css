@@ -1069,3 +1069,71 @@ select.sel, .setup .user select, .setup #nrole, .adm-shift select {
   .mk-tabs { display: flex; }
   .mk-tabs a { flex: 1; justify-content: center; }
 }
+
+/* --- filing rules (admins) ---------------------------------------------------------- */
+.ru-how { display: flex; gap: 12px; align-items: flex-start; color: var(--muted); font-size: 14px; line-height: 1.5; margin: 0 0 16px; max-width: 900px; }
+.ru-how svg { flex: none; margin-top: 2px; color: var(--faint); }
+.ru-opts { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: center; margin: 0 0 16px; }
+.ru-opt { display: flex; align-items: center; gap: 10px; font-size: 14px; color: var(--muted); }
+.ru-opt select { height: 36px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); color: var(--text); padding: 0 10px; font: inherit; }
+.ru-check input { width: 18px; height: 18px; accent-color: var(--accent); flex: none; }
+.ru-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; max-width: 900px; }
+.ru-rule { border: 1px solid var(--line); border-radius: 16px; background: var(--surface); padding: 12px 14px 14px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; min-width: 0; }
+.ru-rule header { display: flex; align-items: center; gap: 6px; }
+.ru-no {
+  flex: none; width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center;
+  font-size: 13px; font-weight: 700; color: var(--accent-ink); background: var(--accent);
+}
+.ru-rule input { font: inherit; color: var(--text); }
+.ru-name { flex: 1; min-width: 0; height: 34px; border: 0; background: transparent; font-weight: 650 !important; font-size: 15px !important; padding: 0 6px; border-radius: 8px; outline: 0; }
+.ru-name:focus { background: var(--bg); }
+.ru-f { display: grid; grid-template-columns: 64px minmax(0, 1fr); align-items: center; gap: 10px; }
+.ru-f > span { font-size: 12px; font-weight: 650; letter-spacing: .04em; text-transform: uppercase; color: var(--faint); }
+.ru-f input { height: 40px; min-width: 0; padding: 0 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); outline: 0; font-size: 15px; }
+.ru-f input:focus { border-color: var(--accent); }
+.ru-f input.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 14px; }
+.ru-chips { display: flex; flex-wrap: wrap; gap: 6px; padding-left: 74px; }
+.ru-chips .chip { height: 26px; padding: 0 10px; font-size: 12px; }
+.ru-prev { padding-left: 74px; min-height: 20px; transition: opacity .2s; }
+.ru-prev.busy { opacity: .45; }
+.ru-stat { font-size: 13px; color: var(--muted); }
+.ru-stat b { color: var(--text); }
+.ru-mv { color: var(--accent); font-weight: 650; }
+.ru-ex { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 6px; }
+.ru-ex li { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; padding: 7px 10px; border-radius: 9px; background: var(--bg); overflow-wrap: anywhere; }
+.ru-ex .ru-dir { color: var(--text); font-weight: 600; }
+.ru-ex .ru-root { color: var(--faint); font-style: italic; }
+.ru-ex .ru-file { color: var(--muted); }
+.ru-ex small { display: block; margin-top: 2px; color: var(--faint); font-size: 12px; }
+.ru-err { display: flex; gap: 8px; align-items: center; color: var(--danger); font-size: 13px; }
+.ru-none { display: grid; justify-items: center; gap: 6px; text-align: center; padding: 28px 16px; border: 1px dashed var(--line); border-radius: 16px; color: var(--muted); }
+.ru-none svg { width: 28px; height: 28px; color: var(--faint); }
+.ru-none b { color: var(--text); }
+.ru-add { margin: 12px 0 0; }
+.ru-help { max-width: 900px; margin: 18px 0 0; color: var(--muted); font-size: 14px; line-height: 1.5; }
+.ru-help summary { cursor: pointer; font-weight: 600; color: var(--text); }
+.ru-help code { font-size: 13px; padding: 1px 5px; border-radius: 6px; background: var(--surface2); color: var(--text); }
+.ru-fmt { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px 14px; margin: 10px 0; }
+.ru-fmt code { justify-self: start; }
+.ru-fmt span { margin: -4px 0 4px; font-size: 13px; }
+.ru-fmt > code + span { grid-column: auto; }
+.ru-job { display: grid; gap: 6px; margin: 0 0 14px; font-size: 13px; color: var(--muted); max-width: 900px; }
+.ru-job .bar { display: block; height: 4px; border-radius: 3px; background: var(--surface2); overflow: hidden; }
+.ru-job .bar i { display: block; height: 100%; background: var(--accent); transition: width .6s var(--ease); }
+.ru-bar {
+  position: sticky; bottom: 0; z-index: 5; max-width: 900px; margin: 18px 0 0; padding: 12px 0 calc(12px + env(safe-area-inset-bottom));
+  display: flex; align-items: center; gap: 8px; background: var(--bg); border-top: 1px solid var(--line);
+}
+.ru-sum { flex: 1; min-width: 0; display: grid; font-size: 13px; color: var(--muted); }
+.ru-sum b { color: var(--text); font-size: 14px; }
+@media (max-width: 720px) {
+  .ru-list, .ru-how, .ru-opts, .ru-help, .ru-bar, .ru-job { margin-left: 6px; margin-right: 6px; }
+  .ru-f { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  .ru-rule { padding: 10px 12px 12px; }
+  .ru-chips, .ru-prev { padding-left: 0; }
+  .ru-chips { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding-bottom: 2px; }
+  .ru-chips .chip { flex: none; }
+  .ru-bar { bottom: calc(64px + env(safe-area-inset-bottom)); flex-wrap: wrap; }
+  .ru-sum { flex-basis: 100%; }
+  .ru-bar .btn { flex: 1; justify-content: center; }
+}

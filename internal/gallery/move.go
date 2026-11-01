@@ -242,50 +242,70 @@ func (l *Library) Move(ids []string, root, dir string) (EditResult, error) {
 	}
 	l.opMu.Lock()
 	defer l.opMu.Unlock()
-	target := filepath.Join(l.opt.Roots[ri].Path, filepath.FromSlash(d))
-	if err := os.MkdirAll(target, 0o755); err != nil {
-		return res, err
-	}
 	favs, idMap := map[string]string{}, map[string]string{}
 	var changed []*Item
 	for _, g := range l.groups(ids) {
-		lead := g[0]
-		cur := path.Dir(lead.Rel)
-		if cur == "." {
-			cur = ""
+		moved, err := l.moveGroup(g, ri, d, favs, idMap, &res)
+		if err != nil {
+			return res, err
 		}
-		if lead.Root == ri && cur == d {
-			continue // already there
-		}
-		base := path.Base(lead.Rel)
-		stem := strings.TrimSuffix(base, path.Ext(base))
-		var exts []string
-		for _, it := range g {
-			exts = append(exts, path.Ext(it.Rel))
-		}
-		stem = freeStem(target, stem, exts)
-		for i, it := range g {
-			if i > 0 && strings.TrimSuffix(path.Base(it.Rel), path.Ext(it.Rel)) != strings.TrimSuffix(base, path.Ext(base)) {
-				// a companion with another name keeps its own
-				stem = freeStem(target, strings.TrimSuffix(path.Base(it.Rel), path.Ext(it.Rel)), []string{path.Ext(it.Rel)})
-			}
-			name := stem + path.Ext(it.Rel)
-			rel := name
-			if d != "" {
-				rel = d + "/" + name
-			}
-			if err := moveWithSidecars(l.Path(it), filepath.Join(target, name)); err != nil {
-				res.warn("%s: %v", path.Base(it.Rel), err)
-				if i == 0 {
-					break // keep the pair together
-				}
-				continue
-			}
-			l.relocate(it, ri, rel, favs, idMap)
-			changed = append(changed, it)
-			res.Changed++
-		}
+		changed = append(changed, moved...)
 	}
+	l.finishMoves(favs, idMap, changed)
+	res.IDs = idMap
+	return res, nil
+}
+
+// moveGroup moves one photo with its Live Photo video (or a single file)
+// into folder d of root ri. The caller holds opMu and calls finishMoves.
+func (l *Library) moveGroup(g []*Item, ri int, d string, favs, idMap map[string]string, res *EditResult) ([]*Item, error) {
+	lead := g[0]
+	cur := path.Dir(lead.Rel)
+	if cur == "." {
+		cur = ""
+	}
+	if lead.Root == ri && cur == d {
+		return nil, nil // already there
+	}
+	target := filepath.Join(l.opt.Roots[ri].Path, filepath.FromSlash(d))
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		return nil, err
+	}
+	base := path.Base(lead.Rel)
+	stem := strings.TrimSuffix(base, path.Ext(base))
+	var exts []string
+	for _, it := range g {
+		exts = append(exts, path.Ext(it.Rel))
+	}
+	stem = freeStem(target, stem, exts)
+	var moved []*Item
+	for i, it := range g {
+		if i > 0 && strings.TrimSuffix(path.Base(it.Rel), path.Ext(it.Rel)) != strings.TrimSuffix(base, path.Ext(base)) {
+			// a companion with another name keeps its own
+			stem = freeStem(target, strings.TrimSuffix(path.Base(it.Rel), path.Ext(it.Rel)), []string{path.Ext(it.Rel)})
+		}
+		name := stem + path.Ext(it.Rel)
+		rel := name
+		if d != "" {
+			rel = d + "/" + name
+		}
+		if err := moveWithSidecars(l.Path(it), filepath.Join(target, name)); err != nil {
+			res.warn("%s: %v", path.Base(it.Rel), err)
+			if i == 0 {
+				break // keep the pair together
+			}
+			continue
+		}
+		l.relocate(it, ri, rel, favs, idMap)
+		moved = append(moved, it)
+		res.Changed++
+	}
+	return moved, nil
+}
+
+// finishMoves carries edits, favorites, notes and face names along to the
+// new paths and republishes the index.
+func (l *Library) finishMoves(favs, idMap map[string]string, changed []*Item) {
 	l.renameEdits(favs)
 	l.saveEdits()
 	l.RenameKeys(favs)
@@ -293,6 +313,4 @@ func (l *Library) Move(ids []string, root, dir string) (EditResult, error) {
 	l.refresh(changed)
 	l.recluster()
 	l.bump()
-	res.IDs = idMap
-	return res, nil
 }
