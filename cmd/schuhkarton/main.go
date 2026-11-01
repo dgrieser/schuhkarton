@@ -242,7 +242,7 @@ func libOptions(cfg *config.Config) gallery.Options {
 		ThumbSize: cfg.Media.ThumbSize, PreviewSize: cfg.Media.PreviewSize, Quality: cfg.Media.JPEGQuality,
 		Previews: cfg.Cache.Previews, VideoPreviews: cfg.Media.VideoPreviews, VideoPreviewSize: cfg.Media.VideoPreviewSize,
 		Transcode:     cfg.Media.Transcode,
-		IgnoreFolders: !cfg.Library.FolderMeta, WriteFiles: cfg.Library.WriteFiles, TrashDays: cfg.Library.TrashDays,
+		IgnoreFolders: !cfg.Library.FolderMeta, WriteFiles: cfg.Library.WriteFiles, WriteMetadata: cfg.Library.WriteMetadata, TrashDays: cfg.Library.TrashDays,
 		DocFolders: cfg.Library.Documents,
 		Faces: gallery.FaceOptions{
 			Mode: cfg.Faces.Mode, URL: cfg.Faces.URL, Token: cfg.Faces.Token, Workers: cfg.Faces.Workers,
@@ -251,6 +251,7 @@ func libOptions(cfg *config.Config) gallery.Options {
 		},
 		AI:     aiOptions(cfg),
 		OCR:    ocrOptions(cfg),
+		Speech: speechOptions(cfg),
 		Rules:  ruleSet(cfg),
 		Import: importOptions(cfg),
 		Dupes: gallery.DupeOptions{Off: cfg.Dupes.Mode == "off", Sensitivity: cfg.Dupes.Sensitivity,
@@ -285,6 +286,14 @@ func ocrOptions(cfg *config.Config) gallery.OCROptions {
 		return gallery.OCROptions{}
 	}
 	return gallery.OCROptions{URL: cfg.AI.URL, Key: cfg.AI.Key(), Model: cfg.AI.OCRModel, Workers: cfg.AI.OCRWorkers, Scope: cfg.AI.OCR}
+}
+
+// speechOptions: speech recognition with ai.speech on, over the AI service.
+func speechOptions(cfg *config.Config) gallery.SpeechOptions {
+	if cfg.AI.Speech != "on" {
+		return gallery.SpeechOptions{}
+	}
+	return gallery.SpeechOptions{URL: cfg.AI.URL, Key: cfg.AI.Key(), Model: cfg.AI.SpeechModel, Fallback: cfg.AI.SpeechFallback, Workers: cfg.AI.SpeechWorkers}
 }
 
 // aiOptions: descriptions only with ai.mode on.
@@ -832,6 +841,12 @@ func runDoctor(args []string) error {
 			}
 			if cfg.AI.OCR != "off" {
 				fmt.Printf(", Texterkennung %s %s", cfg.AI.OCRModel, has[slices.Contains(t.Models, cfg.AI.OCRModel)])
+			}
+			if cfg.AI.Speech == "on" {
+				fmt.Printf(", Spracherkennung %s %s", cfg.AI.SpeechModel, has[slices.Contains(t.Models, cfg.AI.SpeechModel)])
+				if cfg.AI.SpeechFallback != "" {
+					fmt.Printf(", zweiter Versuch %s %s", cfg.AI.SpeechFallback, has[slices.Contains(t.Models, cfg.AI.SpeechFallback)])
+				}
 			}
 			fmt.Println()
 		}

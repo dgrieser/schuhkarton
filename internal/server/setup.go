@@ -309,7 +309,8 @@ func (s *Setup) aiTest(w http.ResponseWriter, r *http.Request) {
 		Key      string `json:"key"`
 		Model    string `json:"model"`
 		Describe bool   `json:"describe"`
-		OCR      bool   `json:"ocr"` // read a drawn picture with text using Model
+		OCR      bool   `json:"ocr"`    // read a drawn picture with text using Model
+		Speech   bool   `json:"speech"` // send a second of silence to Model
 	}
 	if err := readJSON(r, &req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -328,6 +329,10 @@ func (s *Setup) aiTest(w http.ResponseWriter, r *http.Request) {
 	url := strings.TrimRight(strings.TrimSpace(req.URL), "/")
 	if url == "" {
 		url = config.MittwaldAIURL
+	}
+	if req.Speech {
+		writeJSON(w, r, map[string]any{"speech": gallery.TestSpeech(ctx, gallery.SpeechOptions{URL: url, Key: key, Model: strings.TrimSpace(req.Model)}), "hasKey": key != ""})
+		return
 	}
 	if req.OCR {
 		writeJSON(w, r, map[string]any{"ocr": gallery.TestOCR(ctx, gallery.OCROptions{URL: url, Key: key, Model: strings.TrimSpace(req.Model)}), "hasKey": key != ""})
@@ -429,6 +434,7 @@ func merge(cur, in *config.Config) *config.Config {
 	set("library.rescan", func() { n.Library.Rescan = in.Library.Rescan })
 	set("library.folder_meta", func() { n.Library.FolderMeta = in.Library.FolderMeta })
 	set("library.write_files", func() { n.Library.WriteFiles = in.Library.WriteFiles })
+	set("library.write_metadata", func() { n.Library.WriteMetadata = in.Library.WriteMetadata })
 	set("library.trash_days", func() { n.Library.TrashDays = in.Library.TrashDays })
 	set("library.import.dir", func() { n.Library.Import.Dir = config.ExpandHome(strings.TrimSpace(in.Library.Import.Dir)) })
 	set("library.import.folder", func() { n.Library.Import.Folder = strings.TrimSpace(in.Library.Import.Folder) }) // name or path, see config
@@ -476,6 +482,14 @@ func merge(cur, in *config.Config) *config.Config {
 	})
 	set("ai.ocr_model", func() { n.AI.OCRModel = strings.TrimSpace(in.AI.OCRModel) })
 	set("ai.ocr_workers", func() { n.AI.OCRWorkers = in.AI.OCRWorkers })
+	set("ai.speech", func() {
+		if in.AI.Speech != "" {
+			n.AI.Speech = in.AI.Speech
+		}
+	})
+	set("ai.speech_model", func() { n.AI.SpeechModel = strings.TrimSpace(in.AI.SpeechModel) })
+	set("ai.speech_fallback", func() { n.AI.SpeechFallback = strings.TrimSpace(in.AI.SpeechFallback) })
+	set("ai.speech_workers", func() { n.AI.SpeechWorkers = in.AI.SpeechWorkers })
 	// the key field takes the key itself or $VARIABLE (the key stays in the environment)
 	if cur.Locked("ai.api_key") == "" && cur.Locked("ai.api_key_env") == "" {
 		k := strings.TrimSpace(in.AI.APIKey)

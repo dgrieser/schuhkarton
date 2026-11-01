@@ -18,9 +18,10 @@ import (
 
 // exifTool is a long-running "exiftool -stay_open" process.
 type exifTool struct {
-	cmd *exec.Cmd
-	in  io.WriteCloser
-	out *bufio.Reader
+	cmd    *exec.Cmd
+	in     io.WriteCloser
+	out    *bufio.Reader
+	errBuf *syncBuffer
 }
 
 // FindExifTool returns a usable exiftool path or "".
@@ -52,11 +53,17 @@ func dirExists(p string) bool {
 	return err == nil && st.IsDir()
 }
 
-func startExifTool(bin string) (*exifTool, error) {
+// startExifTool starts exiftool; cfg is an exiftool config file (the
+// XMP-schuhkarton tags) or "".
+func startExifTool(bin, cfg string) (*exifTool, error) {
 	if bin == "" {
 		return nil, errors.New("not found")
 	}
-	cmd := exifToolCmd(bin, "-stay_open", "True", "-@", "-")
+	var args []string
+	if cfg != "" {
+		args = append(args, "-config", cfg) // must come first
+	}
+	cmd := exifToolCmd(bin, append(args, "-stay_open", "True", "-@", "-")...)
 	in, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -65,11 +72,12 @@ func startExifTool(bin string) (*exifTool, error) {
 	if err != nil {
 		return nil, err
 	}
-	cmd.Stderr = io.Discard
+	eb := &syncBuffer{}
+	cmd.Stderr = eb
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
-	return &exifTool{cmd: cmd, in: in, out: bufio.NewReaderSize(out, 1<<20)}, nil
+	return &exifTool{cmd: cmd, in: in, out: bufio.NewReaderSize(out, 1<<20), errBuf: eb}, nil
 }
 
 func (e *exifTool) close() {
@@ -95,11 +103,14 @@ var exifTags = []string{
 	"-XMP-dc:Subject", "-Keywords", "-XMP-photoshop:City", "-XMP-photoshop:Category",
 }
 
+// metaTags: exifTags plus what Schuhkarton wrote (xmp.go).
+var metaTags = append(append([]string(nil), exifTags...), xmpReadTags...)
+
 // read returns the metadata per path.
 func (e *exifTool) read(paths []string) (map[string]map[string]any, error) {
 	var b bytes.Buffer
 	for _, a := range append([]string{"-json", "-n", "-api", "QuickTimeUTC=1", "-api", "LargeFileSupport=1",
-		"-charset", "filename=utf8", "-m"}, exifTags...) {
+		"-charset", "filename=utf8", "-m"}, metaTags...) {
 		b.WriteString(a + "\n")
 	}
 	for _, p := range paths {
@@ -248,6 +259,7 @@ func applyMeta(it *Item, m map[string]any) {
 			}
 		}
 	}
+	it.Keywords = ownKeywords(it.Keywords, m) // not the AI keywords Schuhkarton wrote
 }
 
 // extractPreview pulls the embedded JPEG out of a RAW file.

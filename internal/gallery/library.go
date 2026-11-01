@@ -59,15 +59,19 @@ type Options struct {
 	IgnoreFolders bool
 	// WriteFiles: admin edits are written into the files (exiftool).
 	WriteFiles bool
+	// WriteMetadata: descriptions, keywords, texts and names go into the
+	// files' XMP (exiftool, xmp.go).
+	WriteMetadata bool
 	// TrashDays: deleted files leave the trash after this many days (0: never).
 	TrashDays int
 	// DocFolders: files below folders with these names are documents.
 	DocFolders []string
 
-	Faces FaceOptions
-	AI    AIOptions   // descriptions by a vision language model; empty Model: off
-	OCR   OCROptions  // text recognition; empty Model or Scope: off
-	Dupes DupeOptions // the search for duplicates
+	Faces  FaceOptions
+	AI     AIOptions     // descriptions by a vision language model; empty Model: off
+	OCR    OCROptions    // text recognition; empty Model or Scope: off
+	Speech SpeechOptions // speech recognition in videos; empty Model: off
+	Dupes  DupeOptions   // the search for duplicates
 	// Rules file the files into folders by their metadata (none: nothing moves).
 	Rules RuleSet
 	// Import is a folder that empties itself into the library.
@@ -138,6 +142,8 @@ type Item struct {
 	LivePhoto string // video: id of the photo it belongs to (hidden in grids)
 
 	MetaDone  bool
+	MetaSig   string     // XMP-schuhkarton:Sig of the file: what Schuhkarton wrote into it (xmp.go)
+	MetaFaces []MetaFace // named faces read from the file that no detected face took over yet
 	FacesDone bool
 	Faces     []Face
 
@@ -190,6 +196,21 @@ type Status struct {
 	OCRError  string  `json:"ocrError,omitempty"`
 	OCRPaused int64   `json:"ocrPausedUntil,omitempty"`
 	OCRRate   float64 `json:"ocrRate,omitempty"`
+	// Speech recognition in videos and Live Photos, progress like AI*.
+	SpeechOn     bool    `json:"speechOn"`
+	SpeechDone   int64   `json:"speechDone"`
+	SpeechTodo   int64   `json:"speechTodo"`
+	SpeechFail   int64   `json:"speechFail"`
+	SpeechError  string  `json:"speechError,omitempty"`
+	SpeechPaused int64   `json:"speechPausedUntil,omitempty"`
+	SpeechRate   float64 `json:"speechRate,omitempty"`
+	// Writing what Schuhkarton knows into the files' metadata.
+	XMPOn    bool    `json:"xmpOn"`
+	XMPDone  int64   `json:"xmpDone"`
+	XMPTodo  int64   `json:"xmpTodo"`
+	XMPFail  int64   `json:"xmpFail"`
+	XMPError string  `json:"xmpError,omitempty"`
+	XMPRate  float64 `json:"xmpRate,omitempty"`
 	// Duplicates: hashed photos of all, and the groups found.
 	DupeMode   string `json:"dupeMode"`
 	DupeDone   int64  `json:"dupeDone"`
@@ -229,15 +250,23 @@ type Library struct {
 	favMu sync.Mutex
 	favs  map[string]map[string]bool // user -> root name + "/" + rel
 
-	people *peopleStore
-	search searchIndex
-	ai     aiStore
-	aiJob  remoteJob
-	ocr    ocrStore
-	ocrJob remoteJob
-	dupe   dupeStore
-	marks  markStore // guarded by favMu
-	notes  noteStore
+	people    *peopleStore
+	search    searchIndex
+	ai        aiStore
+	aiJob     remoteJob
+	ocr       ocrStore
+	ocrJob    remoteJob
+	speech    speechStore
+	speechJob remoteJob
+	xmpJob    remoteJob
+	exifCfg   string      // exiftool config with the XMP-schuhkarton tags ("" without)
+	xmpMu     sync.Mutex  // xmpIdle, xmpFails
+	xmpIdle   []*exifTool // exiftool processes for writing, between files
+	xmpFails  map[string]xmpFailure
+	xmpSoon   atomic.Bool // a pass is due in a minute
+	dupe      dupeStore
+	marks     markStore // guarded by favMu
+	notes     noteStore
 
 	opMu        sync.Mutex // one admin operation (edit, rotate, move, trash) at a time
 	rules       atomic.Pointer[compiledRules]
@@ -314,6 +343,21 @@ func Open(opt Options) (*Library, error) {
 		l.ocrJob.wake = make(chan struct{}, 1)
 		l.ocrJob.name = "text recognition"
 	}
+	l.loadSpeech()
+	if o := opt.Speech; o.Model != "" && o.URL != "" {
+		l.speechJob.client = newAIClient(AIOptions{URL: o.URL, Key: o.Key, Model: o.Model, Workers: o.Workers})
+		l.speechJob.wake = make(chan struct{}, 1)
+		l.speechJob.name = "speech recognition"
+	}
+	l.xmpFails = map[string]xmpFailure{}
+	if opt.ExifTool != "" {
+		l.writeExifConfig()
+	}
+	if opt.WriteMetadata && opt.ExifTool != "" && l.exifCfg != "" {
+		l.xmpJob.on = true
+		l.xmpJob.wake = make(chan struct{}, 1)
+		l.xmpJob.name = "metadata"
+	}
 	l.people = newPeopleStore(filepath.Join(opt.CacheDir, "people.json"), opt.Faces.ClusterThreshold, opt.Faces.NamedThreshold)
 	l.importJob.wake = make(chan struct{}, 1)
 	l.loadEdits()
@@ -350,6 +394,10 @@ func (l *Library) Close() {
 		l.importJob.dirty.Store(true) // filing may have moved imported files after the import loop stopped
 		l.saveImportStems()
 	}
+	if err := l.saveSpeech(); err != nil {
+		l.logf("speech.json: %v", err)
+	}
+	l.closeXMPTools()
 	if err := l.saveAI(); err != nil {
 		l.logf("ai.json: %v", err)
 	}
@@ -512,6 +560,19 @@ func (l *Library) Status() Status {
 		s.OCRError, _ = j.err.Load().(string)
 		s.OCRPaused = j.paused.Load()
 		s.OCRRate = j.rate.perHour(time.Now())
+	}
+	if j := &l.speechJob; j.client != nil {
+		s.SpeechOn = true
+		s.SpeechDone, s.SpeechTodo, s.SpeechFail = j.done.Load(), j.todo.Load(), j.fail.Load()
+		s.SpeechError, _ = j.err.Load().(string)
+		s.SpeechPaused = j.paused.Load()
+		s.SpeechRate = j.rate.perHour(time.Now())
+	}
+	if j := &l.xmpJob; j.on {
+		s.XMPOn = true
+		s.XMPDone, s.XMPTodo, s.XMPFail = j.done.Load(), j.todo.Load(), j.fail.Load()
+		s.XMPError, _ = j.err.Load().(string)
+		s.XMPRate = j.rate.perHour(time.Now())
 	}
 	return s
 }
@@ -780,6 +841,7 @@ func (l *Library) RenameKeys(pairs map[string]string) error {
 	}
 	l.renameAI(pairs)
 	l.renameOCR(pairs)
+	l.renameSpeech(pairs)
 	l.renameDupes(pairs)
 	l.renameNotes(pairs)
 	l.favMu.Lock()

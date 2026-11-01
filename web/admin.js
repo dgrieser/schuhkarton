@@ -350,6 +350,18 @@
   }
   SK.rerecognize = rerecognize;
 
+  // speech recognition: forget what was heard so the background job listens again
+  const speechOn = () => S.config.speech === 'on';
+  async function retranscribe(ids) {
+    if (!admin() || !ids.length) return;
+    if (!speechOn()) { toast(t('Spracherkennung ist ausgeschaltet')); return; }
+    const r = await call('/api/admin/speech', { ids });
+    if (!r) return;
+    toast(!r.changed ? t('Nur Videos und Live Photos haben Ton') : r.changed === 1 ? t('Sprache wird neu erkannt') : t('Sprache von {n} Elementen wird neu erkannt', { n: num(r.changed) }));
+    if (ids.length > 1) SK.endSelection();
+  }
+  SK.retranscribe = retranscribe;
+
   function rotateMenu(anchor, ids) {
     menu(anchor, [
       { icon: 'rotl', label: t('90° nach links'), run: () => rotate(ids, 270) },
@@ -482,6 +494,7 @@
     { icon: 'move', label: t('Verschieben'), run: () => moveDialog(cur()) },
     ...(aiOn() ? [{ icon: 'spark', label: t('Neu beschreiben (KI)'), run: () => redescribe(cur()) }] : []),
     ...(ocrOn() && V.it?.k === 1 ? [{ icon: 'file', label: t('Text neu erkennen'), run: () => rerecognize(cur()) }] : []),
+    ...(speechOn() && (V.it?.k === 2 || V.it?.lv) ? [{ icon: 'spark', label: t('Sprache neu erkennen'), run: () => retranscribe(cur()) }] : []),
     { icon: 'trash', label: t('In den Papierkorb'), danger: true, run: () => remove(cur()) },
   ]);
   $('#vEdit').onclick = (e) => (phone() ? vMenu(e.currentTarget) : editDialog(cur()));

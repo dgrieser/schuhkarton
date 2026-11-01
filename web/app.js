@@ -762,6 +762,7 @@
       $('#vFav').classList.toggle('on', !!it.f);
       $('#vFav').innerHTML = icon('heart', it.f ? 'fill' : '');
       $('#vDl').href = `/o/${it.id}?dl=1`;
+      $('#vPrint').hidden = it.k === 2;
       $('#vPrev').hidden = this.i === 0;
       $('#vNext').hidden = this.i >= this.list.length - 1;
       $('#vTitle').innerHTML = `<b>${fmtLong(it.t)}</b><span>${[it.ap ? t('ungefähr') : fmtTime(it.t), it.p, t('{i} von {n}', { i: num(this.i + 1), n: num(this.list.length) })].filter(Boolean).map(esc).join(' · ')}</span>`;
@@ -847,7 +848,7 @@
         }
         return h;
       };
-      const text = marked(d.desc), ocrText = marked(d.ocr);
+      const text = marked(d.desc), ocrText = marked(d.ocr), speechText = marked(d.speech);
       // AI description in the viewer's language (the other one as fallback)
       const ai = d.ai || null;
       let aiText = '', aiTags = [];
@@ -881,13 +882,16 @@
         ${d.ocr ? `<h3>${t('Text im Bild')} <span class="ai-badge" title="${t('Von einem KI-Modell gelesen')}">${t('erkannt')}</span></h3><div class="text ocr">${ocrText}</div>
           ${Account.can('admin') && d.ocrOn ? `<button class="link ai-redo" data-reocr>${t('Neu erkennen')}</button>` : ''}`
           : Account.can('admin') && d.ocrOn ? `<button class="link ai-redo" data-reocr>${t('Text neu erkennen')}</button>` : ''}
+        ${d.speech ? `<h3>${t('Gesprochen')} <span class="ai-badge" title="${t('Von einem KI-Modell gehört')}">${t('erkannt')}</span></h3><div class="text ocr">${speechText}</div>
+          ${Account.can('admin') && d.speechOn ? `<button class="link ai-redo" data-respeech>${t('Neu anhören')}</button>` : ''}`
+          : Account.can('admin') && d.speechOn ? `<button class="link ai-redo" data-respeech>${t('Sprache neu erkennen')}</button>` : ''}
         ${d.desc ? `<h3>${d.ocr ? t('Text aus der Datei') : t('Text im Bild')}</h3><div class="text">${text}</div>` : ''}
         ${d.keywords?.length || d.category ? `<h3>${t('Stichwörter')}</h3><div class="chips">${[d.category, ...(d.keywords || [])].filter((v, i, a) => v && a.indexOf(v) === i).map((k) => `<a class="chip" href="#/suche/${encodeURIComponent(k)}">${icon('tag')}${esc(k)}</a>`).join('')}</div>` : ''}
         ${camera || shot ? `<h3>${t('Kamera')}</h3><div class="kv">${icon('camera')}<div>${esc(camera || t('Unbekannt'))}${d.lens ? `<div class="muted">${esc(d.lens)}</div>` : ''}${shot ? `<div class="muted">${esc(shot)}</div>` : ''}</div></div>` : ''}
         <h3>${t('Datei')}</h3>
         <div class="kv">${icon('file')}<div>${esc(d.name)}<div class="muted">${[fmtSize(d.size), mp, d.duration ? fmtDur(d.duration) : '', d.codec].filter(Boolean).map(esc).join(' · ')}</div></div></div>
         <div class="kv">${icon('folder')}<div><a class="link" href="#/alben/${encodeURIComponent(d.album)}">${esc(d.album)}</a><div><code>${esc(d.path)}</code></div></div></div>
-        <div class="kv">${icon('download')}<div><a class="link" href="/o/${it.id}?dl=1">${t('Original herunterladen')}</a> · <a class="link" href="/o/${it.id}" target="_blank" rel="noopener">${t('öffnen')}</a></div></div>`;
+        <div class="kv">${icon('download')}<div><a class="link" href="/o/${it.id}?dl=1">${t('Original herunterladen')}</a> · <a class="link" href="/o/${it.id}" target="_blank" rel="noopener">${t('öffnen')}</a>${it.k === 2 ? '' : ` · <a class="link" href="/print/${it.id}?v=${it.v}" data-print>${t('drucken')}</a>`}</div></div>`;
       if (d.gps && window.L) {
         const mm = L.map($('#vMap', p), { zoomControl: false, attributionControl: false }).setView([d.lat, d.lon], 13);
         tileLayer().addTo(mm);
@@ -895,6 +899,8 @@
       }
       $('[data-redesc]', p)?.addEventListener('click', () => window.SK?.redescribe?.([it.id]));
       $('[data-reocr]', p)?.addEventListener('click', () => window.SK?.rerecognize?.([it.id]));
+      $('[data-respeech]', p)?.addEventListener('click', () => window.SK?.retranscribe?.([it.id]));
+      $('[data-print]', p)?.addEventListener('click', (e) => { e.preventDefault(); printItem(it, d); });
       for (const a of $$('[data-face]', p)) {
         a.onclick = (e) => {
           const f = d.faces[+a.dataset.face];
@@ -1039,6 +1045,7 @@
     $('#vFaces').onclick = () => { V.showFaces = !V.showFaces; V.drawFaces(); };
     $('#vFav').onclick = () => V.toggleFav();
     $('#vPlay').onclick = () => (V.slideT ? V.stopSlides() : V.startSlides());
+    $('#vPrint').onclick = () => printItem(V.it, V.detail);
     $('#vStrip').onclick = (e) => { const b = e.target.closest('[data-j]'); if (b) { V.i = +b.dataset.j; V.step(0); } };
     const live = $('#vLive');
     live.onpointerenter = () => V.playLive(false);
@@ -1241,6 +1248,32 @@
     V.stage.addEventListener('pointercancel', vend);
   }
 
+  // printing: the picture alone in a hidden frame, as large as the page
+  // allows, landscape pictures on landscape pages. The server sends a JPEG
+  // turned like in the viewer (browsers print neither HEIC nor RAW).
+  function printItem(it, d) {
+    if (!it || it.k === 2) return;
+    $('#printFrame')?.remove();
+    toast(t('Druck wird vorbereitet …'));
+    const f = document.createElement('iframe');
+    f.id = 'printFrame';
+    f.setAttribute('aria-hidden', 'true');
+    f.tabIndex = -1;
+    f.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0';
+    f.srcdoc = `<!doctype html><meta charset="utf-8"><title>${esc(d?.name || 'Schuhkarton')}</title>
+<style>@page{margin:8mm}html,body{margin:0;height:100%;overflow:hidden}img{display:block;width:100%;height:100%;object-fit:contain}</style>
+<img src="/print/${encodeURIComponent(it.id)}?v=${encodeURIComponent(it.v)}" alt="">`;
+    f.onload = () => {
+      const w = f.contentWindow, doc = f.contentDocument, img = doc?.querySelector('img');
+      if (!img?.naturalWidth) { toast(t('Drucken fehlgeschlagen')); f.remove(); return; }
+      if (img.naturalWidth > img.naturalHeight) doc.head.insertAdjacentHTML('beforeend', '<style>@page{size:landscape}</style>');
+      w.addEventListener('afterprint', () => setTimeout(() => f.remove(), 100));
+      w.focus();
+      w.print();
+    };
+    document.body.appendChild(f);
+  }
+
   // ---------------------------------------------------------------------------
   // keyboard
   // ---------------------------------------------------------------------------
@@ -1257,6 +1290,7 @@
         case 'f': case 'F': V.toggleFav(); break;
         case 'g': case 'G': $('#vFaces').click(); break;
         case 'd': case 'D': location.href = `/o/${V.it.id}?dl=1`; break;
+        case 'p': case 'P': if (V.it.k === 2) return; printItem(V.it, V.detail); break; // Ctrl+P too: the picture, not the page
         case ' ': e.preventDefault(); V.slideT ? V.stopSlides() : V.startSlides(); break;
         case '+': case '=': V.zoomAt(innerWidth / 2, innerHeight / 2, V.zoom.s * 1.4); break;
         case '-': V.zoomAt(innerWidth / 2, innerHeight / 2, V.zoom.s / 1.4); break;
@@ -2089,6 +2123,8 @@
       };
       if (s.aiMode === 'on') noAI = remote('ai', t('Beschreibungen'), t('Beschreibungen angehalten'));
       if (s.ocrMode && s.ocrMode !== 'off') noOCR = remote('ocr', t('Texterkennung'), t('Texterkennung angehalten'));
+      if (s.speechOn) remote('speech', t('Spracherkennung'), t('Spracherkennung angehalten'));
+      if (s.xmpOn && Account.can('admin')) remote('xmp', t('In Dateien schreiben'), t('Schreiben in Dateien angehalten'));
       if (s.dupeMode === 'on' && Account.can('admin')) bar(t('Duplikate prüfen'), s.dupeDone, s.dupeTodo);
       if (s.rulesRunning && Account.can('admin')) { busy = true; bar(t('Einsortieren'), s.rulesDone, s.rulesTodo, s.rulesFail || 0); }
       if (s.offline?.length) rows.push(`<div class="row"><span class="bad" title="${esc(t('Der bisherige Stand bleibt, bis der Ordner wieder da ist.'))}">${t('Nicht erreichbar')}: ${esc(s.offline.join(', '))}</span></div>`);

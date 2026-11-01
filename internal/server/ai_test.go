@@ -77,4 +77,12 @@ func TestSetupAIKey(t *testing.T) {
 	if c := save("********"); c.AI.OCR != "documents" || c.AI.OCRModel != "GLM-OCR" || c.AI.OCRWorkers != 3 {
 		t.Fatalf("ocr settings: %q %q %d", c.AI.OCR, c.AI.OCRModel, c.AI.OCRWorkers)
 	}
+	// speech recognition and writing into the files as well
+	state.Config.AI.Speech, state.Config.AI.SpeechModel, state.Config.AI.SpeechWorkers = "on", "whisper-large-v3-turbo", 4
+	state.Config.AI.SpeechFallback = ""
+	state.Config.Library.WriteMetadata = false
+	if c := save("********"); c.AI.Speech != "on" || c.AI.SpeechModel != "whisper-large-v3-turbo" || c.AI.SpeechWorkers != 4 ||
+		c.AI.SpeechFallback != "" || c.Library.WriteMetadata {
+		t.Fatalf("speech settings: %q %q %d write=%v", c.AI.Speech, c.AI.SpeechModel, c.AI.SpeechWorkers, c.Library.WriteMetadata)
+	}
 }

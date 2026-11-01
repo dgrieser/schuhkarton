@@ -252,6 +252,7 @@ type faceSnap struct {
 // recluster rebuilds the people from a consistent snapshot of the faces.
 func (l *Library) recluster() {
 	l.people.cluster(l.faceSnapshot())
+	l.kickXMP() // names go into the files
 }
 
 // faceSnapshot lists the photos with faces.

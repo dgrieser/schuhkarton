@@ -134,6 +134,36 @@ func TestBackupSeesQuickSameSizeChange(t *testing.T) {
 	}
 }
 
+// A rewrite that keeps size and modification time (metadata of the same
+// length, written with exiftool -P) is copied too, where the inode change
+// time is known.
+func TestBackupSeesRewriteWithKeptTime(t *testing.T) {
+	src, dst := t.TempDir(), t.TempDir()
+	f := filepath.Join(src, "a.jpg")
+	os.WriteFile(f, []byte("aaaa"), 0o644)
+	t0 := time.Date(2024, 5, 1, 12, 0, 0, 0, time.Local)
+	os.Chtimes(f, t0, t0)
+	st, _ := os.Stat(f)
+	if changeTime(st) == 0 {
+		t.Skip("no inode change time on this system")
+	}
+	r := New(Options{Dir: dst, Sources: []Source{{"Bilder", src}}, Originals: true})
+	r.run(context.Background())
+	time.Sleep(20 * time.Millisecond) // a later change time
+	tmp := f + ".tmp"                 // like exiftool: a new file in its place, the old time kept
+	os.WriteFile(tmp, []byte("bbbb"), 0o644)
+	os.Chtimes(tmp, t0, t0)
+	os.Rename(tmp, f)
+	r.run(context.Background())
+	if b, _ := os.ReadFile(filepath.Join(dst, "originals/Bilder/a.jpg")); string(b) != "bbbb" {
+		t.Fatalf("rewrite not copied: %q (%+v)", b, r.Status())
+	}
+	r.run(context.Background())
+	if st := r.Status(); st.Copied != 0 {
+		t.Errorf("copied again without a change: %+v", st)
+	}
+}
+
 // A copy changed in the backup folder is replaced again.
 func TestBackupRepairsTouchedCopy(t *testing.T) {
 	src, dst := t.TempDir(), t.TempDir()

@@ -286,6 +286,8 @@ func (l *Library) Scan(ctx context.Context) error {
 	l.media.kick()
 	l.kickAI()
 	l.ocrJob.kick()
+	l.speechJob.kick()
+	l.kickXMP()
 	l.PurgeTrash()
 	return nil
 }
@@ -303,7 +305,7 @@ func (l *Library) excluded(name string) bool {
 }
 
 func (l *Library) readMeta(ctx context.Context, todo []*Item) error {
-	et, err := startExifTool(l.opt.ExifTool)
+	et, err := startExifTool(l.opt.ExifTool, l.exifCfg)
 	if err != nil {
 		l.logf("exiftool unavailable (%v); using file names and folders only", err)
 		for _, it := range todo {
@@ -313,6 +315,12 @@ func (l *Library) readMeta(ctx context.Context, todo []*Item) error {
 		return nil
 	}
 	defer et.close()
+	named := false // names of faces came back from the files
+	defer func() {
+		if named {
+			l.recluster()
+		}
+	}()
 	const batch = 64
 	for i := 0; i < len(todo); i += batch {
 		if ctx.Err() != nil {
@@ -328,13 +336,38 @@ func (l *Library) readMeta(ctx context.Context, todo []*Item) error {
 			l.logf("exiftool: %v", err)
 			l.cnt.errors.Add(1)
 		}
+		// what Schuhkarton wrote into RAW files and the like lives beside them
+		var sides []string
 		for j, it := range chunk {
+			it.MetaSig = ""
 			if m := res[paths[j]]; m != nil {
 				applyMeta(it, m)
+				if _, side := xmpTarget(paths[j]); !side {
+					l.adoptXMP(it, m)
+				}
+			}
+			if p, side := xmpTarget(paths[j]); side && exists(p) {
+				sides = append(sides, p)
 			}
 			it.MetaDone = true
 		}
+		if len(sides) > 0 {
+			sres, err := et.read(sides)
+			if err != nil {
+				l.logf("exiftool: %v", err)
+			}
+			for j, it := range chunk {
+				if p, side := xmpTarget(paths[j]); side {
+					if m := sres[p]; m != nil {
+						l.adoptXMP(it, m)
+					}
+				}
+			}
+		}
 		l.cnt.meta.Add(int64(len(chunk)))
+		for _, it := range chunk {
+			named = l.applyMetaFaces(it) || named
+		}
 	}
 	return nil
 }

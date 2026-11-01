@@ -81,6 +81,7 @@ func New(ctx context.Context, o Options) http.Handler {
 	mux.HandleFunc("GET /t/{id}/{variant}", s.thumb)
 	mux.HandleFunc("GET /f/{id}/{idx}", s.face)
 	mux.HandleFunc("GET /o/{id}", s.original)
+	mux.HandleFunc("GET /print/{id}", s.print)
 	mux.HandleFunc("GET /v/{id}", s.video)
 	s.accountRoutes(mux)
 	s.socialRoutes(mux)
@@ -174,9 +175,9 @@ func (s *Server) config(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, r, map[string]any{
 		"title": c.UI.Title, "theme": c.UI.Theme, "mapTiles": c.UI.MapTiles, "mapAttribution": c.UI.MapAttribution,
-		"faces": c.Faces.Mode, "videoPreviews": c.Media.VideoPreviews, "transcode": c.Media.Transcode, "ai": c.AI.Mode, "ocr": c.AI.OCR,
+		"faces": c.Faces.Mode, "videoPreviews": c.Media.VideoPreviews, "transcode": c.Media.Transcode, "ai": c.AI.Mode, "ocr": c.AI.OCR, "speech": c.AI.Speech,
 		"version": version.String(), "folders": len(c.Library.Folders),
-		"writeFiles": c.Library.WriteFiles, "trashDays": c.Library.TrashDays,
+		"writeFiles": c.Library.WriteFiles, "writeMetadata": c.Library.WriteMetadata, "trashDays": c.Library.TrashDays,
 	})
 }
 
@@ -326,6 +327,12 @@ func (s *Server) item(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.lib.OCRApplies(it) {
 		res["ocrOn"] = true // admins can have it read again, also without text so far
+	}
+	if t := s.lib.SpeechText(it); t != "" {
+		res["speech"] = t
+	}
+	if s.lib.SpeechApplies(it) {
+		res["speechOn"] = true
 	}
 	if it.LiveVideo != "" {
 		if lv := s.lib.Get(it.LiveVideo); lv != nil {
@@ -579,6 +586,31 @@ func (s *Server) serveOriginal(w http.ResponseWriter, r *http.Request, it *galle
 	}
 	w.Header().Set("Cache-Control", "private, max-age=3600")
 	http.ServeContent(w, r, path.Base(it.Rel), time.Unix(it.MTime, 0), f)
+}
+
+// print returns the picture for printing at full size, turned like in the
+// viewer: the original itself when the browser shows it as it is, else a
+// JPEG (browsers print neither HEIC nor RAW).
+func (s *Server) print(w http.ResponseWriter, r *http.Request) {
+	it := s.lib.Get(r.PathValue("id"))
+	if it == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if s.lib.PrintAsIs(it) {
+		s.serveOriginal(w, r, it)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
+	defer cancel()
+	b, err := s.lib.PrintImage(ctx, it)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "image/jpeg")
+	w.Header().Set("Cache-Control", "private, max-age=3600")
+	w.Write(b)
 }
 
 // video plays the original, or a cached / live H.264 transcode with ?h264=1.

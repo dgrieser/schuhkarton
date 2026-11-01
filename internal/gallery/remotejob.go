@@ -14,7 +14,8 @@ import (
 // the settings are wrong.
 type remoteJob struct {
 	name                     string    // for the log: "descriptions", "text recognition"
-	client                   *aiClient // nil: off
+	client                   *aiClient // nil: off (remote jobs)
+	on                       bool      // a job without a client (metadata) runs
 	wake                     chan struct{}
 	err                      atomic.Value // string: why the job stopped or pauses (key, model, rate limit …)
 	done, todo, fail, tokens atomic.Int64
@@ -36,7 +37,7 @@ type jobTask struct {
 }
 
 func (j *remoteJob) kick() {
-	if j.client == nil {
+	if j.client == nil && !j.on {
 		return
 	}
 	select {

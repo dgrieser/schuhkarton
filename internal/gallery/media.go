@@ -520,3 +520,124 @@ func (l *Library) StreamH264(ctx context.Context, it *Item, w io.Writer) error {
 	}
 	return waitErr
 }
+
+// PrintAsIs reports whether the original can go to the printer unchanged:
+// a format every browser shows, turned by nothing but its EXIF orientation.
+func (l *Library) PrintAsIs(it *Item) bool {
+	if it.Kind != Photo || it.Rot != 0 {
+		return false
+	}
+	switch strings.ToLower(filepath.Ext(it.Rel)) {
+	case ".jpg", ".jpeg", ".jpe", ".png", ".gif", ".webp":
+		return true
+	}
+	return false
+}
+
+// PrintImage returns a JPEG of a photo at full size, turned like in the
+// viewer: HEIC and the like decoded, RAW files from their embedded JPEG,
+// odd formats by the helper or ffmpeg. Videos give their preview frame.
+func (l *Library) PrintImage(ctx context.Context, it *Item) ([]byte, error) {
+	if it.Kind == Photo {
+		img, err := l.decodeOriginal(it, 0)
+		if err != nil {
+			img, err = l.decodeExternal(ctx, it)
+		}
+		if err == nil {
+			var buf bytes.Buffer
+			if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: 95}); err != nil {
+				return nil, err
+			}
+			return buf.Bytes(), nil
+		}
+		l.logf("print %s: %v (preview instead)", it.Rel, err)
+	}
+	return l.renderJPEG(ctx, it, 0, false, 95)
+}
+
+// decodeOriginal decodes a photo with Go (RAW: the embedded JPEG), at most
+// n pixels on the long edge (0: full size), turned like in the viewer.
+func (l *Library) decodeOriginal(it *Item, n int) (image.Image, error) {
+	src := l.Path(it)
+	var img image.Image
+	var err error
+	if rawExt[strings.ToLower(filepath.Ext(src))] {
+		var b []byte
+		if b, err = extractPreview(l.opt.ExifTool, src); err == nil {
+			img, _, err = image.Decode(bytes.NewReader(b))
+		}
+	} else {
+		img, err = decodeFile(src)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if n > 0 {
+		img = resizeFit(img, n, n) // before turning: cheaper
+	}
+	return orient(img, l.displayOrient(it, src)), nil
+}
+
+// decodeExternal decodes a photo Go cannot read at full size with the
+// helper (Pillow) or ffmpeg; they apply the file's orientation, the admin
+// rotation comes on top.
+func (l *Library) decodeExternal(ctx context.Context, it *Item) (image.Image, error) {
+	src := l.Path(it)
+	tmp, err := os.CreateTemp(l.opt.CacheDir, "full-*.jpg")
+	if err != nil {
+		return nil, err
+	}
+	tmp.Close()
+	defer os.Remove(tmp.Name())
+	err = errors.New("no decoder")
+	if l.local != nil {
+		_, _, err = l.local.Thumb(src, []helper.ThumbSpec{{Path: tmp.Name(), Long: 1 << 30, Q: 95}})
+	}
+	if err != nil && l.media.ffmpeg != "" {
+		cmd := exec.CommandContext(ctx, l.media.ffmpeg, "-v", "error", "-y", "-i", src, "-frames:v", "1", "-q:v", "2", "-update", "1", tmp.Name())
+		if out, cerr := cmd.CombinedOutput(); cerr != nil {
+			err = fmt.Errorf("ffmpeg: %v %s", cerr, firstLine(out))
+		} else {
+			err = nil
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
+	img, err := decodeFile(tmp.Name())
+	if err != nil {
+		return nil, err
+	}
+	return orient(img, composeOrient(1, it.Rot)), nil
+}
+
+// renderJPEG returns a JPEG of what the viewer shows, at most n pixels on
+// the long edge (0: as it comes). original reads photos from the file even
+// when a large preview exists; files Go cannot decode fall back to the
+// preview.
+func (l *Library) renderJPEG(ctx context.Context, it *Item, n int, original bool, quality int) ([]byte, error) {
+	var img image.Image
+	var err error
+	if it.Kind == Photo && (original || !exists(l.CachePath(it, VarLarge))) {
+		img, err = l.decodeOriginal(it, n)
+	}
+	if img == nil {
+		// the large preview, oriented and rotated already; the helper or
+		// ffmpeg make it for files Go cannot decode
+		var p string
+		if p, err = l.Ensure(ctx, it, VarLarge); err == nil {
+			img, err = decodeFile(p)
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
+	if n > 0 {
+		img = resizeFit(img, n, n)
+	}
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: quality}); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}

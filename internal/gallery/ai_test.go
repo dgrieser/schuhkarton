@@ -43,11 +43,12 @@ func TestParseAIAnswer(t *testing.T) {
 
 // fakeAI is an OpenAI-compatible server: /models and /chat/completions.
 type fakeAI struct {
-	status  atomic.Int32 // answer with this HTTP status when not 0
-	calls   atomic.Int32
-	noKwarg bool // refuse chat_template_kwargs like a strict server
-	mu      sync.Mutex
-	lastReq map[string]any
+	status      atomic.Int32 // answer with this HTTP status when not 0
+	calls       atomic.Int32
+	speechCalls atomic.Int32
+	noKwarg     bool // refuse chat_template_kwargs like a strict server
+	mu          sync.Mutex
+	lastReq     map[string]any
 }
 
 func (f *fakeAI) server(t *testing.T) *httptest.Server {
@@ -96,6 +97,34 @@ func (f *fakeAI) server(t *testing.T) *httptest.Server {
 				"usage":   map[string]any{"total_tokens": 321},
 			})
 			w.Write(b)
+		case "/v1/audio/transcriptions":
+			f.speechCalls.Add(1)
+			if err := r.ParseMultipartForm(8 << 20); err != nil || r.FormValue("model") == "" {
+				w.WriteHeader(400)
+				io.WriteString(w, `{"error":{"message":"bad form"}}`)
+				return
+			}
+			if _, _, err := r.FormFile("file"); err != nil {
+				w.WriteHeader(400)
+				io.WriteString(w, `{"error":{"message":"no file"}}`)
+				return
+			}
+			switch r.FormValue("model") {
+			case "whisper-silent": // heard nothing it was sure of
+				io.WriteString(w, `{"text":" Vielen Dank.","language":"de","segments":[{"text":" Vielen Dank.","avg_logprob":-1.4}]}`)
+				return
+			case "cohere-x": // a second model without confidence values
+				io.WriteString(w, `{"text":"Guck mal, Philip.","language":"de","segments":[{"text":"Guck mal, Philip."}]}`)
+				return
+			case "missing-model":
+				w.WriteHeader(404)
+				io.WriteString(w, `{"error":{"message":"The model does not exist."}}`)
+				return
+			}
+			// one clear segment and one the model was unsure of (a made-up phrase)
+			io.WriteString(w, `{"text":" Hallo Oma, guck mal! Vielen Dank.","language":"german","duration":1.0,
+				"segments":[{"text":" Hallo Oma, guck mal!","avg_logprob":-0.3,"no_speech_prob":null},
+				{"text":" Vielen Dank.","avg_logprob":-1.6,"no_speech_prob":null}]}`)
 		default:
 			http.NotFound(w, r)
 		}

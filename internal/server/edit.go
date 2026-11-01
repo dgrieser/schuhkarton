@@ -23,6 +23,7 @@ func (s *Server) adminRoutes(mux *http.ServeMux, admin func(http.HandlerFunc) ht
 	mux.HandleFunc("POST /api/admin/move", admin(s.adminMove))
 	mux.HandleFunc("POST /api/admin/describe", admin(s.adminDescribe))
 	mux.HandleFunc("POST /api/admin/ocr", admin(s.adminOCR))
+	mux.HandleFunc("POST /api/admin/speech", admin(s.adminSpeech))
 	mux.HandleFunc("GET /api/admin/marks", admin(s.adminMarks))
 	mux.HandleFunc("POST /api/admin/marks/clear", admin(s.adminClearMarks))
 	mux.HandleFunc("GET /api/admin/dupes", admin(s.adminDupes))
@@ -61,6 +62,22 @@ func (s *Server) adminOCR(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, r, map[string]any{"ok": true, "changed": s.lib.Rerecognize(req.IDs)})
+}
+
+// adminSpeech drops what was heard in ids so it is recognized again.
+func (s *Server) adminSpeech(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		IDs []string `json:"ids"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if s.cfg.AI.Speech != "on" {
+		writeJSON(w, r, map[string]any{"ok": false, "error": "Spracherkennung ist ausgeschaltet"})
+		return
+	}
+	writeJSON(w, r, map[string]any{"ok": true, "changed": s.lib.Retranscribe(req.IDs)})
 }
 
 // adminResult answers with what an operation did and the new library version.
