@@ -58,7 +58,13 @@ type Status struct {
 	Checked  int       `json:"checked"`
 	Failed   int       `json:"failed"`
 	Error    string    `json:"error,omitempty"`
+	// Complete: the last run went through; a cancelled or failed one is
+	// picked up again soon after the next start.
+	Complete bool `json:"complete"`
 }
+
+// retryFailed is how soon a failed run is tried again (at most the interval).
+const retryFailed = time.Hour
 
 // Runner runs backups.
 type Runner struct {
@@ -66,7 +72,19 @@ type Runner struct {
 	now chan struct{}
 	mu  sync.Mutex
 	st  Status
+	// copied remembers size and exact time of each source as last copied
+	// (schuhkarton-copied.json), so a backup that keeps whole seconds only
+	// still notices every change; only during a run.
+	copied map[string]fileSig
 }
+
+type fileSig struct {
+	Size  int64 `json:"s"`
+	MTime int64 `json:"t"` // source time, unix nanoseconds
+	Copy  int64 `json:"c"` // the copy's time as the backup keeps it
+}
+
+const copiedFile = "schuhkarton-copied.json"
 
 // New prepares a runner; Loop starts it.
 func New(opt Options) *Runner {
@@ -75,8 +93,8 @@ func New(opt Options) *Runner {
 	if b, err := os.ReadFile(filepath.Join(opt.Dir, "schuhkarton-backup.json")); err == nil {
 		var last Status
 		if json.Unmarshal(b, &last) == nil {
-			r.st.Finished, r.st.Copied, r.st.Bytes, r.st.Checked, r.st.Failed, r.st.Error =
-				last.Finished, last.Copied, last.Bytes, last.Checked, last.Failed, last.Error
+			r.st.Finished, r.st.Copied, r.st.Bytes, r.st.Checked, r.st.Failed, r.st.Error, r.st.Complete =
+				last.Finished, last.Copied, last.Bytes, last.Checked, last.Failed, last.Error, last.Complete
 		}
 	}
 	return r
@@ -103,8 +121,10 @@ func (r *Runner) Loop(ctx context.Context) {
 	if r.opt.Dir == "" {
 		return
 	}
+	// a run that was cancelled (Schuhkarton stopped) or failed goes on
+	// shortly after the start; only a complete one waits for the interval
 	next := time.Now().Add(2 * time.Minute)
-	if !r.st.Finished.IsZero() && r.opt.Every > 0 {
+	if !r.st.Finished.IsZero() && r.opt.Every > 0 && r.st.Complete {
 		next = r.st.Finished.Add(r.opt.Every)
 		if time.Until(next) < 2*time.Minute {
 			next = time.Now().Add(2 * time.Minute)
@@ -124,9 +144,14 @@ func (r *Runner) Loop(ctx context.Context) {
 			t.Stop()
 		}
 		r.run(ctx)
-		if r.opt.Every <= 0 {
+		switch {
+		case ctx.Err() != nil:
+			return
+		case r.opt.Every <= 0:
 			next = time.Now().Add(100 * 365 * 24 * time.Hour) // only on demand
-		} else {
+		case !r.Status().Complete:
+			next = time.Now().Add(min(r.opt.Every, retryFailed)) // failed: try again sooner
+		default:
 			next = time.Now().Add(r.opt.Every)
 		}
 	}
@@ -138,21 +163,28 @@ func (r *Runner) set(fn func(*Status)) {
 	r.mu.Unlock()
 }
 
+// saveStatus writes the state into the backup folder (schuhkarton-backup.json).
+func (r *Runner) saveStatus() {
+	if b, err := json.MarshalIndent(r.Status(), "", " "); err == nil {
+		os.WriteFile(filepath.Join(r.opt.Dir, "schuhkarton-backup.json"), b, 0o600)
+	}
+}
+
 func (r *Runner) run(ctx context.Context) {
 	r.set(func(s *Status) {
 		*s = Status{Enabled: true, Dir: r.opt.Dir, Running: true, Started: time.Now(), Phase: "Vorbereiten"}
 	})
+	r.saveStatus() // not complete until it is: a run cut short is picked up after the next start
 	err := r.backup(ctx)
 	r.set(func(s *Status) {
 		s.Running, s.Phase, s.Finished = false, "", time.Now()
+		s.Complete = err == nil && s.Failed == 0 // files that could not be copied are tried again soon
 		if err != nil {
 			s.Error = err.Error()
 		}
 	})
+	r.saveStatus()
 	st := r.Status()
-	if b, err := json.MarshalIndent(st, "", " "); err == nil {
-		os.WriteFile(filepath.Join(r.opt.Dir, "schuhkarton-backup.json"), b, 0o600)
-	}
 	log.Printf("Sicherung nach %s: %d Dateien kopiert (%d MB), %d geprüft, %d Fehler %s",
 		r.opt.Dir, st.Copied, st.Bytes>>20, st.Checked, st.Failed, st.Error)
 }
@@ -161,6 +193,16 @@ func (r *Runner) backup(ctx context.Context) error {
 	if err := os.MkdirAll(r.opt.Dir, 0o700); err != nil {
 		return fmt.Errorf("Sicherungsordner: %w", err)
 	}
+	r.copied = map[string]fileSig{}
+	if b, err := os.ReadFile(filepath.Join(r.opt.Dir, copiedFile)); err == nil {
+		json.Unmarshal(b, &r.copied)
+	}
+	defer func() { // also after a cancelled run: what was copied is known
+		if b, err := json.Marshal(r.copied); err == nil {
+			os.WriteFile(filepath.Join(r.opt.Dir, copiedFile), b, 0o600)
+		}
+		r.copied = nil
+	}()
 	if r.opt.Config && r.opt.ConfigPath != "" {
 		r.set(func(s *Status) { s.Phase = "Einstellungen" })
 		if _, err := os.Stat(r.opt.ConfigPath); err == nil {
@@ -239,6 +281,11 @@ func (r *Runner) mirror(ctx context.Context, src, dst string, skip func(string) 
 	})
 }
 
+// mtimeWindow is how far a copy's time may move after it was written and
+// still count as untouched: shares keep whole seconds only (SMB on a
+// Fritz!Box) or even ones (FAT), like rsync's --modify-window.
+const mtimeWindow = 2 * time.Second
+
 // copyIfChanged copies when the target is missing or differs in size or
 // modification time.
 func (r *Runner) copyIfChanged(src, dst string) {
@@ -248,13 +295,29 @@ func (r *Runner) copyIfChanged(src, dst string) {
 		return
 	}
 	r.set(func(s *Status) { s.Checked++ })
-	if di, err := os.Stat(dst); err == nil && di.Size() == si.Size() && di.ModTime().Equal(si.ModTime()) {
-		return
+	key, _ := filepath.Rel(r.opt.Dir, dst)
+	key = filepath.ToSlash(key)
+	if di, err := os.Stat(dst); err == nil && di.Size() == si.Size() {
+		now := fileSig{si.Size(), si.ModTime().UnixNano(), di.ModTime().UnixNano()}
+		last, known := r.copied[key]
+		// exactly the source copied last time onto a copy nobody touched;
+		// without that record (an older backup) only an exactly equal time
+		// counts, so a share that keeps whole seconds gets one more copy
+		untouched := known && last.Size == now.Size && last.MTime == now.MTime &&
+			(now.Copy == last.Copy || // a share may round the copy's time later, to whole seconds
+				(now.Copy%int64(time.Second) == 0 && time.Duration(now.Copy-last.Copy).Abs() < mtimeWindow))
+		if untouched || (!known && si.ModTime().Equal(di.ModTime())) {
+			r.copied[key] = now
+			return
+		}
 	}
 	if err := copyFile(src, dst, si); err != nil {
 		log.Printf("Sicherung %s: %v", src, err)
 		r.set(func(s *Status) { s.Failed++ })
 		return
+	}
+	if di, err := os.Stat(dst); err == nil { // the copy's time as the backup keeps it
+		r.copied[key] = fileSig{si.Size(), si.ModTime().UnixNano(), di.ModTime().UnixNano()}
 	}
 	r.set(func(s *Status) { s.Copied++; s.Bytes += si.Size() })
 }

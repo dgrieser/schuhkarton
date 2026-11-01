@@ -283,6 +283,9 @@ func Load(path string) (*Config, error) {
 		path = DefaultConfigPath()
 	}
 	c.path = ExpandHome(path)
+	if abs, err := filepath.Abs(c.path); err == nil {
+		c.path = abs // relative cache paths are taken from its folder
+	}
 	raw, err := os.ReadFile(c.path)
 	switch {
 	case err == nil:
@@ -312,11 +315,12 @@ func envOrKeep(name string) string {
 // normalize fills gaps and expands ~ in paths.
 func (c *Config) normalize() {
 	d := Defaults()
-	c.Cache.Dir = ExpandHome(cmpOr(c.Cache.Dir, d.Cache.Dir))
+	// relative cache and model folders live beside the configuration file
+	c.Cache.Dir = besideConfig(c.path, ExpandHome(cmpOr(c.Cache.Dir, d.Cache.Dir)))
 	for i := range c.Library.Folders {
 		c.Library.Folders[i].Path = ExpandHome(c.Library.Folders[i].Path)
 	}
-	c.Faces.ModelsDir = ExpandHome(c.Faces.ModelsDir)
+	c.Faces.ModelsDir = besideConfig(c.path, ExpandHome(c.Faces.ModelsDir))
 	c.Backup.Dir = ExpandHome(c.Backup.Dir)
 	c.Library.Import.Dir = ExpandHome(strings.TrimSpace(c.Library.Import.Dir))
 	c.Library.Import.Folder = strings.TrimSpace(c.Library.Import.Folder)
@@ -621,7 +625,10 @@ func (c *Config) Save() error {
 		"# edit by hand while Schuhkarton is stopped. SCHUHKARTON_* variables override it.\n")
 	enc := yaml.NewEncoder(&b)
 	enc.SetIndent(2)
-	if err := enc.Encode(c); err != nil {
+	out := *c // folders inside the configuration's folder are written relative to it
+	out.Cache.Dir = relToConfig(c.path, c.Cache.Dir)
+	out.Faces.ModelsDir = relToConfig(c.path, c.Faces.ModelsDir)
+	if err := enc.Encode(&out); err != nil {
 		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(c.path), 0o755); err != nil {

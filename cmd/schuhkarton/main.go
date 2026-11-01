@@ -52,6 +52,9 @@ Aufruf:
                                               Konten verwalten (z.B. "user add Anna admin")
   schuhkarton version
 
+Mit -home DIR (oder SCHUHKARTON_HOME) liegen Einstellungen, Konten und Cache zusammen in DIR
+(config.yaml, users.json, cache/): zum Umziehen den Ordner kopieren.
+
 ORDNER als Pfad oder Name=Pfad, z.B. Familie=/mnt/nas/Bilder. Ordner auf der Kommandozeile
 ersetzen die aus der Einstellungsdatei. Jede Einstellung geht auch als Umgebungsvariable,
 z.B. SCHUHKARTON_SERVER_LISTEN=0.0.0.0:8088 oder SCHUHKARTON_FACES_URL=http://nas:8089.
@@ -61,7 +64,7 @@ Optionen:
 
 func main() {
 	log.SetFlags(log.Ltime)
-	args := os.Args[1:]
+	args := takeHome(os.Args[1:])
 	cmd := "serve"
 	if len(args) > 0 {
 		switch args[0] {
@@ -98,12 +101,32 @@ func main() {
 	}
 }
 
+// takeHome reads -home DIR (also --home, -home=DIR) for every command and
+// leaves the rest: config, accounts, worker and models all use the folder.
+func takeHome(args []string) []string {
+	var out []string
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case (a == "-home" || a == "--home") && i+1 < len(args):
+			os.Setenv("SCHUHKARTON_HOME", args[i+1])
+			i++
+		case strings.HasPrefix(a, "-home=") || strings.HasPrefix(a, "--home="):
+			os.Setenv("SCHUHKARTON_HOME", a[strings.IndexByte(a, '=')+1:])
+		default:
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
 // --- flags --------------------------------------------------------------------
 
 type flagSet struct {
 	fs   *flag.FlagSet
 	keys map[string]*string // flag name -> value, mapped to config keys
 	cfgf *string
+	home *string
 	web  *string
 	open *bool
 }
@@ -148,6 +171,7 @@ func newFlags(name string) *flagSet {
 		f.fs.PrintDefaults()
 	}
 	f.cfgf = f.fs.String("config", "", "Einstellungsdatei (Standard: "+config.DefaultConfigPath()+")")
+	f.home = f.fs.String("home", "", "Datenordner für Einstellungen, Konten und Cache zusammen (auch SCHUHKARTON_HOME)")
 	for name, help := range flagHelp {
 		f.keys[name] = f.fs.String(name, "", help)
 	}
@@ -159,6 +183,9 @@ func newFlags(name string) *flagSet {
 // load reads the configuration and applies flags and folder arguments.
 func (f *flagSet) load(args []string) (*config.Config, error) {
 	f.fs.Parse(args)
+	if *f.home != "" {
+		os.Setenv("SCHUHKARTON_HOME", *f.home) // read by config and the user command alike
+	}
 	cfg, err := config.Load(*f.cfgf)
 	if err != nil {
 		return nil, err
