@@ -58,6 +58,19 @@ Download the archive for your system from the
 arm64, armv7, e.g. a Raspberry Pi), macOS (Intel, Apple Silicon) or Windows
 (amd64, arm64). It contains one binary.
 
+On Linux there are also packages with a system service (see
+[Running as a service](#running-as-a-service)):
+
+| Format | Systems | Install |
+|---|---|---|
+| `.deb` | Debian, Ubuntu, Raspberry Pi OS | `sudo apt install ./schuhkarton_<version>_arm64.deb` |
+| `.rpm` | Fedora, RHEL, openSUSE | `sudo dnf install ./schuhkarton-<version>-1.x86_64.rpm` |
+| `.pkg.tar.zst` | Arch Linux | `sudo pacman -U schuhkarton-<version>-1-x86_64.pkg.tar.zst` |
+| `.apk` | Alpine (OpenRC) | `apk add --allow-untrusted schuhkarton_<version>_x86_64.apk` |
+
+The binary in the Linux archives, `.deb`, `.rpm` and Arch packages needs
+glibc; the `.apk` has a fully static one for musl.
+
 Or build it with Go 1.26 or newer: `make install` installs it into `~/bin`.
 
 Optional tools, found on the `PATH`:
@@ -99,6 +112,66 @@ The setup page walks through:
 Later, the same pages are available to admins under **Einstellungen** in the
 sidebar, with a **Benutzer** page instead of the admin step. Saving there
 restarts the gallery in place.
+
+## Running as a service
+
+The Linux packages install a systemd system service, a systemd user service
+and the user `schuhkarton`. Nothing starts on its own.
+
+**System service** (a Raspberry Pi, a home server): runs as the user
+`schuhkarton` with its [data folder](#one-data-folder) in
+`/var/lib/schuhkarton` (`config.yaml`, `users.json`, `cache/`).
+
+```sh
+sudo systemctl enable --now schuhkarton
+journalctl -u schuhkarton                  # the setup link
+```
+
+- `/etc/default/schuhkarton` holds environment variables for the service. As
+  shipped it sets `SCHUHKARTON_SERVER_LISTEN=0.0.0.0:8088`, so the setup link
+  works from another computer in the home network. Settings given there are
+  shown as fixed on the settings page. Change them in the file and run
+  `sudo systemctl restart schuhkarton`.
+- The photo folders must be readable by `schuhkarton`, and writable for admin
+  edits, moves and the import folder (group membership or ACLs, e.g.
+  `setfacl -R -m u:schuhkarton:rwX /srv/photos`, or `uid=`/`gid=` options for
+  an SMB mount). Or run the service as your own user:
+
+  ```sh
+  sudo systemctl edit schuhkarton
+  # [Service]
+  # User=pi
+  # Group=pi
+  ```
+
+  systemd then gives `/var/lib/schuhkarton` to that user.
+- Command line tools with the same data:
+  `sudo -u schuhkarton schuhkarton -home /var/lib/schuhkarton user list`.
+- Photos on a network share: add the mount to `/etc/fstab` (with
+  `_netdev`); the service starts after remote file systems. If a share is
+  offline, the gallery keeps its photos (see [Data](#data)).
+- Updates through the package restart a running service. Removing the
+  package stops it; `/var/lib/schuhkarton` and the user stay.
+
+**User service** (a desktop): runs with your own account and the usual
+folders (`~/.config/schuhkarton`, `~/.cache/schuhkarton`).
+
+```sh
+systemctl --user enable --now schuhkarton
+journalctl --user -u schuhkarton           # the setup link
+loginctl enable-linger                     # optional: keep running while logged out
+```
+
+Variables for it, such as an API key, go into
+`~/.config/schuhkarton/environment` (`KEY=value` lines).
+
+**Alpine** uses an OpenRC service with the same files:
+`rc-update add schuhkarton && rc-service schuhkarton start`; the log is
+`/var/log/schuhkarton.log`; another user goes into `/etc/conf.d/schuhkarton`
+as `command_user="pi:pi"`.
+
+Without a package, the unit files are in the archives under
+`deploy/systemd/` (`schuhkarton-user.service` is the user service).
 
 ## Accounts
 

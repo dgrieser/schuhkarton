@@ -1,0 +1,47 @@
+# System service: runs as the user "schuhkarton" with everything in
+# /var/lib/schuhkarton (config.yaml, users.json, cache/).
+#
+# The photo folders must be readable (and writable, for admin edits) by that
+# user. To run as another user instead: systemctl edit schuhkarton
+#   [Service]
+#   User=pi
+#   Group=pi
+# Settings: /etc/default/schuhkarton. Setup link: journalctl -u schuhkarton
+[Unit]
+Description=Schuhkarton photo and video gallery
+Documentation=https://github.com/dgrieser/schuhkarton
+Wants=network-online.target
+After=network-online.target remote-fs.target
+
+[Service]
+Type=simple
+User=schuhkarton
+Group=schuhkarton
+Environment=SCHUHKARTON_HOME=/var/lib/schuhkarton
+EnvironmentFile=-/etc/default/schuhkarton
+ExecStart=/usr/bin/schuhkarton serve
+Restart=on-failure
+RestartSec=5s
+StateDirectory=schuhkarton
+StateDirectoryMode=0750
+
+# Hardening. /usr, /boot and /etc are read-only; photo folders may live
+# anywhere (also below /home or /mnt), so the rest stays writable.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectControlGroups=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+LockPersonality=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target
