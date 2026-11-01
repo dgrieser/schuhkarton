@@ -174,7 +174,7 @@ func (s *Server) config(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, r, map[string]any{
 		"title": c.UI.Title, "theme": c.UI.Theme, "mapTiles": c.UI.MapTiles, "mapAttribution": c.UI.MapAttribution,
-		"faces": c.Faces.Mode, "videoPreviews": c.Media.VideoPreviews, "transcode": c.Media.Transcode, "ai": c.AI.Mode,
+		"faces": c.Faces.Mode, "videoPreviews": c.Media.VideoPreviews, "transcode": c.Media.Transcode, "ai": c.AI.Mode, "ocr": c.AI.OCR,
 		"version": version.String(), "folders": len(c.Library.Folders),
 		"writeFiles": c.Library.WriteFiles, "trashDays": c.Library.TrashDays,
 	})
@@ -320,6 +320,12 @@ func (s *Server) item(w http.ResponseWriter, r *http.Request) {
 	}
 	if a := s.lib.AIOf(it); a != nil {
 		res["ai"] = map[string]any{"de": a.De, "en": a.En, "tagsDe": a.TagsDe, "tagsEn": a.TagsEn, "people": a.People, "model": a.Model}
+	}
+	if t := s.lib.OCRText(it); t != "" {
+		res["ocr"] = t
+	}
+	if s.lib.OCRApplies(it) {
+		res["ocrOn"] = true // admins can have it read again, also without text so far
 	}
 	if it.LiveVideo != "" {
 		if lv := s.lib.Get(it.LiveVideo); lv != nil {

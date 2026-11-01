@@ -72,4 +72,9 @@ func TestSetupAIKey(t *testing.T) {
 	if c := save("$MITTWALD_LLM_API_KEY"); c.AI.APIKey != "" || c.AI.APIKeyEnv != "MITTWALD_LLM_API_KEY" {
 		t.Fatalf("variable: key %q env %q", c.AI.APIKey, c.AI.APIKeyEnv)
 	}
+	// text recognition settings are saved too
+	state.Config.AI.OCR, state.Config.AI.OCRModel, state.Config.AI.OCRWorkers = "documents", "GLM-OCR", 3
+	if c := save("********"); c.AI.OCR != "documents" || c.AI.OCRModel != "GLM-OCR" || c.AI.OCRWorkers != 3 {
+		t.Fatalf("ocr settings: %q %q %d", c.AI.OCR, c.AI.OCRModel, c.AI.OCRWorkers)
+	}
 }

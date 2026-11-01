@@ -191,7 +191,18 @@ type AI struct {
 	ImageSize int `yaml:"image_size" json:"image_size"`
 	// Thinking lets reasoning models think first (slower, more tokens).
 	Thinking bool `yaml:"thinking" json:"thinking"`
+	// OCR recognizes the text in pictures with a model made for it (e.g.
+	// GLM-OCR at mittwald), over the same service and key, also with Mode
+	// off: off, documents (files in documents folders) or all (every
+	// photo). The text is searched and shown with the photo.
+	OCR        string `yaml:"ocr" json:"ocr"`
+	OCRModel   string `yaml:"ocr_model" json:"ocr_model"`
+	OCRWorkers int    `yaml:"ocr_workers" json:"ocr_workers"`
 }
+
+// Used reports whether anything is sent to the service (descriptions or
+// text recognition).
+func (a AI) Used() bool { return a.Mode == "on" || (a.OCR != "" && a.OCR != "off") }
 
 // Dupes is the search for duplicates (perceptual hashes of the thumbnails;
 // cheap enough to run inside the gallery).
@@ -262,7 +273,8 @@ func Defaults() *Config {
 			VideoPreviews: true, VideoPreviewSize: 240, Transcode: true,
 		},
 		Faces: Faces{Mode: "off", Workers: max(1, runtime.NumCPU()/4), MinScore: 0.86, ClusterThreshold: 0.48, NamedThreshold: 0.42},
-		AI:    AI{Mode: "off", URL: MittwaldAIURL, Model: "Qwen3.8-27B-NVFP4", Workers: 2, Languages: []string{"de", "en"}, ImageSize: 1024},
+		AI: AI{Mode: "off", URL: MittwaldAIURL, Model: "Qwen3.8-27B-NVFP4", Workers: 2, Languages: []string{"de", "en"}, ImageSize: 1024,
+			OCR: "off", OCRModel: "GLM-OCR", OCRWorkers: 2},
 		Dupes: Dupes{Mode: "on", Sensitivity: "normal", SimilarMinutes: 10},
 		UI: UI{Title: "Schuhkarton", Theme: "system", Language: "auto",
 			MapTiles: "https://tile.openstreetmap.org/{z}/{x}/{y}.png", MapAttribution: "© OpenStreetMap"},
@@ -333,6 +345,11 @@ func (c *Config) normalize() {
 		c.Library.Rules.List[i] = Rule{Name: strings.TrimSpace(r.Name), When: strings.TrimSpace(r.When), Path: strings.TrimSpace(r.Path)}
 	}
 	c.AI.Mode = cmpOr(strings.ToLower(c.AI.Mode), "off")
+	c.AI.OCR = cmpOr(strings.ToLower(strings.TrimSpace(c.AI.OCR)), "off")
+	c.AI.OCRModel = cmpOr(strings.TrimSpace(c.AI.OCRModel), d.AI.OCRModel)
+	if c.AI.OCRWorkers <= 0 {
+		c.AI.OCRWorkers = d.AI.OCRWorkers
+	}
 	c.Dupes.Mode = cmpOr(strings.ToLower(c.Dupes.Mode), d.Dupes.Mode)
 	c.Dupes.Sensitivity = cmpOr(strings.ToLower(c.Dupes.Sensitivity), d.Dupes.Sensitivity)
 	if c.Dupes.SimilarMinutes <= 0 {
@@ -435,13 +452,17 @@ func (c *Config) Validate() error {
 		}
 	}
 	switch c.AI.Mode {
-	case "off":
-	case "on":
-		if !strings.HasPrefix(c.AI.URL, "http://") && !strings.HasPrefix(c.AI.URL, "https://") {
-			errs = append(errs, fmt.Sprintf("ai.url %q: http(s)://… erwartet", c.AI.URL))
-		}
+	case "off", "on":
 	default:
 		errs = append(errs, fmt.Sprintf("ai.mode %q: off oder on", c.AI.Mode))
+	}
+	switch c.AI.OCR {
+	case "off", "documents", "all":
+	default:
+		errs = append(errs, fmt.Sprintf("ai.ocr %q: off, documents oder all", c.AI.OCR))
+	}
+	if c.AI.Used() && !strings.HasPrefix(c.AI.URL, "http://") && !strings.HasPrefix(c.AI.URL, "https://") {
+		errs = append(errs, fmt.Sprintf("ai.url %q: http(s)://… erwartet", c.AI.URL))
 	}
 	switch c.Dupes.Mode {
 	case "on", "off":

@@ -106,6 +106,7 @@ type searchIndex struct {
 	ver     string
 	aiVer   int64
 	noteVer int64
+	ocrVer  int64
 	docs    map[string]*doc
 	tags    map[string]map[string]int // language -> AI tag -> photos
 	facets  []facet
@@ -152,7 +153,8 @@ func (l *Library) buildDoc(it *Item) *doc {
 	if it.GPS {
 		kind += " gps ort"
 	}
-	if it.Desc != "" {
+	ocrText := l.OCRText(it)
+	if it.Desc != "" || ocrText != "" {
 		kind += " text"
 	}
 	if l.IsDocument(it) {
@@ -170,12 +172,33 @@ func (l *Library) buildDoc(it *Item) *doc {
 		date:  date,
 		cam:   fold(it.Make + " " + it.Model + " " + it.Lens),
 		kw:    fold(strings.Join(it.Keywords, " ")),
-		desc:  fold(it.Desc),
+		desc:  fold(joinText(it.Desc, ocrText)),
 		kind:  kind,
 		notes: fold(notes),
 	}
 	d.setAI(l.AIOf(it))
 	return d
+}
+
+// joinText is the text of a picture: its description from the file and the
+// recognized text.
+func joinText(desc, ocr string) string {
+	if desc == "" || ocr == "" {
+		return desc + ocr
+	}
+	return desc + "\n" + ocr
+}
+
+// updateText puts newly recognized text into the index without rebuilding it.
+func (si *searchIndex) updateText(id, desc, ocr string) {
+	si.mu.Lock()
+	defer si.mu.Unlock()
+	if d := si.docs[id]; d != nil {
+		d.desc = fold(joinText(desc, ocr))
+		if ocr != "" && !strings.Contains(d.kind, " text") {
+			d.kind += " text"
+		}
+	}
 }
 
 // updateAI puts a new description into the index without rebuilding it.
@@ -195,9 +218,13 @@ func (l *Library) index() *searchIndex {
 	ver := fmt.Sprintf("%d:%p", len(items), items)
 	aiVer := l.ai.ver.Load()
 	noteVer := l.notes.ver.Load()
+	ocrVer := l.ocr.ver.Load()
 	// new descriptions reach the docs right away (updateAI); the tag list
 	// for suggestions is refreshed at most once a minute. Notes count at once.
-	if si.ver == ver && si.noteVer == noteVer && (si.aiVer == aiVer || time.Since(si.builtAt) < time.Minute) {
+	// new texts reach the docs right away too (updateText); forgotten ones
+	// (recognize again) need a rebuild, also at most once a minute.
+	if si.ver == ver && si.noteVer == noteVer && (si.aiVer == aiVer || time.Since(si.builtAt) < time.Minute) &&
+		(si.ocrVer == ocrVer || time.Since(si.builtAt) < time.Minute) {
 		return si
 	}
 	docs := make(map[string]*doc, len(items))
@@ -243,7 +270,7 @@ func (l *Library) index() *searchIndex {
 	add(years, "jahr", "jahr:")
 	sort.Slice(facets, func(a, b int) bool { return facets[a].Count > facets[b].Count })
 	si.docs, si.facets, si.ver, si.builtAt, si.aiVer, si.tags = docs, facets, ver, time.Now(), aiVer, tags
-	si.noteVer = noteVer
+	si.noteVer, si.ocrVer = noteVer, ocrVer
 	return si
 }
 
@@ -445,7 +472,7 @@ func (l *Library) Search(q, user, lang string) []Hit {
 		}
 		h := Hit{ID: it.ID, Score: score}
 		if snipWord != "" {
-			h.Snip = snippet(it.Desc, snipWord)
+			h.Snip = snippet(joinText(it.Desc, l.OCRText(it)), snipWord)
 			if h.Snip == "" && d.notes != "" {
 				h.Snip = snippet(l.noteText(it), snipWord)
 			}

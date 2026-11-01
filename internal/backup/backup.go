@@ -215,7 +215,7 @@ func (r *Runner) backup(ctx context.Context) error {
 	}
 	if r.opt.Cache && r.opt.CacheDir != "" {
 		r.set(func(s *Status) { s.Phase = "Cache" })
-		for _, f := range []string{"index.gob.gz", "people.json", "favorites.json", "edits.json", "trash.json", "ai.json", "marks.json", "notes.json", "dupes.json", "import.json", "roots.json"} {
+		for _, f := range []string{"index.gob.gz", "people.json", "favorites.json", "edits.json", "trash.json", "ai.json", "ocr.json", "marks.json", "notes.json", "dupes.json", "import.json", "roots.json"} {
 			if _, err := os.Stat(filepath.Join(r.opt.CacheDir, f)); err == nil {
 				r.copyIfChanged(filepath.Join(r.opt.CacheDir, f), filepath.Join(r.opt.Dir, "cache", f))
 			}

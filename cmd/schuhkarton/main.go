@@ -250,6 +250,7 @@ func libOptions(cfg *config.Config) gallery.Options {
 			Python: python, ModelsDir: cfg.Faces.ModelsDir,
 		},
 		AI:     aiOptions(cfg),
+		OCR:    ocrOptions(cfg),
 		Rules:  ruleSet(cfg),
 		Import: importOptions(cfg),
 		Dupes: gallery.DupeOptions{Off: cfg.Dupes.Mode == "off", Sensitivity: cfg.Dupes.Sensitivity,
@@ -275,6 +276,15 @@ func ruleSet(cfg *config.Config) gallery.RuleSet {
 		rs.List = append(rs.List, gallery.Rule{Name: r.Name, When: r.When, Path: r.Path})
 	}
 	return rs
+}
+
+// ocrOptions: text recognition with ai.ocr documents or all, over the AI
+// service (also with descriptions off).
+func ocrOptions(cfg *config.Config) gallery.OCROptions {
+	if cfg.AI.OCR == "off" {
+		return gallery.OCROptions{}
+	}
+	return gallery.OCROptions{URL: cfg.AI.URL, Key: cfg.AI.Key(), Model: cfg.AI.OCRModel, Workers: cfg.AI.OCRWorkers, Scope: cfg.AI.OCR}
 }
 
 // aiOptions: descriptions only with ai.mode on.
@@ -802,7 +812,7 @@ func runDoctor(args []string) error {
 		fmt.Printf("  Python %s: Erkennung %v, Zuordnung %v %s %s\n", i.Python, i.Detection, i.Recognition, strings.Join(i.Missing, ", "), i.Error)
 	}
 	fmt.Printf("\nBildbeschreibungen: %s\n", cfg.AI.Mode)
-	if cfg.AI.Mode == "on" {
+	if cfg.AI.Used() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		key := "kein Schlüssel"
@@ -815,8 +825,15 @@ func runDoctor(args []string) error {
 		if t.Error != "" {
 			fmt.Printf("  %s (%s): %s\n", cfg.AI.URL, key, t.Error)
 		} else {
-			fmt.Printf("  %s (%s): %d Modelle, %s %s\n", cfg.AI.URL, key, len(t.Models), cfg.AI.Model,
-				map[bool]string{true: "vorhanden", false: "NICHT in der Liste"}[slices.Contains(t.Models, cfg.AI.Model)])
+			has := map[bool]string{true: "vorhanden", false: "NICHT in der Liste"}
+			fmt.Printf("  %s (%s): %d Modelle", cfg.AI.URL, key, len(t.Models))
+			if cfg.AI.Mode == "on" {
+				fmt.Printf(", Beschreibungen %s %s", cfg.AI.Model, has[slices.Contains(t.Models, cfg.AI.Model)])
+			}
+			if cfg.AI.OCR != "off" {
+				fmt.Printf(", Texterkennung %s %s", cfg.AI.OCRModel, has[slices.Contains(t.Models, cfg.AI.OCRModel)])
+			}
+			fmt.Println()
 		}
 	}
 	return nil

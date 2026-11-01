@@ -66,6 +66,7 @@ type Options struct {
 
 	Faces FaceOptions
 	AI    AIOptions   // descriptions by a vision language model; empty Model: off
+	OCR   OCROptions  // text recognition; empty Model or Scope: off
 	Dupes DupeOptions // the search for duplicates
 	// Rules file the files into folders by their metadata (none: nothing moves).
 	Rules RuleSet
@@ -176,6 +177,19 @@ type Status struct {
 	AIFail   int64  `json:"aiFail"`
 	AITokens int64  `json:"aiTokens,omitempty"`
 	AIError  string `json:"aiError,omitempty"`
+	// AIPaused: unix time the job waits until after a busy service (rate
+	// limit, 5xx); AIError then says why. AIRate: files per hour lately.
+	AIPaused int64   `json:"aiPausedUntil,omitempty"`
+	AIRate   float64 `json:"aiRate,omitempty"`
+	// Text recognition: mode off|documents|all, progress like AI*.
+	OCRMode   string  `json:"ocrMode"`
+	OCRDone   int64   `json:"ocrDone"`
+	OCRTodo   int64   `json:"ocrTodo"`
+	OCRFail   int64   `json:"ocrFail"`
+	OCRTokens int64   `json:"ocrTokens,omitempty"`
+	OCRError  string  `json:"ocrError,omitempty"`
+	OCRPaused int64   `json:"ocrPausedUntil,omitempty"`
+	OCRRate   float64 `json:"ocrRate,omitempty"`
 	// Duplicates: hashed photos of all, and the groups found.
 	DupeMode   string `json:"dupeMode"`
 	DupeDone   int64  `json:"dupeDone"`
@@ -218,7 +232,9 @@ type Library struct {
 	people *peopleStore
 	search searchIndex
 	ai     aiStore
-	aiJob  aiState
+	aiJob  remoteJob
+	ocr    ocrStore
+	ocrJob remoteJob
 	dupe   dupeStore
 	marks  markStore // guarded by favMu
 	notes  noteStore
@@ -290,6 +306,13 @@ func Open(opt Options) (*Library, error) {
 	if opt.AI.Model != "" && opt.AI.URL != "" {
 		l.aiJob.client = newAIClient(opt.AI)
 		l.aiJob.wake = make(chan struct{}, 1)
+		l.aiJob.name = "descriptions"
+	}
+	l.loadOCR()
+	if o := opt.OCR; o.Model != "" && o.URL != "" && (o.Scope == "documents" || o.Scope == "all") {
+		l.ocrJob.client = newAIClient(AIOptions{URL: o.URL, Key: o.Key, Model: o.Model, Workers: o.Workers})
+		l.ocrJob.wake = make(chan struct{}, 1)
+		l.ocrJob.name = "text recognition"
 	}
 	l.people = newPeopleStore(filepath.Join(opt.CacheDir, "people.json"), opt.Faces.ClusterThreshold, opt.Faces.NamedThreshold)
 	l.importJob.wake = make(chan struct{}, 1)
@@ -329,6 +352,9 @@ func (l *Library) Close() {
 	}
 	if err := l.saveAI(); err != nil {
 		l.logf("ai.json: %v", err)
+	}
+	if err := l.saveOCR(); err != nil {
+		l.logf("ocr.json: %v", err)
 	}
 	if err := l.saveDupes(); err != nil {
 		l.logf("dupes.json: %v", err)
@@ -476,6 +502,16 @@ func (l *Library) Status() Status {
 		s.AIMode = "on"
 		s.AIDone, s.AITodo, s.AIFail, s.AITokens = l.aiJob.done.Load(), l.aiJob.todo.Load(), l.aiJob.fail.Load(), l.aiJob.tokens.Load()
 		s.AIError, _ = l.aiJob.err.Load().(string)
+		s.AIPaused = l.aiJob.paused.Load()
+		s.AIRate = l.aiJob.rate.perHour(time.Now())
+	}
+	s.OCRMode = "off"
+	if j := &l.ocrJob; j.client != nil {
+		s.OCRMode = l.opt.OCR.Scope
+		s.OCRDone, s.OCRTodo, s.OCRFail, s.OCRTokens = j.done.Load(), j.todo.Load(), j.fail.Load(), j.tokens.Load()
+		s.OCRError, _ = j.err.Load().(string)
+		s.OCRPaused = j.paused.Load()
+		s.OCRRate = j.rate.perHour(time.Now())
 	}
 	return s
 }
@@ -743,6 +779,7 @@ func (l *Library) RenameKeys(pairs map[string]string) error {
 		return nil
 	}
 	l.renameAI(pairs)
+	l.renameOCR(pairs)
 	l.renameDupes(pairs)
 	l.renameNotes(pairs)
 	l.favMu.Lock()

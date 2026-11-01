@@ -166,186 +166,89 @@ func (l *Library) Redescribe(ids []string) int {
 
 // --- background job -----------------------------------------------------------
 
-type aiState struct {
-	client                   *aiClient // nil: off
-	wake                     chan struct{}
-	err                      atomic.Value // string: why the job stopped (key, model …)
-	done, todo, fail, tokens atomic.Int64
-}
-
-func (l *Library) kickAI() {
-	if l.aiJob.client == nil {
-		return
-	}
-	select {
-	case l.aiJob.wake <- struct{}{}:
-	default:
-	}
-}
+func (l *Library) kickAI() { l.aiJob.kick() }
 
 // aiEligible: photos and videos of their own (not the video half of a Live Photo).
 func aiEligible(it *Item) bool { return it.Kind == Photo || (it.Kind == Video && it.LivePhoto == "") }
 
-// aiLoop describes photos in the background until ctx ends.
-func (l *Library) aiLoop(ctx context.Context) {
-	defer l.bg.Done()
-	backoff := time.Minute
-	timer := time.NewTimer(3 * time.Second) // thumbnails first
-	defer timer.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-l.aiJob.wake:
-		case <-timer.C:
-		}
-		err := l.describeAll(ctx)
-		if ctx.Err() != nil {
-			l.saveAI()
-			return
-		}
-		wait := 20 * time.Minute // look again now and then (new photos come with scans, which kick)
-		var ae *aiError
-		switch {
-		case err == nil:
-			backoff = time.Minute
-			l.aiJob.err.Store("")
-		case errors.As(err, &ae) && ae.fatal:
-			l.aiJob.err.Store(ae.Error())
-			l.logf("descriptions stopped: %v", err)
-			wait = time.Hour
-		default:
-			l.aiJob.err.Store(err.Error())
-			l.logf("descriptions paused for %s: %v", backoff, err)
-			wait, backoff = backoff, min(backoff*2, 30*time.Minute)
-		}
-		l.saveAI()
-		if !timer.Stop() {
-			select {
-			case <-timer.C:
-			default:
+// aiTask is the description job: every eligible file without a description.
+func (l *Library) aiTask() jobTask {
+	return jobTask{
+		workers:  l.opt.AI.Workers,
+		eligible: aiEligible,
+		state: func(it *Item, now time.Time) (handled, failed bool) {
+			l.ai.mu.Lock()
+			a := l.ai.items[l.favKey(it)]
+			l.ai.mu.Unlock()
+			switch {
+			case a.ok():
+				return true, false
+			case a != nil && a.Err != "" && now.Sub(time.Unix(a.At, 0)) < aiRetryFailed:
+				return true, true // failed recently: tried again after a week
 			}
-		}
-		timer.Reset(wait)
+			return false, false
+		},
+		one: l.describeOne,
+		save: func() {
+			if err := l.saveAI(); err != nil {
+				l.logf("ai.json: %v", err)
+			}
+		},
 	}
 }
 
+// aiLoop describes photos in the background until ctx ends.
+func (l *Library) aiLoop(ctx context.Context) { l.jobLoop(ctx, &l.aiJob, l.aiTask()) }
+
 // describeAll describes every eligible item without a description, newest
 // first. It returns early on errors that concern the service, not a photo.
-func (l *Library) describeAll(ctx context.Context) error {
-	var todo []*Item
-	var total, have int64
-	now := time.Now()
-	l.ai.mu.Lock()
-	for _, it := range l.Items() {
-		if !aiEligible(it) {
-			continue
-		}
-		total++
-		a := l.ai.items[l.favKey(it)]
-		switch {
-		case a.ok():
-			have++
-		case a != nil && a.Err != "" && now.Sub(time.Unix(a.At, 0)) < aiRetryFailed:
-			// failed recently: counts as handled
-			have++
-		default:
-			todo = append(todo, it)
-		}
-	}
-	l.ai.mu.Unlock()
-	j := &l.aiJob
-	j.todo.Store(total)
-	j.done.Store(have)
-	j.fail.Store(0)
-	if len(todo) == 0 {
-		return nil
-	}
-	l.logf("descriptions: %d to do", len(todo))
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	ch := make(chan *Item)
-	var wg sync.WaitGroup
-	var once sync.Once
-	var stopErr error
-	for range max(1, l.opt.AI.Workers) {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for it := range ch {
-				if err := l.describeOne(ctx, it); err != nil {
-					once.Do(func() { stopErr = err; cancel() })
-					return
-				}
-			}
-		}()
-	}
-	for _, it := range todo {
-		select {
-		case ch <- it:
-			continue
-		case <-ctx.Done():
-		}
-		break
-	}
-	close(ch)
-	wg.Wait()
-	if stopErr != nil && errors.Is(stopErr, context.Canceled) {
-		stopErr = nil
-	}
-	return stopErr
-}
+func (l *Library) describeAll(ctx context.Context) error { return l.jobPass(ctx, &l.aiJob, l.aiTask()) }
 
 // describeOne describes one item. It returns an error only when the whole
 // job has to stop (service problems); problems with this file are recorded.
 func (l *Library) describeOne(ctx context.Context, it *Item) error {
 	j := &l.aiJob
-	img, err := l.aiImage(ctx, it)
+	img, err := l.jobImage(ctx, it, l.opt.AI.ImageSize, false)
 	if err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
 		l.logf("describe %s: %v", it.Rel, err)
 		l.setAI(it, &AIInfo{Err: err.Error(), At: time.Now().Unix()})
-		j.fail.Add(1)
-		j.done.Add(1)
+		j.handled(true, 0)
 		return nil
 	}
 	info, err := j.client.describe(ctx, img)
 	if err != nil {
-		var ae *aiError
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		if errors.As(err, &ae) && (ae.fatal || ae.transient) {
-			return err
+		if stop := jobStop(ctx, err); stop != nil {
+			return stop
 		}
 		l.logf("describe %s: %v", it.Rel, err)
 		l.setAI(it, &AIInfo{Err: err.Error(), At: time.Now().Unix(), Model: j.client.opt.Model})
-		j.fail.Add(1)
-		j.done.Add(1)
+		j.handled(true, 0)
 		return nil
 	}
 	l.setAI(it, info)
 	l.search.updateAI(it.ID, info)
-	j.tokens.Add(int64(info.Tokens))
-	j.done.Add(1)
+	j.handled(false, info.Tokens)
 	return nil
 }
 
-// aiImage returns a downscaled JPEG of what the viewer shows.
-func (l *Library) aiImage(ctx context.Context, it *Item) ([]byte, error) {
-	n := l.opt.AI.ImageSize
+// jobImage returns a JPEG of what the viewer shows, at most n pixels on the
+// long edge (0: 1024). original reads photos from the file even when a large
+// preview exists (text recognition wants every pixel up to n).
+func (l *Library) jobImage(ctx context.Context, it *Item, n int, original bool) ([]byte, error) {
 	if n <= 0 {
 		n = 1024
 	}
 	var img image.Image
 	var err error
 	src := l.Path(it)
+	isPhoto := it.Kind == Photo && !rawExt[strings.ToLower(filepath.Ext(src))]
 	switch large := l.CachePath(it, VarLarge); {
-	case exists(large):
+	case exists(large) && !(original && isPhoto):
 		img, err = decodeFile(large) // oriented and rotated already
-	case it.Kind == Photo && !rawExt[strings.ToLower(filepath.Ext(src))]:
+	case isPhoto:
 		img, err = decodeFile(src)
 		if err == nil {
 			img = orient(resizeFit(img, n, n), l.displayOrient(it, src))

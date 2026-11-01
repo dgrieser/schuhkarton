@@ -309,6 +309,7 @@ func (s *Setup) aiTest(w http.ResponseWriter, r *http.Request) {
 		Key      string `json:"key"`
 		Model    string `json:"model"`
 		Describe bool   `json:"describe"`
+		OCR      bool   `json:"ocr"` // read a drawn picture with text using Model
 	}
 	if err := readJSON(r, &req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -327,6 +328,10 @@ func (s *Setup) aiTest(w http.ResponseWriter, r *http.Request) {
 	url := strings.TrimRight(strings.TrimSpace(req.URL), "/")
 	if url == "" {
 		url = config.MittwaldAIURL
+	}
+	if req.OCR {
+		writeJSON(w, r, map[string]any{"ocr": gallery.TestOCR(ctx, gallery.OCROptions{URL: url, Key: key, Model: strings.TrimSpace(req.Model)}), "hasKey": key != ""})
+		return
 	}
 	res := gallery.TestAI(ctx, gallery.AIOptions{URL: url, Key: key, Model: strings.TrimSpace(req.Model),
 		Languages: cur.Languages, ImageSize: cur.ImageSize}, req.Describe)
@@ -464,6 +469,13 @@ func merge(cur, in *config.Config) *config.Config {
 	set("ai.model", func() { n.AI.Model = strings.TrimSpace(in.AI.Model) })
 	set("ai.workers", func() { n.AI.Workers = in.AI.Workers })
 	set("ai.languages", func() { n.AI.Languages = in.AI.Languages })
+	set("ai.ocr", func() {
+		if in.AI.OCR != "" {
+			n.AI.OCR = in.AI.OCR
+		}
+	})
+	set("ai.ocr_model", func() { n.AI.OCRModel = strings.TrimSpace(in.AI.OCRModel) })
+	set("ai.ocr_workers", func() { n.AI.OCRWorkers = in.AI.OCRWorkers })
 	// the key field takes the key itself or $VARIABLE (the key stays in the environment)
 	if cur.Locked("ai.api_key") == "" && cur.Locked("ai.api_key_env") == "" {
 		k := strings.TrimSpace(in.AI.APIKey)
