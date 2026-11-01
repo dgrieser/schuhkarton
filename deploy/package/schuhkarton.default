@@ -1,0 +1,17 @@
+# Environment of the schuhkarton service, read by systemd (EnvironmentFile=)
+# and OpenRC. One KEY=value per line. Every setting can be given as
+# SCHUHKARTON_<SECTION>_<KEY> (e.g. SCHUHKARTON_FACES_URL); a setting given
+# here wins over config.yaml and is shown as fixed on the settings page.
+# Apply with: systemctl restart schuhkarton
+
+# Reachable from the home network, for the setup link and the gallery.
+# Remove for this machine only (127.0.0.1:8088).
+SCHUHKARTON_SERVER_LISTEN=0.0.0.0:8088
+
+# Data folder with config.yaml, users.json and cache/. Another folder must
+# belong to the service user.
+#SCHUHKARTON_HOME=/var/lib/schuhkarton
+
+# Key for image descriptions (ai.mode on). Or set the variable that
+# ai.api_key_env names.
+#SCHUHKARTON_AI_API_KEY=

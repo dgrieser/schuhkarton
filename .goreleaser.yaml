@@ -7,7 +7,8 @@ before:
     - go mod tidy
 
 builds:
-  - id: schuhkarton
+  - &build
+    id: schuhkarton
     main: ./cmd/schuhkarton
     binary: schuhkarton
     env:
@@ -36,6 +37,17 @@ builds:
       - -X github.com/dgrieser/schuhkarton/internal/version.Date={{ .CommitDate }}
     mod_timestamp: "{{ .CommitTimestamp }}"
 
+  # Fully static for musl (Alpine): the HEIC/AVIF decoders otherwise load
+  # libheif/libavif at run time if present, which links the binary against
+  # the glibc loader. With nodynamic they always use their built-in WASM.
+  - <<: *build
+    id: schuhkarton-static
+    goos:
+      - linux
+    ignore: []
+    tags:
+      - nodynamic
+
 archives:
   - ids:
       - schuhkarton
@@ -50,6 +62,92 @@ archives:
     files:
       - README.md
       - deploy/compose.yaml
+      - deploy/systemd/*
+      - deploy/openrc/*
+      - deploy/package/schuhkarton.default
+      - deploy/package/sysusers.conf
+
+nfpms:
+  - &package
+    id: packages
+    ids:
+      - schuhkarton
+    package_name: schuhkarton
+    file_name_template: "{{ .ConventionalFileName }}"
+    vendor: dgrieser
+    homepage: https://github.com/dgrieser/schuhkarton
+    maintainer: David Grieser <61581280+dgrieser@users.noreply.github.com>
+    description: |-
+      The digital shoebox: photos and videos in the browser.
+      Timeline, memories, map, places, people and albums for photo and video
+      folders, served as a fast, searchable web gallery from a single binary.
+    section: graphics
+    priority: optional
+    formats:
+      - deb
+      - rpm
+      - archlinux
+    bindir: /usr/bin
+    overrides:
+      deb:
+        recommends:
+          - ffmpeg
+          - libimage-exiftool-perl
+      rpm:
+        recommends:
+          - ffmpeg
+          - perl-Image-ExifTool
+      apk:
+        dependencies:
+          - exiftool
+          - ffmpeg
+    # systemd units for every format (apk too: Alpine-based systems with
+    # systemd exist); the OpenRC script only for apk.
+    contents:
+      - src: deploy/systemd/schuhkarton.service
+        dst: /usr/lib/systemd/system/schuhkarton.service
+        file_info:
+          mode: 0644
+      - src: deploy/systemd/schuhkarton-user.service
+        dst: /usr/lib/systemd/user/schuhkarton.service
+        file_info:
+          mode: 0644
+      - src: deploy/package/sysusers.conf
+        dst: /usr/lib/sysusers.d/schuhkarton.conf
+        file_info:
+          mode: 0644
+      - src: deploy/openrc/schuhkarton
+        dst: /etc/init.d/schuhkarton
+        packager: apk
+        file_info:
+          mode: 0755
+      - src: deploy/package/schuhkarton.default
+        dst: /etc/default/schuhkarton
+        type: config|noreplace
+        file_info:
+          mode: 0600
+      - src: README.md
+        dst: /usr/share/doc/schuhkarton/README.md
+        file_info:
+          mode: 0644
+    scripts:
+      postinstall: deploy/package/postinstall.sh
+      preremove: deploy/package/preremove.sh
+      postremove: deploy/package/postremove.sh
+    apk:
+      scripts:
+        postupgrade: deploy/package/postinstall.sh
+    archlinux:
+      packager: David Grieser <61581280+dgrieser@users.noreply.github.com>
+      scripts:
+        postupgrade: deploy/package/postinstall.sh
+
+  - <<: *package
+    id: alpine
+    ids:
+      - schuhkarton-static
+    formats:
+      - apk
 
 checksum:
   name_template: checksums.txt
