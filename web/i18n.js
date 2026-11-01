@@ -47,6 +47,7 @@ window.I18N = window.I18N || {};
 // texts with a variable part from the server: [pattern, replacement]
 window.I18N_RX = window.I18N_RX || {};
 window.I18N_RX.en = [
+  [/^Regel (\d+): Ordner fehlt$/, 'Rule $1: folder missing'],
   [/^unbekanntes Feld „([^“]*)“$/, 'unknown field “$1”'],
   [/^„([^“]*)“ ist kein Datum und hat kein Format$/, '“$1” is not a date and takes no format'],
   [/^„\{“ ohne „\}“ an Stelle (\d+)$/, '“{” without “}” at position $1'],

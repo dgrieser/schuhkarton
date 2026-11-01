@@ -357,6 +357,9 @@ func (l *Library) rulesLoop(c *compiledRules, moves []RuleMove, gen int64, by st
 	j := &l.rulesJob
 	for {
 		for start := 0; start < len(moves); {
+			if l.rulesChunkHook != nil {
+				l.rulesChunkHook(start)
+			}
 			l.opMu.Lock()
 			// metadata or rules changed since the plan: plan the rest again
 			if cur := l.rules.Load(); cur != c || l.editGen.Load() != gen {
@@ -370,6 +373,8 @@ func (l *Library) rulesLoop(c *compiledRules, moves []RuleMove, gen int64, by st
 					again = l.plan(c, rest)
 				}
 				j.todo.Add(int64(len(again) - (len(moves) - start)))
+				// the files done so far stay in front, so start still points
+				// at the first file of the new plan
 				moves = append(moves[:start:start], again...)
 			}
 			end := min(start+rulesChunk, len(moves))

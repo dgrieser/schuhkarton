@@ -2,7 +2,9 @@ package server
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 
 	"github.com/dgrieser/schuhkarton/internal/config"
@@ -27,7 +29,7 @@ func (s *Server) adminRules(w http.ResponseWriter, r *http.Request) {
 		"rules":   s.lib.Rules(),
 		"locales": pathtpl.Locales(),
 		"fields":  pathtpl.Fields,
-		"locked":  s.cfg.Locked("library.rules.list") != "" || s.cfg.Locked("library.rules.locale") != "",
+		"locked":  s.rulesLocked(),
 		"saved":   s.cfg.Path() != "",
 		"running": st.RulesRunning, "done": st.RulesDone, "todo": st.RulesTodo,
 	})
@@ -64,20 +66,19 @@ func (s *Server) adminSaveRules(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	var list []gallery.Rule
-	for _, x := range rs.List {
-		if x.Path != "" {
-			list = append(list, x)
+	for i, x := range rs.List {
+		if strings.TrimSpace(x.Path) == "" {
+			writeJSON(w, r, map[string]any{"ok": false, "error": fmt.Sprintf("Regel %d: Ordner fehlt", i+1)})
+			return
 		}
 	}
-	rs.List = list
 	if c, errs := gallery.CompileRules(rs); c == nil {
 		writeJSON(w, r, map[string]any{"ok": false, "error": errors.Join(errs...).Error()})
 		return
 	}
 	rulesSaveMu.Lock()
 	defer rulesSaveMu.Unlock()
-	if s.cfg.Locked("library.rules.list") != "" || s.cfg.Locked("library.rules.locale") != "" {
+	if s.rulesLocked() {
 		writeJSON(w, r, map[string]any{"ok": false, "error": "Die Regeln sind über Umgebungsvariablen festgelegt"})
 		return
 	}
@@ -98,6 +99,16 @@ func (s *Server) adminSaveRules(w http.ResponseWriter, r *http.Request) {
 	}
 	s.cfg.Library.Rules = n.Library.Rules
 	writeJSON(w, r, map[string]any{"ok": true})
+}
+
+// rulesLocked: an environment variable or flag fixes part of the rules.
+func (s *Server) rulesLocked() bool {
+	for _, k := range []string{"library.rules.list", "library.rules.locale", "library.rules.auto"} {
+		if s.cfg.Locked(k) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) adminApplyRules(w http.ResponseWriter, r *http.Request) {

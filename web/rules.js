@@ -115,7 +115,14 @@
   function wire(view) {
     const rs = R.rules;
     const later = debounce(() => preview(view), 350);
-    const changed = () => { updateBar(view); later(); };
+    // the preview no longer fits the rules: nothing can be applied until the new one is there
+    const changed = () => {
+      R.preview = null;
+      R.seq++;
+      for (const el of $$('.ru-prev', view)) el.classList.add('busy');
+      updateBar(view);
+      later();
+    };
     $('[data-locale]', view).onchange = (e) => { rs.locale = e.target.value; changed(); };
     $('[data-auto]', view).onchange = (e) => { rs.auto = e.target.checked; updateBar(view); };
     for (const card of $$('.ru-rule', view)) {
@@ -154,6 +161,7 @@
   }
 
   function redraw(view) {
+    R.preview = null; // rules moved or changed: the old numbers do not fit
     const y = scrollY;
     draw(view);
     scrollTo({ top: y });

@@ -217,11 +217,13 @@ type Library struct {
 	opMu     sync.Mutex // one admin operation (edit, rotate, move, trash) at a time
 	rules    atomic.Pointer[compiledRules]
 	rulesJob rulesJob
-	editGen  atomic.Int64         // counts metadata edits, so plans notice them
-	editMu   sync.Mutex           // guards edits
-	edits    map[string]*Override // root name + "/" + rel -> admin edits
-	trashMu  sync.Mutex
-	trash    []*TrashEntry
+	editGen  atomic.Int64 // counts metadata edits, so plans notice them
+	// rulesChunkHook runs before each chunk of a filing run (tests only)
+	rulesChunkHook func(start int)
+	editMu         sync.Mutex           // guards edits
+	edits          map[string]*Override // root name + "/" + rel -> admin edits
+	trashMu        sync.Mutex
+	trash          []*TrashEntry
 
 	faces faceBackend  // nil when face detection is off
 	local *helper.Pool // Python helper for formats Go cannot decode (mode local)

@@ -1,8 +1,11 @@
 package gallery
 
 import (
+	"fmt"
 	"os"
+	"path"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -170,5 +173,47 @@ func TestRulesReplanAfterEdit(t *testing.T) {
 	l.rulesLoop(c, stale, gen, "")
 	if byRel(l, "Berlin/a.jpg") == nil {
 		t.Fatalf("stale destination used: %v", rels(l))
+	}
+}
+
+func TestRulesReplanMidRun(t *testing.T) {
+	var files []string
+	for i := range 2*rulesChunk + 10 {
+		files = append(files, fmt.Sprintf("2019/06 Juni Lübbecke/%03d.jpg", i))
+	}
+	l, _ := testLib(t, files...)
+	l.SetRules(RuleSet{Locale: "de", List: []Rule{{Path: "{ort}"}}})
+	// the place of a file still to come changes while the run is going
+	var edited string
+	l.rulesChunkHook = func(start int) {
+		if start != rulesChunk {
+			return
+		}
+		for _, it := range l.Items() {
+			if strings.HasPrefix(it.Rel, "2019/") {
+				edited = path.Base(it.Rel)
+				place := "Berlin"
+				if _, err := l.EditItems([]string{it.ID}, Edit{Place: &place}); err != nil {
+					t.Error(err)
+				}
+				return
+			}
+		}
+	}
+	if n, err := l.ApplyRules(""); err != nil || n != len(files) {
+		t.Fatalf("apply: %d %v", n, err)
+	}
+	waitRules(t, l)
+	n := 0
+	for _, it := range l.Items() {
+		if strings.HasPrefix(it.Rel, "Lübbecke/") {
+			n++
+		}
+	}
+	if edited == "" || n != len(files)-1 || byRel(l, "Berlin/"+edited) == nil {
+		t.Fatalf("files skipped or misplaced after replanning: %d in Lübbecke, %v", n, rels(l)[:3])
+	}
+	if d, todo := l.rulesJob.done.Load(), l.rulesJob.todo.Load(); d != todo {
+		t.Fatalf("progress %d/%d", d, todo)
 	}
 }

@@ -20,6 +20,13 @@ func TestRulesAPI(t *testing.T) {
 	if res["ok"] == true {
 		t.Fatalf("bad rule saved: %v", res)
 	}
+	// a rule without folder is refused, not silently dropped
+	res = nil
+	json.Unmarshal(f.do("POST", "/api/admin/rules", `{"list":[{"name":"x","when":"ort:Berlin","path":" "}]}`, anna).Body.Bytes(), &res)
+	if res["ok"] == true || res["error"] != "Regel 1: Ordner fehlt" {
+		t.Fatalf("blank rule: %v", res)
+	}
+	res = nil
 	json.Unmarshal(f.do("POST", "/api/admin/rules", body, anna).Body.Bytes(), &res)
 	if res["ok"] != true {
 		t.Fatalf("save: %v", res)
