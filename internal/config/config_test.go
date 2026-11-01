@@ -158,3 +158,57 @@ func TestImportFolderByPath(t *testing.T) {
 		t.Fatalf("import folder %q, folders %+v", c.Library.Import.Folder, c.Library.Folders)
 	}
 }
+
+// One data folder holds config, accounts and cache, and can move as a whole.
+func TestDataFolder(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("SCHUHKARTON_HOME", home)
+	t.Setenv("SCHUHKARTON_CONFIG", "")
+	c, err := Load("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Path() != filepath.Join(home, "config.yaml") || c.Cache.Dir != filepath.Join(home, "cache") {
+		t.Fatalf("paths: %s %s", c.Path(), c.Cache.Dir)
+	}
+	c.Library.Folders = []Folder{{Name: "Bilder", Path: t.TempDir()}}
+	if err := c.Save(); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(c.Path())
+	if !strings.Contains(string(raw), "dir: cache\n") {
+		t.Fatalf("cache not written relative:\n%s", raw)
+	}
+	// moved elsewhere: the cache comes along
+	moved := filepath.Join(t.TempDir(), "neu")
+	os.Rename(home, moved)
+	t.Setenv("SCHUHKARTON_HOME", moved)
+	c, err = Load("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Cache.Dir != filepath.Join(moved, "cache") {
+		t.Fatalf("cache after the move: %s", c.Cache.Dir)
+	}
+}
+
+// A relative data folder is taken from the working directory, once.
+func TestDataFolderRelative(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	t.Setenv("SCHUHKARTON_HOME", "data")
+	t.Setenv("SCHUHKARTON_CONFIG", "")
+	c, err := Load("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(dir, "data", "cache")
+	if c.Cache.Dir != want {
+		t.Fatalf("cache %s, want %s", c.Cache.Dir, want)
+	}
+	c.Library.Folders = []Folder{{Name: "Bilder", Path: t.TempDir()}}
+	c.Save()
+	if c, _ = Load(""); c.Cache.Dir != want {
+		t.Fatalf("after saving: %s", c.Cache.Dir)
+	}
+}

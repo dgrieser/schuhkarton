@@ -2,6 +2,7 @@ package backup
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -45,5 +46,126 @@ func TestBackupCopiesOnlyChanges(t *testing.T) {
 	r.run(context.Background())
 	if st := r.Status(); st.Copied != 1 {
 		t.Errorf("changed file: copied %d", st.Copied)
+	}
+}
+
+// A cancelled run (Schuhkarton stopped) goes on soon after the next start;
+// a complete one waits for the interval.
+func TestLoopResumesIncompleteRun(t *testing.T) {
+	for _, c := range []struct {
+		complete bool
+		soon     bool
+	}{{false, true}, {true, false}} {
+		dir := t.TempDir()
+		last := Status{Finished: time.Now().Add(-time.Hour), Error: "context canceled", Complete: c.complete}
+		b, _ := json.Marshal(last)
+		os.WriteFile(filepath.Join(dir, "schuhkarton-backup.json"), b, 0o600)
+		r := New(Options{Dir: dir, Every: 24 * time.Hour})
+		ctx, cancel := context.WithCancel(context.Background())
+		go r.Loop(ctx)
+		var next time.Time
+		for range 100 {
+			if next = r.Status().Next; !next.IsZero() {
+				break
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		cancel()
+		if soon := time.Until(next) <= 2*time.Minute+time.Second; soon != c.soon {
+			t.Errorf("complete=%v: next run in %v", c.complete, time.Until(next).Round(time.Minute))
+		}
+	}
+}
+
+// A file that cannot be copied leaves the run incomplete.
+func TestBackupFailedFileIncomplete(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root reads everything")
+	}
+	src, dst := t.TempDir(), t.TempDir()
+	os.WriteFile(filepath.Join(src, "a.jpg"), []byte("aaa"), 0o644)
+	os.WriteFile(filepath.Join(src, "b.jpg"), []byte("bbb"), 0)
+	r := New(Options{Dir: dst, Sources: []Source{{"Bilder", src}}, Originals: true})
+	r.run(context.Background())
+	if st := r.Status(); st.Failed != 1 || st.Complete {
+		t.Fatalf("run with a failed file: %+v", st)
+	}
+	// what is on disk says so too
+	if again := New(Options{Dir: dst}); again.Status().Complete {
+		t.Fatal("status file says complete")
+	}
+}
+
+// A share that keeps whole seconds only must not make every file look new.
+func TestBackupToleratesCoarseTimes(t *testing.T) {
+	src, dst := t.TempDir(), t.TempDir()
+	os.WriteFile(filepath.Join(src, "a.jpg"), []byte("aaa"), 0o644)
+	fine := time.Date(2024, 5, 1, 12, 0, 0, 123456789, time.Local)
+	os.Chtimes(filepath.Join(src, "a.jpg"), fine, fine)
+	r := New(Options{Dir: dst, Sources: []Source{{"Bilder", src}}, Originals: true})
+	r.run(context.Background())
+	coarse := fine.Truncate(time.Second) // what the share kept
+	os.Chtimes(filepath.Join(dst, "originals/Bilder/a.jpg"), coarse, coarse)
+	r.run(context.Background())
+	if st := r.Status(); st.Copied != 0 {
+		t.Fatalf("copied again because of the time's fraction: %+v", st)
+	}
+}
+
+// A same-size change within the same second is still copied: the record of
+// the last copy keeps the exact time.
+func TestBackupSeesQuickSameSizeChange(t *testing.T) {
+	src, dst := t.TempDir(), t.TempDir()
+	f := filepath.Join(src, "people.json")
+	os.WriteFile(f, []byte("aaaa"), 0o644)
+	t0 := time.Date(2024, 5, 1, 12, 0, 0, 100_000_000, time.Local)
+	os.Chtimes(f, t0, t0)
+	r := New(Options{Dir: dst, Sources: []Source{{"Bilder", src}}, Originals: true})
+	r.run(context.Background())
+	copyPath := filepath.Join(dst, "originals/Bilder/people.json")
+	coarse := t0.Truncate(time.Second) // the share keeps whole seconds
+	os.Chtimes(copyPath, coarse, coarse)
+	os.WriteFile(f, []byte("bbbb"), 0o644) // same size, 0.5 s later
+	t1 := t0.Add(500 * time.Millisecond)
+	os.Chtimes(f, t1, t1)
+	r.run(context.Background())
+	if b, _ := os.ReadFile(copyPath); string(b) != "bbbb" {
+		t.Fatalf("change not copied: %q (%+v)", b, r.Status())
+	}
+}
+
+// A copy changed in the backup folder is replaced again.
+func TestBackupRepairsTouchedCopy(t *testing.T) {
+	src, dst := t.TempDir(), t.TempDir()
+	os.WriteFile(filepath.Join(src, "a.jpg"), []byte("aaaa"), 0o644)
+	r := New(Options{Dir: dst, Sources: []Source{{"Bilder", src}}, Originals: true})
+	r.run(context.Background())
+	cp := filepath.Join(dst, "originals/Bilder/a.jpg")
+	os.WriteFile(cp, []byte("xxxx"), 0o644) // same size, touched later
+	later := time.Now().Add(time.Hour)
+	os.Chtimes(cp, later, later)
+	r.run(context.Background())
+	if b, _ := os.ReadFile(cp); string(b) != "aaaa" {
+		t.Fatalf("touched copy kept: %q", b)
+	}
+}
+
+// On a precise file system a copy changed right after the backup is noticed.
+func TestBackupRepairsQuicklyTouchedCopy(t *testing.T) {
+	src, dst := t.TempDir(), t.TempDir()
+	os.WriteFile(filepath.Join(src, "a.jpg"), []byte("aaaa"), 0o644)
+	r := New(Options{Dir: dst, Sources: []Source{{"Bilder", src}}, Originals: true})
+	r.run(context.Background())
+	cp := filepath.Join(dst, "originals/Bilder/a.jpg")
+	fi, _ := os.Stat(cp)
+	os.WriteFile(cp, []byte("xxxx"), 0o644)
+	soon := fi.ModTime().Add(300 * time.Millisecond)
+	if soon.Nanosecond() == 0 {
+		soon = soon.Add(time.Millisecond)
+	}
+	os.Chtimes(cp, soon, soon)
+	r.run(context.Background())
+	if b, _ := os.ReadFile(cp); string(b) != "aaaa" {
+		t.Fatalf("quickly touched copy kept: %q", b)
 	}
 }

@@ -337,7 +337,19 @@ models come from `schuhkarton models download`). In the gallery,
 
 The setup page writes `config.yaml` to `$XDG_CONFIG_HOME/schuhkarton/` (macOS:
 `~/Library/Application Support/schuhkarton/`, Windows: `%AppData%\schuhkarton\`).
-`-config FILE` or `SCHUHKARTON_CONFIG` names another file. Every key can also
+`-config FILE` or `SCHUHKARTON_CONFIG` names another file.
+
+**One data folder:** `-home DIR` (or `SCHUHKARTON_HOME=DIR`) keeps everything
+Schuhkarton writes in one place: `DIR/config.yaml`, `DIR/users.json` and the
+cache in `DIR/cache/` (index, thumbnails, faces, people, favorites, edits,
+descriptions …). Paths inside the folder are written relative to it, so moving
+to another machine (say a Raspberry Pi) is: stop Schuhkarton, copy the folder,
+start it there with `-home`, and adjust the photo folders if their paths
+differ. To gather an existing installation, copy `config.yaml` and
+`users.json` into the folder, the cache into `cache/`, and remove `cache.dir`
+from `config.yaml` (or set it to `cache`).
+
+Every key can also
 be set as an environment variable (`faces.url` → `SCHUHKARTON_FACES_URL`;
 folders as `Name=/path,/other/path`) or with a flag (`schuhkarton -h`).
 Settings fixed by the environment or a flag show as locked on the settings
@@ -437,8 +449,11 @@ thumbnails, video previews, faces, people, favorites), `config/config.yaml`
 and `config/users.json` (they contain tokens and password hashes: keep the
 backup private) and
 `schuhkarton-backup.json` (the last run). Files that are new or differ in size
-or time are copied; browser transcodes are left out because they can be made
-again.
+or time are copied (`schuhkarton-copied.json` keeps the exact times, so a
+backup on a share that keeps whole seconds only still notices every change); browser transcodes are left out because they can be made
+again. A run that was cancelled (Schuhkarton stopped) or failed starts again
+two minutes after the next start, a failed one also after an hour at the
+latest; only a complete run waits for the full interval.
 
 To restore, copy the photos back, start Schuhkarton and choose *Anderen Cache
 übernehmen* in the setup with the backup's `cache/` folder. Cached files match

@@ -29,7 +29,7 @@ Eine laufende Galerie übernimmt Änderungen nach wenigen Sekunden.`
 // runUser manages accounts from the command line (also the way back in
 // when the only admin forgot the password).
 func runUser(args []string) error {
-	cfgPath := ""
+	cfgPath := "" // -home is taken for every command in main
 	if len(args) >= 2 && (args[0] == "-config" || args[0] == "--config") {
 		cfgPath, args = args[1], args[2:]
 	}
