@@ -69,6 +69,8 @@ type Options struct {
 	Dupes DupeOptions // the search for duplicates
 	// Rules file the files into folders by their metadata (none: nothing moves).
 	Rules RuleSet
+	// Import is a folder that empties itself into the library.
+	Import ImportOptions
 }
 
 // FaceOptions configure face detection.
@@ -180,12 +182,14 @@ type Status struct {
 	DupeTodo   int64  `json:"dupeTodo"`
 	DupeGroups int64  `json:"dupeGroups"`
 	// Filing rules: files moved into their folders in the background.
-	RulesRunning bool   `json:"rulesRunning"`
-	RulesDone    int64  `json:"rulesDone"`
-	RulesTodo    int64  `json:"rulesTodo"`
-	RulesFail    int64  `json:"rulesFail"`
-	RulesError   string `json:"rulesError,omitempty"`
-	Version      int64  `json:"version"`
+	RulesRunning bool  `json:"rulesRunning"`
+	RulesDone    int64 `json:"rulesDone"`
+	RulesTodo    int64 `json:"rulesTodo"`
+	RulesFail    int64 `json:"rulesFail"`
+	// Import folder (nil without one).
+	Import     *ImportStatus `json:"import,omitempty"`
+	RulesError string        `json:"rulesError,omitempty"`
+	Version    int64         `json:"version"`
 }
 
 // Library holds the index and the background workers.
@@ -216,11 +220,13 @@ type Library struct {
 	marks  markStore // guarded by favMu
 	notes  noteStore
 
-	opMu     sync.Mutex // one admin operation (edit, rotate, move, trash) at a time
-	rules    atomic.Pointer[compiledRules]
-	rulesJob rulesJob
-	editGen  atomic.Int64 // counts metadata edits, so plans notice them
-	closing  atomic.Bool  // Close has begun: no new filing runs
+	opMu        sync.Mutex // one admin operation (edit, rotate, move, trash) at a time
+	rules       atomic.Pointer[compiledRules]
+	rulesJob    rulesJob
+	importJob   importJob
+	scannedOnce atomic.Bool  // the first scan is through
+	editGen     atomic.Int64 // counts metadata edits, so plans notice them
+	closing     atomic.Bool  // Close has begun: no new filing runs
 	// rulesChunkHook runs before each chunk of a filing run (tests only)
 	rulesChunkHook func(start int)
 	editMu         sync.Mutex           // guards edits
@@ -281,6 +287,7 @@ func Open(opt Options) (*Library, error) {
 		l.aiJob.wake = make(chan struct{}, 1)
 	}
 	l.people = newPeopleStore(filepath.Join(opt.CacheDir, "people.json"), opt.Faces.ClusterThreshold, opt.Faces.NamedThreshold)
+	l.importJob.wake = make(chan struct{}, 1)
 	l.loadEdits()
 	if err := l.SetRules(opt.Rules); err != nil {
 		l.logf("Regeln ausgeschaltet: %v", err)
@@ -311,6 +318,10 @@ func (l *Library) Close() {
 		l.logf("background jobs still running, closing anyway")
 	}
 	l.saveIndex()
+	if l.opt.Import.Dir != "" {
+		l.importJob.dirty.Store(true) // filing may have moved imported files after the import loop stopped
+		l.saveImportStems()
+	}
 	if err := l.saveAI(); err != nil {
 		l.logf("ai.json: %v", err)
 	}
@@ -324,6 +335,18 @@ func (l *Library) Close() {
 }
 
 func withDefaults(o Options) Options {
+	if o.Import.Every <= 0 {
+		o.Import.Every = 15 * time.Second
+	}
+	if o.Import.Settle <= 0 {
+		o.Import.Settle = 5 * time.Second
+	}
+	if o.Import.Root < 0 || o.Import.Root >= len(o.Roots) {
+		o.Import.Root = 0
+	}
+	if len(o.Roots) == 0 {
+		o.Import.Dir = ""
+	}
 	o.Workers = max(1, o.Workers)
 	if o.ThumbSize <= 0 {
 		o.ThumbSize = 360
@@ -428,6 +451,7 @@ func (l *Library) Status() Status {
 	s.DupeDone, s.DupeTodo, s.DupeGroups = l.dupe.done.Load(), l.dupe.todo.Load(), l.dupe.nGrp.Load()
 	s.RulesRunning, s.RulesDone, s.RulesTodo = l.rulesJob.running.Load(), l.rulesJob.done.Load(), l.rulesJob.todo.Load()
 	s.RulesFail = l.rulesJob.fail.Load()
+	s.Import = l.ImportInfo()
 	s.RulesError, _ = l.rulesJob.lastErr.Load().(string)
 	fs := l.FaceStatus()
 	s.FaceMode, s.FaceOK, s.FaceRec, s.FaceErr = fs.Mode, fs.Detection, fs.Recognition, fs.Error

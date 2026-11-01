@@ -425,6 +425,8 @@ func merge(cur, in *config.Config) *config.Config {
 	set("library.folder_meta", func() { n.Library.FolderMeta = in.Library.FolderMeta })
 	set("library.write_files", func() { n.Library.WriteFiles = in.Library.WriteFiles })
 	set("library.trash_days", func() { n.Library.TrashDays = in.Library.TrashDays })
+	set("library.import.dir", func() { n.Library.Import.Dir = config.ExpandHome(strings.TrimSpace(in.Library.Import.Dir)) })
+	set("library.import.folder", func() { n.Library.Import.Folder = strings.TrimSpace(in.Library.Import.Folder) }) // name or path, see config
 	set("library.documents", func() {
 		if in.Library.Documents != nil {
 			n.Library.Documents = in.Library.Documents

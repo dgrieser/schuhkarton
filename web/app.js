@@ -2036,6 +2036,10 @@
       }
       if (s.dupeMode === 'on' && Account.can('admin')) bar(t('Duplikate prüfen'), s.dupeDone, s.dupeTodo);
       if (s.rulesRunning && Account.can('admin')) { busy = true; bar(t('Einsortieren'), s.rulesDone, s.rulesTodo, s.rulesFail || 0); }
+      if (s.import && Account.can('admin')) {
+        if (s.import.waiting) rows.push(`<div class="row"><span>${t('Import')}: ${pl(s.import.waiting, '{n} Datei wird noch geschrieben', '{n} Dateien werden noch geschrieben')}</span></div>`);
+        if (s.import.error) rows.push(`<div class="row"><span class="bad" title="${esc(t(s.import.error))}">${t('Import')}: ${esc(t(s.import.error))}</span></div>`);
+      }
       const bk = res.backup;
       if (bk?.running) { busy = true; rows.push(`<div class="row"><span>${t('Sicherung')}: ${esc(t(bk.phase || ''))} · ${t('{n} kopiert', { n: num(bk.copied) })}</span></div>`); }
       if (!rows.length) rows.push(`<div class="row"><span>${pl(s.photos, '{n} Foto', '{n} Fotos')} · ${pl(s.videos, '{n} Video', '{n} Videos')}${s.people ? ` · ${pl(s.people, '{n} Person', '{n} Personen')}` : ''}</span>${missing ? `<span class="faint" title="${t('Diese Dateien lassen sich nicht lesen')}">${num(missing)} ${t('ohne Vorschau')}</span>` : ''}</div>`);

@@ -204,9 +204,17 @@ func (s *Server) backupRun(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	st := s.lib.Status()
+	admin := isAdmin(r)
+	if !admin {
+		st.Import = nil // folder paths and file errors are for admins
+	}
 	res := map[string]any{"status": st, "scanning": s.lib.Scanning()}
 	if s.backup != nil {
-		res["backup"] = s.backup.Status()
+		b := s.backup.Status()
+		if !admin {
+			b.Dir, b.Error = "", ""
+		}
+		res["backup"] = b
 	}
 	writeJSON(w, r, res)
 }

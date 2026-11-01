@@ -222,11 +222,23 @@ func libOptions(cfg *config.Config) gallery.Options {
 			MinScore: cfg.Faces.MinScore, ClusterThreshold: cfg.Faces.ClusterThreshold, NamedThreshold: cfg.Faces.NamedThreshold,
 			Python: python, ModelsDir: cfg.Faces.ModelsDir,
 		},
-		AI:    aiOptions(cfg),
-		Rules: ruleSet(cfg),
+		AI:     aiOptions(cfg),
+		Rules:  ruleSet(cfg),
+		Import: importOptions(cfg),
 		Dupes: gallery.DupeOptions{Off: cfg.Dupes.Mode == "off", Sensitivity: cfg.Dupes.Sensitivity,
 			SimilarWindow: time.Duration(cfg.Dupes.SimilarMinutes) * time.Minute},
 	}
+}
+
+// importOptions: the import folder and the library folder it fills.
+func importOptions(cfg *config.Config) gallery.ImportOptions {
+	o := gallery.ImportOptions{Dir: cfg.Library.Import.Dir}
+	for i, f := range cfg.Library.Folders {
+		if f.Name == cfg.Library.Import.Folder {
+			o.Root = i
+		}
+	}
+	return o
 }
 
 // ruleSet hands the filing rules to the library.

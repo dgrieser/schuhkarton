@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/dgrieser/schuhkarton/internal/gallery"
@@ -66,5 +67,21 @@ func TestAdminResultReportsFiling(t *testing.T) {
 	json.Unmarshal(w.Body.Bytes(), &res)
 	if res["moved"] != float64(1) || res["queued"] != float64(2) {
 		t.Fatalf("edit response: %v", res)
+	}
+}
+
+// folder paths in the status are for admins only
+func TestStatusHidesImportFolder(t *testing.T) {
+	lib, err := gallery.Open(gallery.Options{Roots: []gallery.Root{{Name: "B", Path: t.TempDir()}}, CacheDir: t.TempDir(),
+		Import: gallery.ImportOptions{Dir: t.TempDir()}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lib.Close()
+	s := &Server{lib: lib}
+	w := httptest.NewRecorder()
+	s.status(w, httptest.NewRequest("GET", "/api/status", nil))
+	if strings.Contains(w.Body.String(), `"import"`) {
+		t.Fatalf("import folder shown to a viewer: %s", w.Body.String())
 	}
 }

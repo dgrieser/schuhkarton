@@ -250,6 +250,21 @@ skips (`library.exclude`); such files stay and the preview says how many. Saving
 other rules during a run stops it after the current batch; the new rules
 apply with the next run.
 
+### Import folder
+
+`library.import.dir` (*Einstellungen → Ordner → Import-Ordner*) names a folder
+that empties itself into the library: photos and videos put there, in
+subfolders too, move in on their own once they are completely written (same
+size twice, a few seconds old; `.part`, `.crdownload` and the like wait). They
+land below the library folder chosen with `library.import.folder` (default:
+the first) with their subfolders, and the filing rules then put them in place
+(also with `auto` off). Without rules they stay there. Names that are taken
+get " (2)", Live Photo pairs and `.xmp`/`.aae` sidecars stay together (also
+when one half comes later, up to a year, as long as the first one is still in
+the library), emptied
+subfolders are removed, and files that are no photos or videos stay in the
+import folder. The import folder must not lie inside a library folder.
+
 ## Image descriptions (optional)
 
 An AI model can describe every photo: one or two sentences and 8–20 tags,
@@ -338,6 +353,9 @@ library:
   write_files: true           # write admin edits into the files (exiftool); false: cache only
   trash_days: 30              # empty the trash after this many days; 0: never
   documents: [Dokumente, Documents, Scans, Belege]  # folders whose files are documents
+  import:                     # import folder (see "Import folder")
+    dir: ""                   # e.g. /home/me/Import; empty: none
+    folder: ""                # library folder to import into; empty: the first
   rules:                      # filing rules (see "Filing rules"); no list: nothing moves
     locale: de                # language of month and weekday names
     auto: true                # move files right after an admin edits date, place or category
