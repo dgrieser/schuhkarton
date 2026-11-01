@@ -2,7 +2,10 @@ package server
 
 import (
 	"encoding/json"
+	"net/http/httptest"
 	"testing"
+
+	"github.com/dgrieser/schuhkarton/internal/gallery"
 )
 
 func TestRulesAPI(t *testing.T) {
@@ -45,5 +48,23 @@ func TestRulesAPI(t *testing.T) {
 	}
 	if f.cfg.Library.Rules.Locale != "en" || len(f.cfg.Library.Rules.List) != 1 {
 		t.Fatalf("config not updated: %+v", f.cfg.Library.Rules)
+	}
+
+}
+
+// an edit tells the page what the rules moved right away or in the background
+func TestAdminResultReportsFiling(t *testing.T) {
+	lib, err := gallery.Open(gallery.Options{Roots: []gallery.Root{{Name: "B", Path: t.TempDir()}}, CacheDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lib.Close()
+	s := &Server{lib: lib}
+	w := httptest.NewRecorder()
+	s.adminResult(w, httptest.NewRequest("POST", "/api/admin/edit", nil), gallery.EditResult{Changed: 3, Moved: 1, Queued: 2}, nil)
+	var res map[string]any
+	json.Unmarshal(w.Body.Bytes(), &res)
+	if res["moved"] != float64(1) || res["queued"] != float64(2) {
+		t.Fatalf("edit response: %v", res)
 	}
 }

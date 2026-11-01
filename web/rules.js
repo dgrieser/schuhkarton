@@ -216,7 +216,7 @@
     $('[data-save]', view).disabled = R.locked || !d;
     $('[data-save]', view).classList.toggle('primary', d);
     const ap = $('[data-apply]', view);
-    ap.disabled = R.locked || !R.rules.list.length || !p || !p.moves || (p.rules || []).some((x) => x.error) || R.job?.running;
+    ap.disabled = !R.rules.list.length || !p || !p.moves || (p.rules || []).some((x) => x.error) || R.job?.running;
     ap.classList.toggle('primary', !d);
   }
 

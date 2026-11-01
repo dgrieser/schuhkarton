@@ -135,6 +135,8 @@ func (l *Library) PreviewRules(rs RuleSet) RulePreview {
 	if c == nil {
 		return p
 	}
+	l.opMu.Lock() // no edit changes items while they are looked at
+	defer l.opMu.Unlock()
 	folders := make([]map[string]bool, len(rs.List))
 	for i := range folders {
 		folders[i] = map[string]bool{}
@@ -348,8 +350,10 @@ func (l *Library) ApplyRules(by string) (int, error) {
 	}
 	l.bg.Add(1) // Close waits for the run
 	j.mu.Unlock()
+	l.opMu.Lock() // no edit changes items while they are planned
 	gen := l.editGen.Load()
 	moves := l.plan(c, nil)
+	l.opMu.Unlock()
 	if len(moves) == 0 {
 		j.running.Store(false)
 		l.bg.Done()

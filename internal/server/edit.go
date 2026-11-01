@@ -53,7 +53,8 @@ func (s *Server) adminResult(w http.ResponseWriter, r *http.Request, res gallery
 		return
 	}
 	writeJSON(w, r, map[string]any{"ok": true, "changed": res.Changed, "written": res.Written,
-		"warnings": res.Warnings, "ids": res.IDs, "entries": res.Entries, "version": s.lib.Version()})
+		"warnings": res.Warnings, "ids": res.IDs, "entries": res.Entries, "moved": res.Moved, "queued": res.Queued,
+		"version": s.lib.Version()})
 }
 
 // parseWallClock reads "2006-01-02T15:04[:05]" (a datetime-local value) as
