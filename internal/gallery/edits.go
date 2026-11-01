@@ -316,11 +316,14 @@ func (l *Library) EditItems(ids []string, e Edit) (EditResult, error) {
 	}
 	l.refresh(items)
 	l.editGen.Add(1)
-	var ids2 []string
-	for _, it := range items {
-		ids2 = append(ids2, it.ID)
+	// filing follows what the folders are made of: date, place, category
+	if e.Taken != nil || e.Shift != 0 || place != nil || cat != nil {
+		var ids2 []string
+		for _, it := range items {
+			ids2 = append(ids2, it.ID)
+		}
+		l.fileByRules(ids2, e.By, &res)
 	}
-	l.fileByRules(ids2, e.By, &res)
 	return res, nil
 }
 

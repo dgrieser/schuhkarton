@@ -106,6 +106,7 @@ type RuleStat struct {
 	Folders  int           `json:"folders"`  // folders the rule fills
 	Blocked  int           `json:"blocked"`  // stay: they would stop (or start) being documents
 	Excluded int           `json:"excluded"` // stay: the folder is one the scan skips (library.exclude)
+	Renamed  int           `json:"renamed"`  // get " (2)" because the name is taken there
 	Examples []RuleExample `json:"examples"`
 	Error    string        `json:"error,omitempty"`
 }
@@ -142,6 +143,30 @@ func (l *Library) PreviewRules(rs RuleSet) RulePreview {
 		folders[i] = map[string]bool{}
 	}
 	stay := make([][]RuleExample, len(rs.List)) // examples of files already in place
+	// names in the target folders, so the preview shows the " (2)" a move will add
+	taken := map[string]map[string]bool{}
+	claim := func(it *Item, dir string) (string, bool) {
+		abs := filepath.Join(l.opt.Roots[it.Root].Path, filepath.FromSlash(dir))
+		m := taken[abs]
+		if m == nil {
+			m = map[string]bool{}
+			if es, err := os.ReadDir(abs); err == nil {
+				for _, e := range es {
+					m[e.Name()] = true
+				}
+			}
+			taken[abs] = m
+		}
+		name := path.Base(it.Rel)
+		ext := path.Ext(name)
+		stem := strings.TrimSuffix(name, ext)
+		n := name
+		for i := 2; m[n]; i++ { // like freeStem
+			n = fmt.Sprintf("%s (%d)%s", stem, i, ext)
+		}
+		m[n] = true
+		return n, n != name
+	}
 	l.walkRules(c, nil, func(it *Item, rule int, dir string, blocked string) {
 		p.Total++
 		if rule < 0 {
@@ -163,6 +188,11 @@ func (l *Library) PreviewRules(rs RuleSet) RulePreview {
 		folders[rule][dir] = true
 		ex := RuleExample{ID: it.ID, From: it.Rel, To: joinRel(dir, path.Base(it.Rel))}
 		if ex.From != ex.To {
+			name, renamed := claim(it, dir)
+			if renamed {
+				ex.To = joinRel(dir, name)
+				st.Renamed++
+			}
 			st.Moves++
 			p.Moves++
 			if len(st.Examples) < ruleExamples {
@@ -354,13 +384,9 @@ func (l *Library) ApplyRules(by string) (int, error) {
 	gen := l.editGen.Load()
 	moves := l.plan(c, nil)
 	l.opMu.Unlock()
-	if len(moves) == 0 {
-		j.running.Store(false)
-		l.bg.Done()
-		return 0, nil
-	}
 	j.done.Store(0)
 	j.todo.Store(int64(len(moves)))
+	// also with nothing to move: the run takes over edits queued meanwhile
 	go l.rulesLoop(c, moves, gen, by)
 	return len(moves), nil
 }

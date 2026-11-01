@@ -236,3 +236,25 @@ func TestRulesStopOnClose(t *testing.T) {
 		t.Fatal("filing started on a closed library")
 	}
 }
+
+func TestRulesPreviewRenames(t *testing.T) {
+	l, _ := testLib(t, "2019/06 Juni Lübbecke/a.jpg", "2019/07 Juli Lübbecke/a.jpg")
+	p := l.PreviewRules(RuleSet{Locale: "de", List: []Rule{{Path: "{ort}"}}})
+	got := map[string]bool{}
+	for _, ex := range p.Rules[0].Examples {
+		got[ex.To] = true
+	}
+	if p.Rules[0].Renamed != 1 || !got["Lübbecke/a.jpg"] || !got["Lübbecke/a (2).jpg"] {
+		t.Fatalf("preview of a taken name: %+v", p.Rules[0])
+	}
+}
+
+func TestRulesIgnoreUnrelatedEdits(t *testing.T) {
+	l, _ := testLib(t, "2019/06 Juni Lübbecke/a.jpg")
+	l.SetRules(RuleSet{Locale: "de", Auto: true, List: []Rule{{Path: "{ort}"}}})
+	desc := "Ein Text"
+	res, err := l.EditItems([]string{byRel(l, "2019/06 Juni Lübbecke/a.jpg").ID}, Edit{Desc: &desc})
+	if err != nil || res.Moved+res.Queued != 0 || byRel(l, "2019/06 Juni Lübbecke/a.jpg") == nil {
+		t.Fatalf("a text edit filed the photo: %+v %v %v", res, err, rels(l))
+	}
+}
