@@ -520,6 +520,22 @@ func (s *peopleStore) renameLabelItems(ids map[string]string) {
 		}
 		changed = true
 	}
+	// remembered hidden groups follow their faces
+	for i := range s.hidden {
+		faces := map[string]string{}
+		for k, v := range s.hidden[i].Faces {
+			j := strings.LastIndexByte(k, ':')
+			if to, ok := ids[k[:max(j, 0)]]; j >= 0 && ok {
+				if to != "" {
+					faces[to+k[j:]] = v
+				}
+				changed = true
+				continue
+			}
+			faces[k] = v
+		}
+		s.hidden[i].Faces = faces
+	}
 	s.mu.Unlock()
 	if changed && s.path != "" {
 		s.save()

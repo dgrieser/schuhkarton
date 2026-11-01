@@ -95,6 +95,10 @@ func TestPermissions(t *testing.T) {
 		{"GET", "/api/admin/trash", "", ben, 403},
 		{"GET", "/api/admin/trash", "", anna, 200},
 		{"POST", "/api/users", `{"name":"Dora","password":"dora-pass","role":"user"}`, anna, 200},
+		{"GET", "/api/people/hidden", "", "", 401},
+		{"GET", "/api/people/hidden", "", ben, 200},
+		{"POST", "/api/people/hidden/h-x/show", `{}`, "", 401},
+		{"POST", "/api/people/hidden/h-x/show", `{}`, ben, 400},
 	}
 	for _, c := range cases {
 		if got := f.do(c.method, c.path, c.body, c.session).Code; got != c.want {

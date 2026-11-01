@@ -70,6 +70,8 @@ func New(ctx context.Context, o Options) http.Handler {
 	mux.HandleFunc("GET /api/albums", s.albums)
 	mux.HandleFunc("GET /api/people", s.people)
 	mux.HandleFunc("POST /api/people/{id}", s.requireUser(s.namePerson))
+	mux.HandleFunc("GET /api/people/hidden", s.requireUser(s.hiddenPeople))
+	mux.HandleFunc("POST /api/people/hidden/{id}/show", s.requireUser(s.showHidden))
 	mux.HandleFunc("POST /api/face/{id}/{idx}", s.requireUser(s.labelFace))
 	mux.HandleFunc("POST /api/fav", s.requireUser(s.fav))
 	mux.HandleFunc("POST /api/rescan", s.requireAdmin(s.rescan))
@@ -350,7 +352,29 @@ func (s *Server) namePerson(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if strings.TrimSpace(req.Name) == "~" {
+		hid, err := s.lib.HidePerson(r.PathValue("id"))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, r, map[string]any{"ok": true, "hidden": hid})
+		return
+	}
 	if err := s.lib.NamePerson(r.PathValue("id"), req.Name); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, r, map[string]any{"ok": true})
+}
+
+// hiddenPeople lists the groups hidden with "Ausblenden".
+func (s *Server) hiddenPeople(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, r, map[string]any{"hidden": s.lib.HiddenPeople()})
+}
+
+func (s *Server) showHidden(w http.ResponseWriter, r *http.Request) {
+	if err := s.lib.ShowHidden(r.PathValue("id")); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
