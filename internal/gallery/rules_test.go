@@ -133,3 +133,42 @@ func rels(l *Library) []string {
 	}
 	return out
 }
+
+func TestRulesKeepDocuments(t *testing.T) {
+	l, _ := testLib(t, "Dokumente/2021/03 März Rechnung/c.jpg", "2019/06 Juni Lübbecke/a.jpg")
+	// one rule for everything would take the document out of Dokumente
+	all := RuleSet{Locale: "de", Auto: true, List: []Rule{{Path: "{jahr}/{datum:MM MMMM} {ort|Kamera}"}}}
+	p := l.PreviewRules(all)
+	if p.Blocked != 1 || p.Rules[0].Blocked != 1 || p.Moves != 0 {
+		t.Fatalf("document not protected in preview: %+v", p)
+	}
+	l.SetRules(all)
+	if n, _ := l.ApplyRules(""); n != 0 {
+		t.Fatalf("planned %d moves", n)
+	}
+	if byRel(l, "Dokumente/2021/03 März Rechnung/c.jpg") == nil {
+		t.Fatalf("document moved: %v", rels(l))
+	}
+}
+
+func TestRulesReplanAfterEdit(t *testing.T) {
+	l, _ := testLib(t, "2019/06 Juni Lübbecke/a.jpg")
+	rs := RuleSet{Locale: "de", Auto: false, List: []Rule{{Path: "{ort}"}}}
+	l.SetRules(rs)
+	c := l.rules.Load()
+	gen := l.editGen.Load()
+	stale := l.plan(c, nil) // to "Lübbecke"
+	if len(stale) != 1 || stale[0].dir != "Lübbecke" {
+		t.Fatalf("plan: %+v", stale)
+	}
+	// the place changes before the job gets to the file
+	place := "Berlin"
+	if _, err := l.EditItems([]string{stale[0].ID}, Edit{Place: &place}); err != nil {
+		t.Fatal(err)
+	}
+	l.rulesJob.running.Store(true)
+	l.rulesLoop(c, stale, gen, "")
+	if byRel(l, "Berlin/a.jpg") == nil {
+		t.Fatalf("stale destination used: %v", rels(l))
+	}
+}

@@ -315,6 +315,7 @@ func (l *Library) EditItems(ids []string, e Edit) (EditResult, error) {
 		}
 	}
 	l.refresh(items)
+	l.editGen.Add(1)
 	var ids2 []string
 	for _, it := range items {
 		ids2 = append(ids2, it.ID)

@@ -104,6 +104,7 @@ type RuleStat struct {
 	Matches  int           `json:"matches"` // files this rule decides
 	Moves    int           `json:"moves"`   // of them in another folder now
 	Folders  int           `json:"folders"` // folders the rule fills
+	Blocked  int           `json:"blocked"` // stay: they would stop (or start) being documents
 	Examples []RuleExample `json:"examples"`
 	Error    string        `json:"error,omitempty"`
 }
@@ -113,6 +114,7 @@ type RulePreview struct {
 	Rules     []RuleStat `json:"rules"`
 	Moves     int        `json:"moves"`
 	Unmatched int        `json:"unmatched"` // files no rule decides (they stay)
+	Blocked   int        `json:"blocked"`   // files that stay, see RuleStat.Blocked
 	Total     int        `json:"total"`
 }
 
@@ -137,7 +139,7 @@ func (l *Library) PreviewRules(rs RuleSet) RulePreview {
 		folders[i] = map[string]bool{}
 	}
 	stay := make([][]RuleExample, len(rs.List)) // examples of files already in place
-	l.walkRules(c, nil, func(it *Item, rule int, dir string) {
+	l.walkRules(c, nil, func(it *Item, rule int, dir string, blocked bool) {
 		p.Total++
 		if rule < 0 {
 			p.Unmatched++
@@ -145,6 +147,11 @@ func (l *Library) PreviewRules(rs RuleSet) RulePreview {
 		}
 		st := &p.Rules[rule]
 		st.Matches++
+		if blocked {
+			st.Blocked++
+			p.Blocked++
+			return
+		}
 		folders[rule][dir] = true
 		ex := RuleExample{ID: it.ID, From: it.Rel, To: joinRel(dir, path.Base(it.Rel))}
 		if ex.From != ex.To {
@@ -180,7 +187,9 @@ func joinRel(dir, name string) string {
 // walkRules decides for every file (only: these ids) which rule applies
 // (-1: none) and the folder it gives. Live Photo videos follow their photo
 // and are left out.
-func (l *Library) walkRules(c *compiledRules, only map[string]bool, fn func(it *Item, rule int, dir string)) {
+// A destination that would turn a document into a photo or the other way
+// round (documents are told by their folder) is blocked: the file stays.
+func (l *Library) walkRules(c *compiledRules, only map[string]bool, fn func(it *Item, rule int, dir string, blocked bool)) {
 	match := make([]map[string]bool, len(c.List)) // nil: every file
 	for i, r := range c.List {
 		if strings.TrimSpace(r.When) == "" || strings.TrimSpace(r.When) == "*" {
@@ -213,10 +222,12 @@ func (l *Library) walkRules(c *compiledRules, only map[string]bool, fn func(it *
 			}
 		}
 		if rule < 0 {
-			fn(it, -1, "")
+			fn(it, -1, "", false)
 			continue
 		}
-		fn(it, rule, c.tpls[rule].Render(l.ruleValues(it, c.Locale, people[it.ID])))
+		dir := c.tpls[rule].Render(l.ruleValues(it, c.Locale, people[it.ID]))
+		blocked := l.isDocumentAt(it.Root, joinRel(dir, path.Base(it.Rel))) != l.IsDocument(it)
+		fn(it, rule, dir, blocked)
 	}
 }
 
@@ -267,8 +278,8 @@ func (l *Library) ruleValues(it *Item, locale string, names []string) pathtpl.Va
 // plan lists the files that are not where the rules want them.
 func (l *Library) plan(c *compiledRules, only map[string]bool) []RuleMove {
 	var out []RuleMove
-	l.walkRules(c, only, func(it *Item, rule int, dir string) {
-		if rule < 0 {
+	l.walkRules(c, only, func(it *Item, rule int, dir string, blocked bool) {
+		if rule < 0 || blocked {
 			return
 		}
 		to := joinRel(dir, path.Base(it.Rel))
@@ -302,6 +313,7 @@ func (l *Library) ApplyRules(by string) (int, error) {
 	if !l.rulesJob.running.CompareAndSwap(false, true) {
 		return 0, errors.New("Einsortieren läuft schon")
 	}
+	gen := l.editGen.Load()
 	moves := l.plan(c, nil)
 	if len(moves) == 0 {
 		l.rulesJob.running.Store(false)
@@ -309,7 +321,7 @@ func (l *Library) ApplyRules(by string) (int, error) {
 	}
 	l.rulesJob.done.Store(0)
 	l.rulesJob.todo.Store(int64(len(moves)))
-	go l.rulesLoop(c, moves, by)
+	go l.rulesLoop(c, moves, gen, by)
 	return len(moves), nil
 }
 
@@ -328,7 +340,7 @@ func (l *Library) queueRules(ids []string, by string) {
 	if j.running.CompareAndSwap(false, true) {
 		j.done.Store(0)
 		j.todo.Store(0)
-		go l.rulesLoop(nil, nil, by)
+		go l.rulesLoop(nil, nil, 0, by)
 	}
 }
 
@@ -341,25 +353,43 @@ func (l *Library) takePending() (map[string]bool, string) {
 	return p, by
 }
 
-func (l *Library) rulesLoop(c *compiledRules, moves []RuleMove, by string) {
+func (l *Library) rulesLoop(c *compiledRules, moves []RuleMove, gen int64, by string) {
 	j := &l.rulesJob
 	for {
-		for start := 0; start < len(moves); start += rulesChunk {
-			chunk := moves[start:min(start+rulesChunk, len(moves))]
+		for start := 0; start < len(moves); {
 			l.opMu.Lock()
-			l.moveByRules(chunk, by)
+			// metadata or rules changed since the plan: plan the rest again
+			if cur := l.rules.Load(); cur != c || l.editGen.Load() != gen {
+				c, gen = cur, l.editGen.Load()
+				rest := map[string]bool{}
+				for _, m := range moves[start:] {
+					rest[m.ID] = true
+				}
+				var again []RuleMove
+				if c != nil && len(c.List) > 0 {
+					again = l.plan(c, rest)
+				}
+				j.todo.Add(int64(len(again) - (len(moves) - start)))
+				moves = append(moves[:start:start], again...)
+			}
+			end := min(start+rulesChunk, len(moves))
+			if end > start {
+				l.moveByRules(moves[start:end], by)
+			}
 			l.opMu.Unlock()
-			j.done.Add(int64(len(chunk)))
+			j.done.Add(int64(end - start))
+			start = end
 		}
 		moves = nil
 		if p, pby := l.takePending(); len(p) > 0 {
-			if c = l.rules.Load(); c != nil && len(c.List) > 0 {
-				l.opMu.Lock()
+			l.opMu.Lock()
+			c, gen = l.rules.Load(), l.editGen.Load()
+			if c != nil && len(c.List) > 0 {
 				moves = l.plan(c, p)
-				l.opMu.Unlock()
-				by = pby
-				j.todo.Add(int64(len(moves)))
 			}
+			l.opMu.Unlock()
+			by = pby
+			j.todo.Add(int64(len(moves)))
 			continue
 		}
 		j.running.Store(false)

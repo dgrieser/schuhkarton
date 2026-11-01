@@ -1099,6 +1099,8 @@ select.sel, .setup .user select, .setup #nrole, .adm-shift select {
 .ru-stat { font-size: 13px; color: var(--muted); }
 .ru-stat b { color: var(--text); }
 .ru-mv { color: var(--accent); font-weight: 650; }
+.ru-blocked { display: flex; gap: 6px; align-items: flex-start; margin-top: 4px; }
+.ru-blocked svg { flex: none; width: 15px; height: 15px; margin-top: 1px; color: var(--accent); }
 .ru-ex { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 6px; }
 .ru-ex li { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; padding: 7px 10px; border-radius: 9px; background: var(--bg); overflow-wrap: anywhere; }
 .ru-ex .ru-dir { color: var(--text); font-weight: 600; }

@@ -217,6 +217,7 @@ type Library struct {
 	opMu     sync.Mutex // one admin operation (edit, rotate, move, trash) at a time
 	rules    atomic.Pointer[compiledRules]
 	rulesJob rulesJob
+	editGen  atomic.Int64         // counts metadata edits, so plans notice them
 	editMu   sync.Mutex           // guards edits
 	edits    map[string]*Override // root name + "/" + rel -> admin edits
 	trashMu  sync.Mutex

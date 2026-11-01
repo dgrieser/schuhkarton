@@ -245,6 +245,9 @@ sidebar); with `auto` on, a file moves as soon as an admin changes its date,
 place or category, several files at once in the background. Live Photo videos
 move with their photo, emptied folders are removed, and a place, date or
 category that so far came only from a folder name is kept as an edit.
+Documents are told by their folder, so a rule never moves a document out of
+a documents folder or a photo into one; such files stay and the preview says
+how many.
 
 ## Image descriptions (optional)
 

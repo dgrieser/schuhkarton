@@ -190,6 +190,7 @@
       if (st.error) { el.innerHTML = `<div class="ru-err">${icon('info')}<span>${esc(t(st.error))}</span></div>`; return; }
       if (!st.matches) { el.innerHTML = `<div class="ru-stat faint">${esc(t('Keine Datei – frühere Regeln greifen zuerst, oder die Bedingung passt nicht.'))}</div>`; return; }
       el.innerHTML = `<div class="ru-stat"><b>${esc(pl(st.matches, '{n} Datei', '{n} Dateien'))}</b> · ${esc(pl(st.folders, '{n} Ordner', '{n} Ordner'))} · ${st.moves ? `<span class="ru-mv">${esc(pl(st.moves, '{n} wird verschoben', '{n} werden verschoben'))}</span>` : esc(t('alle liegen schon richtig'))}</div>
+        ${st.blocked ? `<div class="ru-stat ru-blocked">${icon('info')}<span>${esc(pl(st.blocked, '{n} bleibt liegen: Dokumente bleiben in Dokument-Ordnern, Fotos und Videos außerhalb', '{n} bleiben liegen: Dokumente bleiben in Dokument-Ordnern, Fotos und Videos außerhalb'))}</span></div>` : ''}
         <ul class="ru-ex">${st.examples.map((x) => `<li>${pathHTML(x.to)}${x.from !== x.to ? `<small>${esc(t('bisher'))}: ${esc(x.from)}</small>` : ''}</li>`).join('')}</ul>`;
     });
     updateBar(view);

@@ -12,6 +12,11 @@ var DefaultDocFolders = []string{"Dokumente", "Documents", "Scans", "Belege"}
 // IsDocument reports whether an item lies below a documents folder (the
 // root's own name counts too). Galleries hide documents unless asked for.
 func (l *Library) IsDocument(it *Item) bool {
+	return l.isDocumentAt(it.Root, it.Rel)
+}
+
+// isDocumentAt reports whether a file at rel in root ri counts as a document.
+func (l *Library) isDocumentAt(ri int, rel string) bool {
 	names := l.opt.DocFolders
 	if names == nil {
 		names = DefaultDocFolders
@@ -19,8 +24,8 @@ func (l *Library) IsDocument(it *Item) bool {
 	if len(names) == 0 {
 		return false
 	}
-	parts := []string{l.opt.Roots[it.Root].Name}
-	if dir := path.Dir(it.Rel); dir != "." {
+	parts := []string{l.opt.Roots[ri].Name}
+	if dir := path.Dir(rel); dir != "." {
 		parts = append(parts, strings.Split(dir, "/")...)
 	}
 	for _, p := range parts {
