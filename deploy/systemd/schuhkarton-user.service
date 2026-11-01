@@ -1,0 +1,20 @@
+# User service (installed as schuhkarton.service in the user unit folder):
+# runs with your own account and the usual folders (~/.config/schuhkarton,
+# ~/.cache/schuhkarton).
+#   systemctl --user enable --now schuhkarton
+#   journalctl --user -u schuhkarton      # setup link on the first start
+# Variables (e.g. an API key) go into ~/.config/schuhkarton/environment.
+# To keep it running while you are logged out: loginctl enable-linger
+[Unit]
+Description=Schuhkarton photo and video gallery
+Documentation=https://github.com/dgrieser/schuhkarton
+
+[Service]
+Type=simple
+EnvironmentFile=-%E/schuhkarton/environment
+ExecStart=/usr/bin/schuhkarton serve
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,32 @@
+#!/sbin/openrc-run
+# OpenRC service (Alpine). Settings: /etc/default/schuhkarton; another user:
+# command_user="pi:pi" in /etc/conf.d/schuhkarton.
+# Setup link on the first start: /var/log/schuhkarton.log
+
+name="Schuhkarton"
+description="Schuhkarton photo and video gallery"
+
+if [ -r /etc/default/schuhkarton ]; then
+	set -a
+	. /etc/default/schuhkarton
+	set +a
+fi
+export SCHUHKARTON_HOME="${SCHUHKARTON_HOME:-/var/lib/schuhkarton}"
+
+command="/usr/bin/schuhkarton"
+command_args="serve"
+command_user="${command_user:-schuhkarton:schuhkarton}"
+command_background=true
+pidfile="/run/${RC_SVCNAME}.pid"
+output_log="/var/log/${RC_SVCNAME}.log"
+error_log="/var/log/${RC_SVCNAME}.log"
+
+depend() {
+	need net
+	after netmount
+}
+
+start_pre() {
+	checkpath -d -m 0750 -o "$command_user" "$SCHUHKARTON_HOME"
+	checkpath -f -m 0640 -o "$command_user" "$output_log"
+}
