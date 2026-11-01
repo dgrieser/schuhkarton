@@ -211,6 +211,16 @@ stay in the cache (`edits.json`) only. Formats exiftool cannot rotate (HEIC,
 PNG, …) keep the rotation in the cache either way. Favorites, names of
 people and cached previews follow moved and edited files.
 
+A library folder that cannot be read when the folders are scanned (a
+network share that is down, an empty mount point) keeps what it had, and so
+do subfolders that cannot be read; the sidebar says which folder is not
+reachable. An empty library folder counts as emptied on purpose only when it
+is the same directory it was while it had files (device and inode, on Windows
+volume and file index, noted in `roots.json` in the cache) or when most of its
+files from before are there again (a remount); otherwise it is a mount point
+with nothing mounted and keeps its files. The same holds for shares mounted
+below a library folder, once Schuhkarton has seen them mounted.
+
 ## Filing rules (admins)
 
 Schuhkarton does not impose a folder layout: without rules nothing moves.

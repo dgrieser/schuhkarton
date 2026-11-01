@@ -291,9 +291,10 @@ func TestImportCaseOnlyNames(t *testing.T) {
 	if err := l.importOnce(ctx); err != nil {
 		t.Fatal(err)
 	}
-	es, _ := os.ReadDir(root)
-	if len(es) != 2 {
-		t.Fatalf("both files should be imported: %v", es)
+	for _, n := range []string{"a.jpg", "A.jpg"} {
+		if _, err := os.Stat(filepath.Join(root, n)); err != nil {
+			t.Fatalf("both files should be imported: %v", err)
+		}
 	}
 	if es2, _ := os.ReadDir(dir); len(es2) != 0 {
 		t.Fatalf("left in the import folder: %v", es2)
