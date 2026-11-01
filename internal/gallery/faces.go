@@ -48,6 +48,7 @@ type peopleStore struct {
 	people []*Person
 	byID   map[string]*Person
 	byFace map[string]string // face key -> person id
+	hidden []hiddenRec       // groups hidden with "Ausblenden", newest last
 
 	clusterMu sync.Mutex
 }
@@ -58,9 +59,11 @@ func newPeopleStore(path string, threshNew, threshNamed float64) *peopleStore {
 	if b, err := os.ReadFile(path); err == nil {
 		var f struct {
 			Labels map[string]string `json:"labels"`
+			Hidden []hiddenRec       `json:"hidden"`
 		}
 		if json.Unmarshal(b, &f) == nil && f.Labels != nil {
 			s.labels = f.Labels
+			s.hidden = f.Hidden
 		}
 	}
 	return s
@@ -68,7 +71,11 @@ func newPeopleStore(path string, threshNew, threshNamed float64) *peopleStore {
 
 func (s *peopleStore) save() error {
 	s.mu.RLock()
-	b, err := json.MarshalIndent(map[string]any{"labels": s.labels}, "", " ")
+	f := map[string]any{"labels": s.labels}
+	if len(s.hidden) > 0 {
+		f["hidden"] = s.hidden
+	}
+	b, err := json.MarshalIndent(f, "", " ")
 	s.mu.RUnlock()
 	if err != nil {
 		return err
@@ -117,6 +124,10 @@ func (l *Library) PersonItems(id string) []string {
 // An empty name removes the names of its faces; "~" hides the person.
 func (l *Library) NamePerson(id, name string) error {
 	name = strings.TrimSpace(name)
+	if name == labelHidden {
+		_, err := l.HidePerson(id)
+		return err
+	}
 	s := l.people
 	s.mu.Lock()
 	p := s.byID[id]
@@ -240,6 +251,11 @@ type faceSnap struct {
 
 // recluster rebuilds the people from a consistent snapshot of the faces.
 func (l *Library) recluster() {
+	l.people.cluster(l.faceSnapshot())
+}
+
+// faceSnapshot lists the photos with faces.
+func (l *Library) faceSnapshot() []faceSnap {
 	items := l.Items()
 	snap := make([]faceSnap, 0, len(items))
 	l.mu.RLock()
@@ -249,7 +265,7 @@ func (l *Library) recluster() {
 		}
 	}
 	l.mu.RUnlock()
-	l.people.cluster(snap)
+	return snap
 }
 
 // cluster rebuilds the people from labels and face embeddings.
@@ -264,6 +280,22 @@ func (s *peopleStore) cluster(items []faceSnap) {
 	}
 	s.mu.RUnlock()
 
+	people := buildPeople(items, labels, s.threshNew, s.threshNamed)
+	byID := map[string]*Person{}
+	byFace := map[string]string{}
+	for _, p := range people {
+		byID[p.ID] = p
+		for _, r := range p.refs {
+			byFace[r.key()] = p.ID
+		}
+	}
+	s.mu.Lock()
+	s.people, s.byID, s.byFace = people, byID, byFace
+	s.mu.Unlock()
+}
+
+// faceRecs lists the faces with embeddings and their labels.
+func faceRecs(items []faceSnap, labels map[string]string) (map[string]int64, []*faceRec) {
 	taken := map[string]int64{}
 	var all []*faceRec
 	for _, it := range items {
@@ -277,6 +309,36 @@ func (s *peopleStore) cluster(items []faceSnap) {
 			all = append(all, r)
 		}
 	}
+	return taken, all
+}
+
+// newPerson makes a person from faces; the best face (or one the user named) is the cover.
+func newPerson(refs []*faceRec, id, name string, taken map[string]int64) *Person {
+	if len(refs) == 0 {
+		return nil
+	}
+	items := map[string]bool{}
+	var cover *faceRec
+	for _, f := range refs {
+		items[f.ref.Item] = true
+		if cover == nil || f.quality > cover.quality || (f.label == name && name != "" && cover.label != name) {
+			cover = f
+		}
+	}
+	p := &Person{ID: id, Name: name, Faces: len(refs), Count: len(items), Cover: cover.ref, itemSt: items}
+	for _, f := range refs {
+		p.refs = append(p.refs, f.ref)
+	}
+	for it := range items {
+		p.Items = append(p.Items, it)
+	}
+	sort.Slice(p.Items, func(a, b int) bool { return taken[p.Items[a]] > taken[p.Items[b]] })
+	return p
+}
+
+// buildPeople groups the faces: named people from labels, the rest by similarity.
+func buildPeople(items []faceSnap, labels map[string]string, threshNew, threshNamed float32) []*Person {
+	taken, all := faceRecs(items, labels)
 
 	// 1. named people from labels
 	named := map[string]*cluster{}
@@ -306,7 +368,7 @@ func (s *peopleStore) cluster(items []faceSnap) {
 		best := bestMatches(rest, namedList)
 		for i, f := range rest {
 			c, sim := best[i].c, best[i].sim
-			if c != nil && sim >= s.threshNamed && f.label != "!"+c.name {
+			if c != nil && sim >= threshNamed && f.label != "!"+c.name {
 				c.refs = append(c.refs, f) // centroid stays the user's choice
 			} else {
 				pool = append(pool, f)
@@ -330,7 +392,7 @@ func (s *peopleStore) cluster(items []faceSnap) {
 					c, sim = nc, s
 				}
 			}
-			if c != nil && sim >= s.threshNew {
+			if c != nil && sim >= threshNew {
 				c.add(f)
 			} else {
 				nc := &cluster{}
@@ -343,26 +405,10 @@ func (s *peopleStore) cluster(items []faceSnap) {
 	// build people
 	var people []*Person
 	mk := func(c *cluster, id, name string) {
-		items := map[string]bool{}
-		var cover *faceRec
-		for _, f := range c.refs {
-			items[f.ref.Item] = true
-			if cover == nil || f.quality > cover.quality || (f.label == name && name != "" && cover.label != name) {
-				cover = f
-			}
+		if p := newPerson(c.refs, id, name, taken); p != nil && (name != "" || (p.Faces >= minCluster && p.Count >= 2)) {
+			p.cent = c.cent
+			people = append(people, p)
 		}
-		if name == "" && (len(c.refs) < minCluster || len(items) < 2) {
-			return
-		}
-		p := &Person{ID: id, Name: name, Faces: len(c.refs), Count: len(items), Cover: cover.ref, cent: c.cent, itemSt: items}
-		for _, f := range c.refs {
-			p.refs = append(p.refs, f.ref)
-		}
-		for it := range items {
-			p.Items = append(p.Items, it)
-		}
-		sort.Slice(p.Items, func(a, b int) bool { return taken[p.Items[a]] > taken[p.Items[b]] })
-		people = append(people, p)
 	}
 	for _, c := range namedList {
 		mk(c, "n-"+slug(c.name), c.name)
@@ -376,17 +422,7 @@ func (s *peopleStore) cluster(items []faceSnap) {
 		}
 		return people[a].Count > people[b].Count
 	})
-	byID := map[string]*Person{}
-	byFace := map[string]string{}
-	for _, p := range people {
-		byID[p.ID] = p
-		for _, r := range p.refs {
-			byFace[r.key()] = p.ID
-		}
-	}
-	s.mu.Lock()
-	s.people, s.byID, s.byFace = people, byID, byFace
-	s.mu.Unlock()
+	return people
 }
 
 type match struct {

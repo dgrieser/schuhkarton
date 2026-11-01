@@ -47,12 +47,15 @@
   const markSnip = (s) => esc(s).replace(/\x01/g, '<mark>').replace(/\x02/g, '</mark>');
 
   let toastT;
-  function toast(msg) {
+  // toast(msg) shows a short note; with action and onAction it gets a button (e.g. "Rückgängig")
+  function toast(msg, action, onAction) {
     const el = $('#toast');
-    el.textContent = msg;
+    el.innerHTML = `<span>${esc(msg)}</span>${action ? `<button type="button">${esc(action)}</button>` : ''}`;
+    el.classList.toggle('act', !!action);
     el.classList.add('on');
     clearTimeout(toastT);
-    toastT = setTimeout(() => el.classList.remove('on'), 2400);
+    toastT = setTimeout(() => el.classList.remove('on'), action ? 7000 : 2400);
+    if (action) $('button', el).onclick = () => { el.classList.remove('on'); onAction(); };
   }
 
   async function api(path, opts) {
@@ -111,6 +114,21 @@
     S.version = res.version;
     S.loadedAt = Date.now();
     updateCounts();
+  }
+
+  // showHidden shows a hidden group again; back opens the person when it exists again
+  async function showHidden(hid, back) {
+    try {
+      await post(`/api/people/hidden/${encodeURIComponent(hid)}/show`, {});
+    } catch (e) {
+      toast(t('Fehler: {e}', { e: String(e.message || e) }));
+      return false;
+    }
+    await loadPeople().catch(() => {});
+    await loadItems().catch(() => {});
+    toast(t('Wieder sichtbar'));
+    if (back && S.peopleById.has(back)) location.hash = `#/person/${encodeURIComponent(back)}`;
+    return true;
   }
 
   async function loadPeople() {
@@ -1348,7 +1366,7 @@
   function render() {
     teardown();
     const v = route.view;
-    for (const a of $$('[data-v]')) a.classList.toggle('on', a.dataset.v === v || (v === 'ort' && a.dataset.v === 'orte') || (v === 'person' && a.dataset.v === 'personen'));
+    for (const a of $$('[data-v]')) a.classList.toggle('on', a.dataset.v === v || (v === 'ort' && a.dataset.v === 'orte') || ((v === 'person' || v === 'ausgeblendet') && a.dataset.v === 'personen'));
     $('#side').classList.remove('open');
     if (v !== 'suche') $('#q').value = '';
     const view = $('#view');
@@ -1799,7 +1817,8 @@
       else if (info.faceTodo > info.faces) banner = `<div class="banner">${icon('info')}<div>${t('Gesichter werden noch gesucht ({a} von {b}). Die Gruppen werden laufend besser.', { a: num(info.faces), b: num(info.faceTodo) })}</div></div>`;
       const card = (p) => `<a class="person" href="#/person/${encodeURIComponent(p.id)}"><span class="face"><img src="${faceURL(p.cover.item, p.cover.idx)}" alt="" loading="lazy"></span>
         <b class="${p.name ? '' : 'unnamed'}">${esc(p.name || t('Name hinzufügen'))}</b><span>${pl(p.count, '{n} Foto', '{n} Fotos')}</span></a>`;
-      view.innerHTML = `<div class="head"><div><h1>${t('Personen')}</h1><div class="sub">${t('{a} mit Namen · {b} ohne Namen', { a: pl(named.length, '{n} Person', '{n} Personen'), b: pl(unnamed.length, '{n} Gruppe', '{n} Gruppen') })}</div></div></div>
+      const hiddenLink = Account.can('user') ? `<div class="tools"><a class="btn" href="#/ausgeblendet" title="${t('Ausgeblendete Personen ansehen und wieder zeigen')}">${icon('eye-off')}<span>${t('Ausgeblendet')}</span></a></div>` : '';
+      view.innerHTML = `<div class="head"><div><h1>${t('Personen')}</h1><div class="sub">${t('{a} mit Namen · {b} ohne Namen', { a: pl(named.length, '{n} Person', '{n} Personen'), b: pl(unnamed.length, '{n} Gruppe', '{n} Gruppen') })}</div></div>${hiddenLink}</div>
         ${banner}
         ${named.length ? `<div class="people">${named.map(card).join('')}</div>` : ''}
         ${unnamed.length ? `<div class="head"><div><h1 style="font-size:20px">${t('Wer ist das?')}</h1><div class="sub">${t('Namen vergeben, gleiche Namen werden zusammengeführt')}</div></div></div><div class="people">${unnamed.map(card).join('')}</div>` : ''}
@@ -1835,11 +1854,50 @@
       inp.onkeydown = (e) => { if (e.key === 'Enter') inp.blur(); };
       inp.onchange = save;
       $('#phide', view).onclick = async () => {
-        await post(`/api/people/${encodeURIComponent(id)}`, { name: '~' });
-        toast(t('Ausgeblendet'));
+        const res = await post(`/api/people/${encodeURIComponent(id)}`, { name: '~' });
         await loadPeople();
         location.hash = '#/personen';
+        if (res.hidden) toast(t('Ausgeblendet'), t('Rückgängig'), () => showHidden(res.hidden, id));
+        else toast(t('Ausgeblendet'));
       };
+    },
+
+    async ausgeblendet(view) {
+      const head = (sub) => `<div class="head"><div><h1>${t('Ausgeblendete Personen')}</h1><div class="sub">${sub}</div></div>
+        <div class="tools"><a class="btn" href="#/personen">${icon('people')}<span>${t('Personen')}</span></a></div></div>`;
+      if (!Account.can('user')) {
+        view.innerHTML = `<div class="empty"><h2>${t('Ausgeblendete Personen')}</h2><p>${t('Ausblenden und wieder zeigen geht mit einem Konto.')}</p><p><a class="btn primary" href="${esc(Account.loginURL())}">${t('Anmelden')}</a></p></div>`;
+        return;
+      }
+      view.innerHTML = head(t('wird geladen …'));
+      let list;
+      try {
+        list = (await api('/api/people/hidden')).hidden || [];
+      } catch (e) {
+        view.innerHTML = head(esc(String(e.message || e)));
+        return;
+      }
+      if (route.view !== 'ausgeblendet') return;
+      const when = (h) => h.at ? t('ausgeblendet am {d}', { d: fmtLong(h.at) }) : t('früher ausgeblendet');
+      const card = (h) => `<div class="hperson" data-hid="${esc(h.id)}">
+        <span class="face"><img src="${faceURL(h.cover.item, h.cover.idx)}" alt="" loading="lazy"></span>
+        <div class="hinfo"><b class="${h.name ? '' : 'unnamed'}">${esc(h.name || t('Ohne Namen'))}</b>
+          <span>${pl(h.count, '{n} Foto', '{n} Fotos')} · ${when(h)}</span>
+          <div class="hsample">${h.sample.map((f) => `<img src="${faceURL(f.item, f.idx)}" alt="" loading="lazy">`).join('')}</div></div>
+        <button class="btn" type="button" data-show>${icon('eye')}<span>${t('Wieder zeigen')}</span></button></div>`;
+      view.innerHTML = head(list.length ? t('{n} – die Gesichter bleiben erhalten und lassen sich wieder zeigen.', { n: pl(list.length, '{n} Gruppe', '{n} Gruppen') }) : '')
+        + (list.length ? `<div class="hpeople">${list.map(card).join('')}</div>`
+          : `<div class="empty">${icon('eye')}<h2>${t('Nichts ausgeblendet')}</h2><p>${t('Ausgeblendete Personen erscheinen hier.')}</p></div>`);
+      for (const b of $$('[data-show]', view)) {
+        b.onclick = async () => {
+          const row = b.closest('.hperson');
+          b.disabled = true;
+          if (await showHidden(row.dataset.hid)) {
+            row.remove();
+            if (!$('.hperson', view)) rerender();
+          } else b.disabled = false;
+        };
+      }
     },
 
     alben(view, path) {

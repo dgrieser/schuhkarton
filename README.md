@@ -258,6 +258,12 @@ stores the faces, embeddings and crops in its cache. Clustering into people
 happens in the gallery. If the container is unreachable, the scan resumes when
 it is back.
 
+Signed-in accounts can hide a group of faces on its person page (*Ausblenden*).
+A toast offers to undo it right away, and *Personen → Ausgeblendet* lists every
+hidden group with a few of its faces and a *Wieder zeigen* button. Groups hidden
+with this version come back exactly as they were, including their names; faces
+hidden by older versions are grouped by similarity.
+
 Without Docker, `schuhkarton worker` runs the same service wherever Python 3
 with `opencv-python-headless`, `pillow` and `pillow-heif` is installed (the
 models come from `schuhkarton models download`). In the gallery,
