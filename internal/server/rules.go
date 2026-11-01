@@ -31,7 +31,7 @@ func (s *Server) adminRules(w http.ResponseWriter, r *http.Request) {
 		"fields":  pathtpl.Fields,
 		"locked":  s.rulesLocked(),
 		"saved":   s.cfg.Path() != "",
-		"running": st.RulesRunning, "done": st.RulesDone, "todo": st.RulesTodo,
+		"running": st.RulesRunning, "done": st.RulesDone, "todo": st.RulesTodo, "fail": st.RulesFail, "error": st.RulesError,
 	})
 }
 

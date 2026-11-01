@@ -180,10 +180,12 @@ type Status struct {
 	DupeTodo   int64  `json:"dupeTodo"`
 	DupeGroups int64  `json:"dupeGroups"`
 	// Filing rules: files moved into their folders in the background.
-	RulesRunning bool  `json:"rulesRunning"`
-	RulesDone    int64 `json:"rulesDone"`
-	RulesTodo    int64 `json:"rulesTodo"`
-	Version      int64 `json:"version"`
+	RulesRunning bool   `json:"rulesRunning"`
+	RulesDone    int64  `json:"rulesDone"`
+	RulesTodo    int64  `json:"rulesTodo"`
+	RulesFail    int64  `json:"rulesFail"`
+	RulesError   string `json:"rulesError,omitempty"`
+	Version      int64  `json:"version"`
 }
 
 // Library holds the index and the background workers.
@@ -425,6 +427,8 @@ func (l *Library) Status() Status {
 	}
 	s.DupeDone, s.DupeTodo, s.DupeGroups = l.dupe.done.Load(), l.dupe.todo.Load(), l.dupe.nGrp.Load()
 	s.RulesRunning, s.RulesDone, s.RulesTodo = l.rulesJob.running.Load(), l.rulesJob.done.Load(), l.rulesJob.todo.Load()
+	s.RulesFail = l.rulesJob.fail.Load()
+	s.RulesError, _ = l.rulesJob.lastErr.Load().(string)
 	fs := l.FaceStatus()
 	s.FaceMode, s.FaceOK, s.FaceRec, s.FaceErr = fs.Mode, fs.Detection, fs.Recognition, fs.Error
 	for _, it := range l.Items() {

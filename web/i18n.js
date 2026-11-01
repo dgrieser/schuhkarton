@@ -459,6 +459,7 @@ window.I18N.en = {
   "{n} bleibt liegen: das Einlesen übergeht diesen Ordner (Ausnahmen in den Einstellungen)": "{n} stays: scanning skips this folder (exclusions in the settings)",
   "{n} bleiben liegen: das Einlesen übergeht diesen Ordner (Ausnahmen in den Einstellungen)": "{n} stay: scanning skips this folder (exclusions in the settings)",
   "wird beendet": "shutting down",
+  "Einsortieren fertig, {n} Dateien ließen sich nicht verschieben: {e}": "Filing done, {n} files could not be moved: {e}",
   "{n} Name ist im Zielordner schon vergeben und bekommt „ (2)“ angehängt": "{n} name is taken in the target folder and gets “ (2)”",
   "{n} Namen sind im Zielordner schon vergeben und bekommen „ (2)“ angehängt": "{n} names are taken in the target folder and get “ (2)”",
   "{n} bleibt liegen: Dokumente bleiben in Dokument-Ordnern, Fotos und Videos außerhalb": "{n} stays: documents stay in document folders, photos and videos outside",

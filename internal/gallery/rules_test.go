@@ -311,3 +311,19 @@ func TestRulesPreviewFreedNames(t *testing.T) {
 		t.Fatalf("apply differs from preview: %v", rels(l))
 	}
 }
+
+func TestRulesReportFailures(t *testing.T) {
+	l, root := testLib(t, "2019/06 Juni Lübbecke/a.jpg")
+	// a file where the rule wants a folder: the move cannot happen
+	if err := os.WriteFile(filepath.Join(root, "Lübbecke"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	l.SetRules(RuleSet{Locale: "de", List: []Rule{{Path: "{ort}"}}})
+	if n, err := l.ApplyRules(""); err != nil || n != 1 {
+		t.Fatalf("apply: %d %v", n, err)
+	}
+	waitRules(t, l)
+	if st := l.Status(); st.RulesFail != 1 || st.RulesError == "" {
+		t.Fatalf("failure not reported: %d %q", st.RulesFail, st.RulesError)
+	}
+}

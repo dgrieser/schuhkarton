@@ -46,7 +46,7 @@
     R.saved = JSON.stringify(R.rules);
     R.locales = r.locales || [];
     R.locked = !!r.locked;
-    R.job = { running: r.running, done: r.done, todo: r.todo };
+    R.job = { running: r.running, done: r.done, todo: r.todo, fail: r.fail, error: r.error };
     return true;
   }
   const dirty = () => JSON.stringify(R.rules) !== R.saved;
@@ -259,7 +259,7 @@
     if (!el) return;
     const j = R.job;
     el.hidden = !j?.running;
-    if (j?.running) el.innerHTML = `<span>${esc(t('Wird einsortiert'))} · ${num(j.done)} / ${num(j.todo)}</span><span class="bar"><i style="width:${j.todo ? (j.done / j.todo) * 100 : 5}%"></i></span>`;
+    if (j?.running) el.innerHTML = `<span>${esc(t('Wird einsortiert'))} · ${num(j.done)} / ${num(j.todo)}${j.fail ? ` · <b class="bad">${esc(pl(j.fail, '{n} Fehler', '{n} Fehler'))}</b>` : ''}</span><span class="bar"><i style="width:${j.todo ? (j.done / j.todo) * 100 : 5}%"></i></span>`;
   }
 
   function poll(view) {
@@ -270,10 +270,11 @@
       const r = await api('/api/admin/rules').catch(() => null);
       if (!r) return poll(view);
       const was = R.job.running;
-      R.job = { running: r.running, done: r.done, todo: r.todo };
+      R.job = { running: r.running, done: r.done, todo: r.todo, fail: r.fail, error: r.error };
       drawJob(view);
       if (was && !r.running) {
-        toast(t('Einsortieren fertig'));
+        if (r.fail) ui.snack(t('Einsortieren fertig, {n} Dateien ließen sich nicht verschieben: {e}', { n: num(r.fail), e: t(r.error || '') }), '', null, 12000);
+        else toast(t('Einsortieren fertig'));
         await SK.loadItems();
         preview(view);
       }

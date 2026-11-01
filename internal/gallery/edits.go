@@ -56,6 +56,7 @@ type EditResult struct {
 	Entries  []string          `json:"entries,omitempty"` // delete: the new trash entries (for undo)
 	Moved    int               `json:"moved,omitempty"`   // edit: files the rules moved right away
 	Queued   int               `json:"queued,omitempty"`  // edit: files the rules move in the background
+	Failed   int               `json:"failed,omitempty"`  // rules: files that could not be moved
 }
 
 func (r *EditResult) warn(format string, args ...any) {

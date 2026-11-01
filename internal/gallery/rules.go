@@ -386,6 +386,8 @@ func (l *Library) plan(c *compiledRules, only map[string]bool) []RuleMove {
 type rulesJob struct {
 	running    atomic.Bool
 	done, todo atomic.Int64
+	fail       atomic.Int64 // files that could not be moved in this run
+	lastErr    atomic.Value // string: why the last one failed
 	mu         sync.Mutex
 	pending    map[string]bool // ids to file once the running job is through
 	by         string
@@ -417,6 +419,8 @@ func (l *Library) ApplyRules(by string) (int, error) {
 	moves := l.plan(c, nil)
 	l.opMu.Unlock()
 	j.done.Store(0)
+	j.fail.Store(0)
+	j.lastErr.Store("")
 	j.todo.Store(int64(len(moves)))
 	// also with nothing to move: the run takes over edits queued meanwhile
 	go l.rulesLoop(c, moves, gen, by)
@@ -441,6 +445,8 @@ func (l *Library) queueRules(ids []string, by string) {
 	j.mu.Unlock()
 	if start {
 		j.done.Store(0)
+		j.fail.Store(0)
+		j.lastErr.Store("")
 		j.todo.Store(0)
 		go l.rulesLoop(nil, nil, 0, by)
 	}
@@ -496,7 +502,10 @@ func (l *Library) rulesLoop(c *compiledRules, moves []RuleMove, gen int64, by st
 			}
 			end := min(start+rulesChunk, len(moves))
 			if end > start {
-				l.moveByRules(moves[start:end], by)
+				if r := l.moveByRules(moves[start:end], by); r.Failed > 0 {
+					j.fail.Add(int64(r.Failed))
+					j.lastErr.Store(r.Warnings[len(r.Warnings)-1])
+				}
 			}
 			l.opMu.Unlock()
 			j.done.Add(int64(end - start))
@@ -546,9 +555,13 @@ func (l *Library) moveByRules(moves []RuleMove, by string) EditResult {
 		for _, x := range g[0] {
 			dirs[filepath.Dir(l.Path(x))] = true
 		}
+		warned := len(res.Warnings)
 		moved, err := l.moveGroup(g[0], m.root, m.dir, favs, idMap, &res)
 		if err != nil {
 			res.warn("%s: %v", path.Base(m.rel), err)
+		}
+		if len(moved) == 0 && (err != nil || len(res.Warnings) > warned) {
+			res.Failed++
 			continue
 		}
 		if len(moved) > 0 {
