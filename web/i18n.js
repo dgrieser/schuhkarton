@@ -475,6 +475,7 @@ window.I18N.en = {
   "Ein Import-Ordner, der sich von selbst nach diesen Regeln in die Bibliothek leert, lässt sich unter {s} festlegen.": "An import folder that empties itself into the library by these rules can be set under {s}.",
   "Einstellungen → Ordner": "Settings → Folders",
   "Import": "Import",
+  "Der bisherige Stand bleibt, bis der Ordner wieder da ist.": "What was there stays until the folder is back.",
   "Import-Ordner liegt in der Bibliothek": "The import folder is inside the library",
   "{n} Datei wird noch geschrieben": "{n} file is still being written",
   "{n} Dateien werden noch geschrieben": "{n} files are still being written",

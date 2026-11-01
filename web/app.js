@@ -127,7 +127,7 @@
     await loadPeople().catch(() => {});
     await loadItems().catch(() => {});
     toast(t('Wieder sichtbar'));
-    if (back && S.peopleById.has(back)) location.hash = `#/person/${encodeURIComponent(back)}`;
+    if (back && S.peopleById.has(back)) location.replace(`#/person/${encodeURIComponent(back)}`);
     return true;
   }
 
@@ -1828,7 +1828,18 @@
     async person(view, id) {
       if (!S.peopleById.has(id)) await loadPeople().catch(() => {});
       const p = S.peopleById.get(id);
-      if (!p) { view.innerHTML = `<div class="empty"><h2>${t('Person nicht gefunden')}</h2><p><a class="link" href="#/personen">${t('Zur Übersicht')}</a></p></div>`; return; }
+      if (!p) {
+        // a group that was named or merged since (an old link, the history): its faces are elsewhere now
+        const m = /^c-([0-9a-f]+)-(\d+)$/.exec(id);
+        if (m) {
+          const it = await api(`/api/item/${m[1]}`).catch(() => null);
+          const to = it?.faces?.find((f) => f.idx === +m[2])?.person;
+          if (route.view !== 'person' || route.arg !== id) return;
+          if (to && to !== id && S.peopleById.has(to)) { location.replace(`#/person/${encodeURIComponent(to)}`); return; }
+        }
+        view.innerHTML = `<div class="empty"><h2>${t('Person nicht gefunden')}</h2><p><a class="link" href="#/personen">${t('Zur Übersicht')}</a></p></div>`;
+        return;
+      }
       const items = S.items.filter((it) => it.pp?.includes(id));
       const names = [...new Set(S.people.filter((x) => x.name && x.id !== id).map((x) => x.name))].sort();
       galleryView(view, {
@@ -1849,14 +1860,15 @@
         await loadPeople();
         await loadItems();
         const np = S.people.find((x) => x.name === name);
-        location.hash = np ? `#/person/${encodeURIComponent(np.id)}` : '#/personen';
+        // the group has a new id now: replace the page in the history, so "back" does not lead to the old one
+        location.replace(np ? `#/person/${encodeURIComponent(np.id)}` : '#/personen');
       };
       inp.onkeydown = (e) => { if (e.key === 'Enter') inp.blur(); };
       inp.onchange = save;
       $('#phide', view).onclick = async () => {
         const res = await post(`/api/people/${encodeURIComponent(id)}`, { name: '~' });
         await loadPeople();
-        location.hash = '#/personen';
+        location.replace('#/personen'); // the hidden group is gone: "back" must not lead to it
         if (res.hidden) toast(t('Ausgeblendet'), t('Rückgängig'), () => showHidden(res.hidden, id));
         else toast(t('Ausgeblendet'));
       };
@@ -2036,6 +2048,7 @@
       }
       if (s.dupeMode === 'on' && Account.can('admin')) bar(t('Duplikate prüfen'), s.dupeDone, s.dupeTodo);
       if (s.rulesRunning && Account.can('admin')) { busy = true; bar(t('Einsortieren'), s.rulesDone, s.rulesTodo, s.rulesFail || 0); }
+      if (s.offline?.length) rows.push(`<div class="row"><span class="bad" title="${esc(t('Der bisherige Stand bleibt, bis der Ordner wieder da ist.'))}">${t('Nicht erreichbar')}: ${esc(s.offline.join(', '))}</span></div>`);
       if (s.import && Account.can('admin')) {
         if (s.import.waiting) rows.push(`<div class="row"><span>${t('Import')}: ${pl(s.import.waiting, '{n} Datei wird noch geschrieben', '{n} Dateien werden noch geschrieben')}</span></div>`);
         if (s.import.error) rows.push(`<div class="row"><span class="bad" title="${esc(t(s.import.error))}">${t('Import')}: ${esc(t(s.import.error))}</span></div>`);

@@ -186,6 +186,9 @@ type Status struct {
 	RulesDone    int64 `json:"rulesDone"`
 	RulesTodo    int64 `json:"rulesTodo"`
 	RulesFail    int64 `json:"rulesFail"`
+	// Offline lists library folders the last scan could not read (their
+	// files stay as they were).
+	Offline []string `json:"offline,omitempty"`
 	// Import folder (nil without one).
 	Import     *ImportStatus `json:"import,omitempty"`
 	RulesError string        `json:"rulesError,omitempty"`
@@ -225,6 +228,8 @@ type Library struct {
 	rulesJob    rulesJob
 	importJob   importJob
 	scannedOnce atomic.Bool  // the first scan is through
+	offline     atomic.Value // []string: library folders the last scan could not read
+	rootDev     rootDevices  // device each library folder had its files on
 	editGen     atomic.Int64 // counts metadata edits, so plans notice them
 	closing     atomic.Bool  // Close has begun: no new filing runs
 	// rulesChunkHook runs before each chunk of a filing run (tests only)
@@ -452,6 +457,7 @@ func (l *Library) Status() Status {
 	s.RulesRunning, s.RulesDone, s.RulesTodo = l.rulesJob.running.Load(), l.rulesJob.done.Load(), l.rulesJob.todo.Load()
 	s.RulesFail = l.rulesJob.fail.Load()
 	s.Import = l.ImportInfo()
+	s.Offline, _ = l.offline.Load().([]string)
 	s.RulesError, _ = l.rulesJob.lastErr.Load().(string)
 	fs := l.FaceStatus()
 	s.FaceMode, s.FaceOK, s.FaceRec, s.FaceErr = fs.Mode, fs.Detection, fs.Recognition, fs.Error

@@ -2,7 +2,9 @@ package gallery
 
 import (
 	"context"
+	"errors"
 	"io/fs"
+	"os"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -27,12 +29,70 @@ func (l *Library) Scan(ctx context.Context) error {
 
 	l.phase.Store("Ordner werden gelesen")
 	l.cnt.scanned.Store(0)
+	// A folder that cannot be read (a network share that is down, a mount
+	// that failed) must not empty the library: its items stay as they were.
+	// So do the items below subfolders that could not be read. The library
+	// folders and the mount points below them (where the device changes)
+	// are remembered while they hold files; one that holds no photos or
+	// videos now counts as emptied on purpose only when it is still the same
+	// directory. Otherwise it is a mount point with nothing mounted (which
+	// may hold lost+found, .DS_Store and the like) and keeps its files.
+	oldRels := map[int][]string{}
+	oldSet := map[int]map[string]fileSig{} // rel -> size and time
+	for _, it := range l.Items() {
+		oldRels[it.Root] = append(oldRels[it.Root], it.Rel)
+		if oldSet[it.Root] == nil {
+			oldSet[it.Root] = map[string]fileSig{}
+		}
+		oldSet[it.Root][it.Rel] = fileSig{it.Size, it.MTime}
+	}
+	keepAll := make([]bool, len(l.opt.Roots))       // root not read: keep everything
+	keepBelow := make([][]string, len(l.opt.Roots)) // subfolders to keep ("a/b/")
+	var offline []string
 	var files []found
+	mounts := mountPoints()
 	for ri, root := range l.opt.Roots {
+		if fi, err := os.Stat(root.Path); err != nil || !fi.IsDir() {
+			keepAll[ri] = true
+			offline = append(offline, root.Name)
+			l.logf("scan: %s nicht erreichbar, der bisherige Stand bleibt (%v)", root.Name, err)
+			continue
+		}
+		before := len(files)
+		devs := map[string]string{}                // directory -> device, to find mount points
+		checks := map[string]bool{root.Path: true} // the root and mount points below it
+		if id, ok := deviceOf(root.Path); ok {
+			devs[root.Path] = deviceOnly(id)
+		}
+		for p := range l.knownDirs() { // mount points seen before, mounted or not now
+			if p != root.Path && within(p, root.Path) {
+				checks[p] = true
+			}
+		}
+		realRoot := realPath(root.Path) // mountinfo has resolved paths
+		for _, p := range mounts {      // bind mounts on the same disk too
+			if p != realRoot && within(p, realRoot) {
+				if rel, err := filepath.Rel(realRoot, p); err == nil {
+					checks[filepath.Join(root.Path, rel)] = true
+				}
+			}
+		}
 		err := filepath.WalkDir(root.Path, func(p string, d fs.DirEntry, err error) error {
 			if err != nil {
 				l.logf("scan: %v", err)
 				l.cnt.errors.Add(1)
+				// a file that went away is fine; a folder that went away while it
+				// was being read (a share dropping out) keeps what it had
+				if !errors.Is(err, fs.ErrNotExist) || d == nil || d.IsDir() { // d is nil for the folder itself
+					rel, _ := filepath.Rel(root.Path, p)
+					rel = filepath.ToSlash(rel)
+					if rel == "." {
+						keepAll[ri] = true
+					} else {
+						keepBelow[ri] = append(keepBelow[ri], rel+"/")
+					}
+					offline = append(offline, path.Join(root.Name, rel))
+				}
 				if d != nil && d.IsDir() {
 					return fs.SkipDir
 				}
@@ -48,12 +108,27 @@ func (l *Library) Scan(ctx context.Context) error {
 				}
 				return nil
 			}
-			if d.IsDir() || KindOf(name) == 0 {
+			if d.IsDir() {
+				if p != root.Path {
+					if id, ok := deviceOf(p); ok {
+						devs[p] = deviceOnly(id)
+						if pd, ok := devs[filepath.Dir(p)]; ok && pd != devs[p] {
+							checks[p] = true // a mount point
+						}
+					}
+				}
+				return nil
+			}
+			if KindOf(name) == 0 {
 				return nil
 			}
 			info, err := d.Info()
 			if err != nil {
 				l.cnt.errors.Add(1)
+				if !errors.Is(err, fs.ErrNotExist) { // listed but not readable now: keep it
+					rel, _ := filepath.Rel(root.Path, p)
+					keepBelow[ri] = append(keepBelow[ri], filepath.ToSlash(rel))
+				}
 				return nil
 			}
 			rel, _ := filepath.Rel(root.Path, p)
@@ -63,6 +138,83 @@ func (l *Library) Scan(ctx context.Context) error {
 		})
 		if err != nil {
 			return err
+		}
+		for dir := range checks {
+			rel, _ := filepath.Rel(root.Path, dir)
+			rel = filepath.ToSlash(rel)
+			below := func(r string) bool { return rel == "." || strings.HasPrefix(r, rel+"/") }
+			// files below now, and how many of them are the very files indexed
+			// before (same size and time)
+			if _, err := os.Stat(dir); errors.Is(err, fs.ErrNotExist) {
+				l.forgetDevice(dir) // the folder itself is gone: deleted, not unmounted
+				continue
+			}
+			found := map[string]fileSig{} // files below now
+			for _, f := range files[before:] {
+				if below(f.rel) {
+					found[f.rel] = fileSig{f.size, f.mtime}
+				}
+			}
+			var missing []string // indexed before, not here now
+			oldN := 0
+			for _, r := range oldRels[ri] {
+				if below(r) {
+					oldN++
+					if _, ok := found[r]; !ok {
+						missing = append(missing, r)
+					}
+				}
+			}
+			rec, known := l.dirRecord(dir)
+			switch {
+			case oldN == 0, l.sameDevice(dir):
+				// a new folder, or the very directory it was: what is there counts
+				if len(found) > 0 || known {
+					l.rememberDevice(dir)
+				}
+				continue
+			case !known:
+				// first look (an existing library before folders were
+				// remembered): with files it is what it is; without, keep
+				if len(found) > 0 {
+					l.rememberDevice(dir)
+					continue
+				}
+			default:
+				// another identity: a remount when most of the files from
+				// before are back. While offline, only the files kept then
+				// count, not what was written into the empty mount point since.
+				evidence := rec.Kept
+				if len(evidence) == 0 {
+					evidence = nil
+					for _, r := range oldRels[ri] {
+						if below(r) {
+							evidence = append(evidence, r)
+						}
+					}
+				}
+				back := 0
+				for _, r := range evidence {
+					if s, ok := found[r]; ok && s == oldSet[ri][r] {
+						back++
+					}
+				}
+				if back*2 > len(evidence) {
+					l.rememberDevice(dir)
+					continue
+				}
+			}
+			l.markOffline(dir, missing)
+			// another directory without any file from before (a mount point
+			// with nothing mounted, maybe with something written into it):
+			// keep what it had, add what is new
+			if rel == "." {
+				keepAll[ri] = true
+			} else {
+				keepBelow[ri] = append(keepBelow[ri], rel+"/")
+			}
+			offline = append(offline, path.Join(root.Name, rel))
+			l.logf("scan: %s ohne Fotos und nicht der bisherige Ordner, der bisherige Stand bleibt", path.Join(root.Name, rel))
 		}
 	}
 
@@ -85,6 +237,33 @@ func (l *Library) Scan(ctx context.Context) error {
 		items = append(items, it)
 		todo = append(todo, it)
 	}
+	// keep what a folder that was not (completely) read had
+	seen := make(map[string]bool, len(items))
+	for _, it := range items {
+		seen[it.ID] = true
+	}
+	kept := 0
+	for _, it := range l.Items() {
+		if it.Root >= len(keepAll) || seen[it.ID] {
+			continue
+		}
+		k := keepAll[it.Root]
+		for _, dir := range keepBelow[it.Root] {
+			if strings.HasSuffix(dir, "/") { // a folder: what is below it
+				k = k || strings.HasPrefix(it.Rel, dir) || it.Rel+"/" == dir
+			} else { // a single file
+				k = k || it.Rel == dir
+			}
+		}
+		if k {
+			items = append(items, it)
+			kept++
+		}
+	}
+	if kept > 0 {
+		l.logf("scan: %d files kept from folders that could not be read", kept)
+	}
+	l.offline.Store(offline)
 	l.logf("scan: %d files, %d need metadata", len(items), len(todo))
 
 	l.cnt.meta.Store(0)
