@@ -47,6 +47,7 @@
     R.locales = r.locales || [];
     R.locked = !!r.locked;
     R.job = { running: r.running, done: r.done, todo: r.todo, fail: r.fail, error: r.error };
+    R.import = r.import || null;
     return true;
   }
   const dirty = () => JSON.stringify(R.rules) !== R.saved;
@@ -75,6 +76,8 @@
         <div class="tools"><button class="btn" data-layout title="${esc(t('Regeln für die bisherige Ablage einsetzen'))}">${icon('spark')}<span>${esc(t('Wie bisher'))}</span></button></div></div>
       ${R.locked ? `<div class="banner">${icon('info')}<div>${esc(t('Die Regeln sind über Umgebungsvariablen festgelegt und lassen sich hier nicht ändern.'))}</div></div>` : ''}
       <div class="ru-job" hidden></div>
+      ${R.import ? `<div class="ru-how ru-imp">${icon('folder')}<div>${t('Import-Ordner {d}: neue Fotos und Videos kommen von selbst in die Bibliothek und werden nach diesen Regeln einsortiert (ohne Regeln: mit ihren Unterordnern in den Fotoordner).', { d: `<code>${esc(R.import.dir)}</code>` })}${R.import.done ? ` ${esc(pl(R.import.done, 'Seit dem Start {n} Datei übernommen.', 'Seit dem Start {n} Dateien übernommen.'))}` : ''}${R.import.error ? ` <span class="bad">${esc(t(R.import.error))}</span>` : ''}</div></div>`
+        : `<div class="ru-how">${icon('folder')}<div>${t('Ein Import-Ordner, der sich von selbst nach diesen Regeln in die Bibliothek leert, lässt sich unter {s} festlegen.', { s: `<a class="link" href="/setup">${esc(t('Einstellungen → Ordner'))}</a>` })}</div></div>`}
       <div class="ru-how">${icon('info')}<div>${t('Jede Datei folgt der <b>ersten</b> Regel, deren Bedingung passt. Die Bedingung ist eine Suche wie im Suchfeld (leer: alle Dateien), der Ordner eine Vorlage mit Feldern in geschweiften Klammern. Dateinamen bleiben, Live-Photo-Videos ziehen mit ihrem Foto um, leere Ordner verschwinden.')}</div></div>
       <div class="ru-opts">
         <label class="ru-opt"><span>${esc(t('Sprache der Monatsnamen'))}</span>

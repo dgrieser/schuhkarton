@@ -93,3 +93,68 @@ func TestRulesInFile(t *testing.T) {
 		t.Error("unknown locale must fail")
 	}
 }
+
+func TestImportFolder(t *testing.T) {
+	lib := t.TempDir()
+	c := Defaults()
+	c.Library.Folders = []Folder{{Name: "Bilder", Path: lib}}
+	c.Library.Import.Dir = filepath.Join(lib, "Import")
+	if c.Validate() == nil {
+		t.Error("import folder inside the library must fail")
+	}
+	c.Library.Import.Dir = filepath.Join(t.TempDir(), "Import")
+	if err := c.Validate(); err != nil {
+		t.Errorf("import folder beside the library: %v", err)
+	}
+	c.Library.Import.Folder = "Fehlt"
+	if c.Validate() == nil {
+		t.Error("unknown library folder must fail")
+	}
+}
+
+func TestImportFolderLink(t *testing.T) {
+	lib := t.TempDir()
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(lib, link); err != nil {
+		t.Skip(err)
+	}
+	c := Defaults()
+	c.Library.Folders = []Folder{{Name: "Bilder", Path: lib}}
+	c.Library.Import.Dir = filepath.Join(link, "Import")
+	if c.Validate() == nil {
+		t.Error("import folder in the library through a link must fail")
+	}
+}
+
+func TestImportFolderLinkToCache(t *testing.T) {
+	cache := t.TempDir()
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(cache, link); err != nil {
+		t.Skip(err)
+	}
+	c := Defaults()
+	c.Library.Folders = []Folder{{Name: "Bilder", Path: t.TempDir()}}
+	c.Cache.Dir = cache
+	c.Library.Import.Dir = link
+	if c.Validate() == nil {
+		t.Error("import folder that is the cache through a link must fail")
+	}
+}
+
+func TestImportFolderByPath(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config.yaml")
+	a, b := t.TempDir(), t.TempDir()
+	c := Defaults()
+	c.SetPath(p)
+	c.Library.Folders = []Folder{{Name: "Erster", Path: a}, {Name: "", Path: b}} // the second without name
+	c.Library.Import = Import{Dir: filepath.Join(t.TempDir(), "Import"), Folder: b}
+	if err := c.Validate(); err != nil { // the settings page checks before saving
+		t.Fatalf("import folder by path refused: %v", err)
+	}
+	if err := c.Save(); err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Base(b); c.Library.Import.Folder != want || c.Library.Folders[1].Name != want {
+		t.Fatalf("import folder %q, folders %+v", c.Library.Import.Folder, c.Library.Folders)
+	}
+}

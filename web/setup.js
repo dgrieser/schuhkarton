@@ -116,6 +116,15 @@
           <button class="btn primary" id="fadd">${icon('plus')}<span>${t('Hinzufügen')}</span></button>
         </div>
         <div class="chips" id="fsugg"></div>`}
+        <div class="import">
+          <h3>${t('Import-Ordner')}</h3>
+          <p class="muted">${t('Fotos und Videos, die hier landen (auch in Unterordnern), wandern von selbst in die Bibliothek: nach den Ablage-Regeln, ohne Regeln mit ihren Unterordnern in den Fotoordner. Der Import-Ordner leert sich dabei; andere Dateien bleiben liegen.')}</p>
+          <div class="addrow">
+            <input id="fimp" value="${esc(C.library.import?.dir || '')}" placeholder="${t('leer: kein Import-Ordner')}" spellcheck="false" ${dis('library.import.dir')}>
+            <button class="btn" id="fimpb" ${dis('library.import.dir')}>${icon('folder')}<span>${t('Durchsuchen')}</span></button>
+          </div>${lockNote('library.import.dir')}
+          <label class="field"><span>${t('In diesen Fotoordner')}</span><select id="fimpf" ${dis('library.import.folder')}></select>${lockNote('library.import.folder')}</label>
+        </div>
         <details class="more"><summary>${t('Ordnernamen, Ausnahmen, Bearbeiten')}</summary>
           <label class="check"><input type="checkbox" id="fmeta" ${C.library.folder_meta ? 'checked' : ''} ${dis('library.folder_meta')}>
             <span><b>${t('Ordnernamen auswerten')}</b><br><span class="muted">${t('Ordner wie {ex} liefern Datum, Ort und Kategorie, wenn die Fotos selbst nichts Passenderes wissen. Bearbeitete Angaben gehen immer vor.', { ex: '<code>2019/07 Juli Ort</code>' })}</span></span></label>
@@ -138,6 +147,18 @@
         </details>
       </section>`;
     const list = $('#flist', el);
+    // the library folder imports go to: one of the folders above (the first when none is chosen)
+    C.library.import ||= { dir: '', folder: '' };
+    // the target is held as the folder itself, so renaming it (even through an empty name) keeps it
+    let impTarget = C.library.folders.find((f) => C.library.import.folder && (f.name === C.library.import.folder || f.path === C.library.import.folder)) || null;
+    const drawImport = () => {
+      const sel = $('#fimpf', el);
+      const fs = C.library.folders;
+      if (impTarget && !fs.includes(impTarget)) impTarget = null; // removed: back to the first folder
+      // by path: names may still change (or be left empty) until the settings are saved
+      C.library.import.folder = impTarget && impTarget !== fs[0] ? impTarget.path : '';
+      sel.innerHTML = fs.map((f, i) => `<option value="${i}" ${(impTarget || fs[0]) === f ? 'selected' : ''}>${esc(f.name || t('Ohne Namen'))}${i === 0 ? ` (${t('Standard')})` : ''}</option>`).join('');
+    };
     const draw = () => {
       list.innerHTML = C.library.folders.length ? C.library.folders.map((f, i) => `
         <div class="folder">
@@ -147,7 +168,13 @@
           ${lockedF ? '' : `<button class="btn ghost icon" data-rm="${i}" title="${t('Entfernen')}">${icon('x')}</button>`}
         </div>`).join('') : `<p class="empty-note">${t('Noch kein Ordner.')}</p>`;
       for (const b of $$('[data-rm]', list)) b.onclick = () => { C.library.folders.splice(+b.dataset.rm, 1); draw(); validate(); };
-      for (const n of $$('input.name', list)) n.oninput = () => { C.library.folders[+n.dataset.i].name = n.value; };
+      for (const n of $$('input.name', list)) {
+        n.oninput = () => {
+          C.library.folders[+n.dataset.i].name = n.value;
+          drawImport(); // the import target follows the rename
+        };
+      }
+      drawImport();
     };
     draw();
     for (const f of C.library.folders) if (!checks.has(f.path)) checkFolder(f.path).then(() => { draw(); validate(); });
@@ -172,6 +199,9 @@
         for (const b of $$('[data-p]', el)) b.onclick = () => add(b.dataset.p);
       });
     }
+    $('#fimp', el).oninput = (e) => { C.library.import.dir = e.target.value.trim(); };
+    $('#fimpb', el).onclick = () => pick($('#fimp', el).value, (p) => { C.library.import.dir = p; $('#fimp', el).value = p; });
+    $('#fimpf', el).onchange = (e) => { impTarget = C.library.folders[+e.target.value] || null; drawImport(); };
     const ex = $('#fexcl', el);
     ex.oninput = () => { C.library.exclude = ex.value.split(',').map((s) => s.trim()).filter(Boolean); };
     $('#fdocs', el).oninput = (e) => { C.library.documents = e.target.value.split(',').map((x) => x.trim()).filter(Boolean); };

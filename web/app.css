@@ -658,6 +658,9 @@ body.setup { overflow-y: auto; }
 .setup .field input:focus, .setup .addrow input:focus, .setup .field select:focus { outline: 0; border-color: var(--accent); }
 input:disabled, select:disabled { opacity: .6; }
 .setup .addrow { display: flex; gap: 8px; align-items: center; }
+.setup .import { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); display: grid; gap: 8px; }
+.setup .import h3 { margin: 0; font-size: 15px; }
+.setup .import p { margin: 0; }
 .setup .addrow input { flex: 1; }
 .setup .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; }
 .setup .check { display: flex; gap: 12px; align-items: flex-start; padding: 10px 0; cursor: pointer; line-height: 1.45; }

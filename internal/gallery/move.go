@@ -126,7 +126,7 @@ func sidecars(abs string) []string {
 	var out []string
 	for _, e := range ents {
 		n := e.Name()
-		if e.IsDir() || n == name {
+		if e.IsDir() || n == name || e.Type()&fs.ModeSymlink != 0 { // a link is never a sidecar
 			continue
 		}
 		ext := strings.ToLower(filepath.Ext(n))
@@ -142,11 +142,18 @@ func sidecars(abs string) []string {
 }
 
 // moveWithSidecars moves a file and its sidecars; the sidecars follow the
-// new name of the file.
+// new name of the file. A sidecar that cannot move stays where it is.
 func moveWithSidecars(src, dst string) error {
+	_, err := moveWithSidecarsErr(src, dst)
+	return err
+}
+
+// moveWithSidecarsErr is moveWithSidecars that also reports the first
+// sidecar that could not move (the file itself moved).
+func moveWithSidecarsErr(src, dst string) (sideErr, err error) {
 	side := sidecars(src)
 	if err := moveFile(src, dst); err != nil {
-		return err
+		return nil, err
 	}
 	sdir, sname := filepath.Split(src)
 	sstem := strings.TrimSuffix(sname, filepath.Ext(sname))
@@ -160,9 +167,11 @@ func moveWithSidecars(src, dst string) error {
 		} else if base != sstem {
 			continue
 		}
-		moveFile(filepath.Join(sdir, n), filepath.Join(ddir, to))
+		if err := moveFile(filepath.Join(sdir, n), filepath.Join(ddir, to)); err != nil && sideErr == nil {
+			sideErr = fmt.Errorf("Begleitdatei %s: %w", n, err)
+		}
 	}
-	return nil
+	return sideErr, nil
 }
 
 // freeStem returns stem, or "stem (2)", "stem (3)" …, so that stem+ext is
@@ -227,6 +236,7 @@ func (l *Library) relocate(it *Item, ri int, rel string, favs, ids map[string]st
 	favs[oldFav] = l.favKey(it)
 	if oldID != it.ID {
 		ids[oldID] = it.ID
+		l.importJob.followImported(oldID, it.ID)
 	}
 	l.rekey(it, oldKey, 0)
 }

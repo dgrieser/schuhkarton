@@ -103,6 +103,7 @@ func (l *Library) Scan(ctx context.Context) error {
 	l.saveIndex()
 	l.recluster()
 	l.phase.Store("bereit")
+	l.scannedOnce.Store(true)
 	l.media.kick()
 	l.kickAI()
 	l.PurgeTrash()

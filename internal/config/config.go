@@ -93,6 +93,19 @@ type Library struct {
 	// Rules decide from the metadata where files live. Without rules
 	// nothing moves.
 	Rules Rules `yaml:"rules" json:"rules"`
+	// Import is a folder that empties itself into the library.
+	Import Import `yaml:"import" json:"import"`
+}
+
+// Import: photos and videos put into Dir (subfolders too) move into the
+// library on their own, once they are completely written. The filing rules
+// then put them in place; without rules they keep their subfolders below
+// the library folder. Dir is emptied either way; other files stay.
+type Import struct {
+	Dir string `yaml:"dir" json:"dir"` // empty: no import folder
+	// Folder is the name (or path) of the library folder to import into
+	// (empty: the first one).
+	Folder string `yaml:"folder" json:"folder"`
 }
 
 // Rules file photos, videos and documents into folders by their metadata.
@@ -305,6 +318,8 @@ func (c *Config) normalize() {
 	}
 	c.Faces.ModelsDir = ExpandHome(c.Faces.ModelsDir)
 	c.Backup.Dir = ExpandHome(c.Backup.Dir)
+	c.Library.Import.Dir = ExpandHome(strings.TrimSpace(c.Library.Import.Dir))
+	c.Library.Import.Folder = strings.TrimSpace(c.Library.Import.Folder)
 	c.Server.Listen = cmpOr(c.Server.Listen, d.Server.Listen)
 	c.Server.Token = cmpOr(c.Server.Token, "auto")
 	c.Faces.Mode = cmpOr(strings.ToLower(c.Faces.Mode), "off")
@@ -386,6 +401,15 @@ func (c *Config) normalize() {
 		}
 		seen[f.Name] = true
 	}
+	// the import folder may name its library folder by path (the settings
+	// page does, as names change while editing): store the final name
+	if imp := ExpandHome(c.Library.Import.Folder); filepath.IsAbs(imp) {
+		for _, f := range c.Library.Folders {
+			if filepath.Clean(f.Path) == filepath.Clean(imp) {
+				c.Library.Import.Folder = f.Name
+			}
+		}
+	}
 }
 
 func cmpOr(a, b string) string {
@@ -442,6 +466,29 @@ func (c *Config) Validate() error {
 			errs = append(errs, fmt.Sprintf("Regel %d (%s): %v", i+1, cmpOr(r.Name, r.Path), err))
 		}
 	}
+	if d := c.Library.Import.Dir; d != "" {
+		if !filepath.IsAbs(d) {
+			errs = append(errs, "Import-Ordner: Pfad muss absolut sein")
+		}
+		rd := RealPath(d)
+		for _, f := range c.Library.Folders {
+			if rf := RealPath(f.Path); inside(d, f.Path) || inside(f.Path, d) || inside(rd, rf) || inside(rf, rd) {
+				errs = append(errs, fmt.Sprintf("Import-Ordner und Fotoordner %q dürfen nicht ineinander liegen", f.Path))
+			}
+		}
+		overlaps := func(o string) bool {
+			ro := RealPath(o)
+			return inside(d, o) || inside(o, d) || inside(rd, ro) || inside(ro, rd)
+		}
+		if overlaps(c.Cache.Dir) || (c.Backup.Dir != "" && overlaps(c.Backup.Dir)) {
+			errs = append(errs, "Import-Ordner darf nicht im Cache oder in der Sicherung liegen")
+		}
+		if n := c.Library.Import.Folder; n != "" && !slices.ContainsFunc(c.Library.Folders, func(f Folder) bool {
+			return f.Name == n || (filepath.IsAbs(ExpandHome(n)) && filepath.Clean(f.Path) == filepath.Clean(ExpandHome(n)))
+		}) {
+			errs = append(errs, fmt.Sprintf("Import: Fotoordner %q gibt es nicht", n))
+		}
+	}
 	if c.Library.TrashDays < 0 {
 		errs = append(errs, "library.trash_days darf nicht negativ sein")
 	}
@@ -480,6 +527,24 @@ func (c *Config) Validate() error {
 		return errors.New(strings.Join(errs, "; "))
 	}
 	return nil
+}
+
+// RealPath resolves symbolic links in p, also when p itself does not exist
+// yet (its nearest existing parent is resolved).
+func RealPath(p string) string {
+	p = filepath.Clean(p)
+	rest := ""
+	for {
+		if r, err := filepath.EvalSymlinks(p); err == nil {
+			return filepath.Join(r, rest)
+		}
+		parent := filepath.Dir(p)
+		if parent == p {
+			return filepath.Join(p, rest)
+		}
+		rest = filepath.Join(filepath.Base(p), rest)
+		p = parent
+	}
 }
 
 // inside reports whether path is inside (or equal to) dir.

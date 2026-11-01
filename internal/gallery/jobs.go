@@ -33,6 +33,10 @@ func (l *Library) Start(ctx context.Context) {
 		l.bg.Add(1)
 		go l.dupeLoop(ctx)
 	}
+	if l.opt.Import.Dir != "" {
+		l.bg.Add(1)
+		go l.importLoop(ctx)
+	}
 }
 
 func (m *mediaGen) kick() {
