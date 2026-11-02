@@ -432,6 +432,8 @@ func merge(cur, in *config.Config) *config.Config {
 	set("library.folders", func() { n.Library.Folders = cleanFolders(in.Library.Folders) })
 	set("library.exclude", func() { n.Library.Exclude = in.Library.Exclude })
 	set("library.rescan", func() { n.Library.Rescan = in.Library.Rescan })
+	set("background.from", func() { n.Background.From = strings.TrimSpace(in.Background.From) })
+	set("background.to", func() { n.Background.To = strings.TrimSpace(in.Background.To) })
 	set("library.folder_meta", func() { n.Library.FolderMeta = in.Library.FolderMeta })
 	set("library.write_files", func() { n.Library.WriteFiles = in.Library.WriteFiles })
 	set("library.write_metadata", func() { n.Library.WriteMetadata = in.Library.WriteMetadata })

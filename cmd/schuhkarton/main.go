@@ -32,6 +32,7 @@ import (
 	"github.com/dgrieser/schuhkarton/internal/config"
 	"github.com/dgrieser/schuhkarton/internal/gallery"
 	"github.com/dgrieser/schuhkarton/internal/helper"
+	"github.com/dgrieser/schuhkarton/internal/schedule"
 	"github.com/dgrieser/schuhkarton/internal/server"
 	"github.com/dgrieser/schuhkarton/internal/setup"
 	"github.com/dgrieser/schuhkarton/internal/version"
@@ -253,6 +254,7 @@ func libOptions(cfg *config.Config) gallery.Options {
 		OCR:    ocrOptions(cfg),
 		Speech: speechOptions(cfg),
 		Rules:  ruleSet(cfg),
+		Window: cfg.Window(),
 		Import: importOptions(cfg),
 		Dupes: gallery.DupeOptions{Off: cfg.Dupes.Mode == "off", Sensitivity: cfg.Dupes.Sensitivity,
 			SimilarWindow: time.Duration(cfg.Dupes.SimilarMinutes) * time.Minute},
@@ -477,7 +479,7 @@ func (r *runner) start(cfg *config.Config) error {
 	}
 	ctx, cancel := context.WithCancel(r.base)
 	lib.Start(ctx)
-	lib.Go(func() { scanLoop(ctx, lib, cfg.RescanInterval()) })
+	lib.Go(func() { scanLoop(ctx, lib, cfg.RescanInterval(), cfg.Window()) })
 	var br *backup.Runner
 	if cfg.Backup.Dir != "" {
 		var srcs []backup.Source
@@ -486,7 +488,7 @@ func (r *runner) start(cfg *config.Config) error {
 		}
 		br = backup.New(backup.Options{Dir: cfg.Backup.Dir, Sources: srcs, Exclude: cfg.Library.Exclude,
 			CacheDir: cfg.Cache.Dir, ConfigPath: cfg.Path(), Originals: cfg.Backup.Originals,
-			Cache: cfg.Backup.Cache, Config: cfg.Backup.Config, Every: cfg.BackupInterval()})
+			Cache: cfg.Backup.Cache, Config: cfg.Backup.Config, Every: cfg.BackupInterval(), Window: cfg.Window()})
 		lib.Go(func() { br.Loop(ctx) })
 	}
 	token := appToken(cfg, r.addr())
@@ -608,7 +610,9 @@ func (r *runner) printLinks() {
 	}
 }
 
-func scanLoop(ctx context.Context, lib *gallery.Library, every time.Duration) {
+// scanLoop reads the folders at the start and then regularly, inside the
+// background window. A scan that has begun is not cut short.
+func scanLoop(ctx context.Context, lib *gallery.Library, every time.Duration, w schedule.Window) {
 	if err := lib.Scan(ctx); err != nil && ctx.Err() == nil {
 		log.Printf("scan: %v", err)
 	}
@@ -622,6 +626,15 @@ func scanLoop(ctx context.Context, lib *gallery.Library, every time.Duration) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+			_, cancel, ok := w.Wait(ctx)
+			if !ok {
+				return
+			}
+			cancel()
+			select { // ticks while waiting for the window: one scan is enough
+			case <-t.C:
+			default:
+			}
 			if err := lib.Scan(ctx); err != nil && ctx.Err() == nil {
 				log.Printf("scan: %v", err)
 			}

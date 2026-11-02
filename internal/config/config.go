@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/dgrieser/schuhkarton/internal/pathtpl"
+	"github.com/dgrieser/schuhkarton/internal/schedule"
 	"gopkg.in/yaml.v3"
 )
 
@@ -34,6 +35,9 @@ type Config struct {
 	UI      UI      `yaml:"ui" json:"ui"`
 	Backup  Backup  `yaml:"backup" json:"backup"`
 	Worker  Worker  `yaml:"worker" json:"worker"`
+	// Background limits the work Schuhkarton does on its own to a daily
+	// time window.
+	Background Background `yaml:"background" json:"background"`
 
 	path   string
 	found  bool
@@ -135,6 +139,23 @@ type Rule struct {
 	// Path is the folder below the library folder, a template like
 	// "{jahr}/{datum:MM MMMM} {ort}" (see internal/pathtpl).
 	Path string `yaml:"path" json:"path"`
+}
+
+// Background is a daily time window for the work Schuhkarton does on its
+// own: thumbnails and previews, faces, descriptions, text and speech
+// recognition, writing metadata into files, duplicates, the import folder,
+// regular rescans and backups. Both empty: any time. From "23:00", To
+// "05:00": only at night. What people ask for (opening a photo, a rescan or
+// backup started by hand) runs at once.
+type Background struct {
+	From string `yaml:"from" json:"from"`
+	To   string `yaml:"to" json:"to"`
+}
+
+// Window returns the parsed time window (any time when it is not valid).
+func (c *Config) Window() schedule.Window {
+	w, _ := schedule.Parse(c.Background.From, c.Background.To)
+	return w
 }
 
 // Cache is where everything derived lives.
@@ -549,6 +570,9 @@ func (c *Config) Validate() error {
 		if _, err := time.ParseDuration(c.Library.Rescan); err != nil {
 			errs = append(errs, fmt.Sprintf("library.rescan %q: %v", c.Library.Rescan, err))
 		}
+	}
+	if _, err := schedule.Parse(c.Background.From, c.Background.To); err != nil {
+		errs = append(errs, fmt.Sprintf("background %q–%q: %v", c.Background.From, c.Background.To, err))
 	}
 	if c.Backup.Dir != "" {
 		if !filepath.IsAbs(c.Backup.Dir) {

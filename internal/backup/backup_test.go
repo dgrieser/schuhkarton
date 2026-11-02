@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/dgrieser/schuhkarton/internal/schedule"
 )
 
 func TestBackupCopiesOnlyChanges(t *testing.T) {
@@ -197,5 +199,54 @@ func TestBackupRepairsQuicklyTouchedCopy(t *testing.T) {
 	r.run(context.Background())
 	if b, _ := os.ReadFile(cp); string(b) != "aaaa" {
 		t.Fatalf("quickly touched copy kept: %q", b)
+	}
+}
+
+// Outside the time window a regular backup waits for it; one started by
+// hand runs at once.
+func TestLoopWaitsForWindow(t *testing.T) {
+	src, dir := t.TempDir(), t.TempDir()
+	os.WriteFile(filepath.Join(src, "a.jpg"), []byte("a"), 0o644)
+	now := time.Now()
+	m := now.Hour()*60 + now.Minute()
+	w := schedule.Window{From: (m + 120) % 1440, To: (m + 180) % 1440} // opens in two hours
+	r := New(Options{Dir: dir, Sources: []Source{{"Bilder", src}}, Originals: true, Every: 24 * time.Hour, Window: w})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go r.Loop(ctx)
+	var next time.Time
+	for range 100 {
+		if next = r.Status().Next; !next.IsZero() {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !next.Equal(w.Next(time.Now())) {
+		t.Errorf("next run %v, window opens %v", next, w.Next(time.Now()))
+	}
+	r.Trigger()
+	for range 200 {
+		if st := r.Status(); !st.Finished.IsZero() && !st.Running {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if st := r.Status(); st.Copied != 1 {
+		t.Errorf("by hand: %+v", st)
+	}
+}
+
+// A run cut short by its context is not complete, also when only the
+// settings and cache files were left.
+func TestCancelledRunIncomplete(t *testing.T) {
+	dir, cfgDir := t.TempDir(), t.TempDir()
+	cfg := filepath.Join(cfgDir, "config.yaml")
+	os.WriteFile(cfg, []byte("x: 1"), 0o600)
+	r := New(Options{Dir: dir, ConfigPath: cfg, Config: true})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	r.run(ctx)
+	if st := r.Status(); st.Complete || st.Copied != 0 {
+		t.Errorf("cancelled run: %+v", st)
 	}
 }

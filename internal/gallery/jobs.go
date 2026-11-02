@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/dgrieser/schuhkarton/internal/schedule"
 )
 
 // Start runs the background generation of thumbnails, previews and faces
@@ -20,7 +22,18 @@ func (l *Library) Start(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-l.media.wake:
-				l.generate(ctx)
+				if !l.opt.Window.Open(time.Now()) {
+					l.mediaTodo() // the counts for the UI meanwhile
+				}
+				wctx, cancel, ok := l.opt.Window.Wait(ctx)
+				if !ok {
+					return
+				}
+				l.generate(wctx)
+				if schedule.Closed(ctx, wctx) {
+					l.media.kick() // goes on in the next window
+				}
+				cancel()
 			}
 		}
 	}()
@@ -60,8 +73,96 @@ func (m *mediaGen) kick() {
 
 // generate creates whatever is missing, newest items first.
 func (l *Library) generate(ctx context.Context) {
+	thumbs, previews, faces := l.mediaTodo()
+	if len(thumbs)+len(previews)+len(faces) == 0 {
+		l.kickDupes()
+		return
+	}
+	l.logf("background: %d thumbnails, %d video previews, %d face scans", len(thumbs), len(previews), len(faces))
+
+	var wg sync.WaitGroup
+	run := func(list []*Item, workers int, fn func(*Item)) {
+		ch := make(chan *Item)
+		for range workers {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for it := range ch {
+					fn(it)
+				}
+			}()
+		}
+		go func() {
+			defer close(ch)
+			for _, it := range list {
+				select {
+				case ch <- it:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}()
+	}
+	w := l.opt.Workers
+	run(thumbs, w, func(it *Item) {
+		if _, err := l.ensureBG(ctx, it, VarSmall); err != nil {
+			if ctx.Err() != nil {
+				return // the window closed or Schuhkarton stops
+			}
+			l.logf("thumbnail %s: %v", it.Rel, err)
+			l.cnt.thumbFail.Add(1)
+			return
+		}
+		if l.opt.Previews && it.Kind == Photo {
+			l.ensureBG(ctx, it, VarLarge)
+		}
+		if it.Kind == Photo {
+			l.cnt.thumbs.Add(1)
+		} else {
+			l.cnt.posters.Add(1)
+		}
+	})
+	run(previews, max(1, w/3), func(it *Item) {
+		if _, err := l.ensureBG(ctx, it, VarPreview); err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			l.logf("preview %s: %v", it.Rel, err)
+			l.cnt.previewFail.Add(1)
+			return
+		}
+		l.cnt.previews.Add(1)
+	})
+	var faceMu sync.Mutex
+	lastCluster := time.Now()
+	run(faces, l.opt.Faces.Workers, func(it *Item) {
+		if !l.scanFaces(ctx, it) {
+			return // the window closed or Schuhkarton stops
+		}
+		l.cnt.faces.Add(1)
+		faceMu.Lock()
+		if time.Since(lastCluster) > 45*time.Second {
+			lastCluster = time.Now()
+			faceMu.Unlock()
+			l.recluster()
+			l.bump()
+			return
+		}
+		faceMu.Unlock()
+	})
+	wg.Wait()
+	if len(faces) > 0 {
+		l.recluster()
+		l.bump()
+	}
+	l.saveIndex()
+	l.kickDupes() // the new thumbnails can be compared now
+	l.logf("background: done")
+}
+
+// mediaTodo returns what is missing and stores the counts for the UI.
+func (l *Library) mediaTodo() (thumbs, previews, faces []*Item) {
 	items := l.Items()
-	var thumbs, previews, faces []*Item
 	var nThumb, nPoster, nPrev, nFace int64
 	fs := l.FaceStatus()
 	faceOK, recog := fs.Detection, fs.Recognition
@@ -96,92 +197,25 @@ func (l *Library) generate(ctx context.Context) {
 	l.cnt.previews.Store(nPrev)
 	l.cnt.faces.Store(nFace)
 	l.cnt.faceTodo.Store(nFace + int64(len(faces))) // total, shown as faces/faceTodo
-	if len(thumbs)+len(previews)+len(faces) == 0 {
-		l.kickDupes()
-		return
-	}
-	l.logf("background: %d thumbnails, %d video previews, %d face scans", len(thumbs), len(previews), len(faces))
-
-	var wg sync.WaitGroup
-	run := func(list []*Item, workers int, fn func(*Item)) {
-		ch := make(chan *Item)
-		for range workers {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				for it := range ch {
-					fn(it)
-				}
-			}()
-		}
-		go func() {
-			defer close(ch)
-			for _, it := range list {
-				select {
-				case ch <- it:
-				case <-ctx.Done():
-					return
-				}
-			}
-		}()
-	}
-	w := l.opt.Workers
-	run(thumbs, w, func(it *Item) {
-		if _, err := l.Ensure(ctx, it, VarSmall); err != nil {
-			l.logf("thumbnail %s: %v", it.Rel, err)
-			l.cnt.thumbFail.Add(1)
-			return
-		}
-		if l.opt.Previews && it.Kind == Photo {
-			l.Ensure(ctx, it, VarLarge)
-		}
-		if it.Kind == Photo {
-			l.cnt.thumbs.Add(1)
-		} else {
-			l.cnt.posters.Add(1)
-		}
-	})
-	run(previews, max(1, w/3), func(it *Item) {
-		if _, err := l.Ensure(ctx, it, VarPreview); err != nil {
-			l.logf("preview %s: %v", it.Rel, err)
-			l.cnt.previewFail.Add(1)
-			return
-		}
-		l.cnt.previews.Add(1)
-	})
-	var faceMu sync.Mutex
-	lastCluster := time.Now()
-	run(faces, l.opt.Faces.Workers, func(it *Item) {
-		l.scanFaces(it)
-		l.cnt.faces.Add(1)
-		faceMu.Lock()
-		if time.Since(lastCluster) > 45*time.Second {
-			lastCluster = time.Now()
-			faceMu.Unlock()
-			l.recluster()
-			l.bump()
-			return
-		}
-		faceMu.Unlock()
-	})
-	wg.Wait()
-	if len(faces) > 0 {
-		l.recluster()
-		l.bump()
-	}
-	l.saveIndex()
-	l.kickDupes() // the new thumbnails can be compared now
-	l.logf("background: done")
+	return thumbs, previews, faces
 }
 
-func (l *Library) scanFaces(it *Item) {
+// scanFaces finds the faces of one photo; false when ctx ended first (the
+// photo is scanned again later).
+func (l *Library) scanFaces(ctx context.Context, it *Item) bool {
+	if ctx.Err() != nil {
+		return false
+	}
 	prefix := filepath.Join(l.opt.CacheDir, "faces", it.key[:2], it.key)
 	os.MkdirAll(filepath.Dir(prefix), 0o755)
-	faces, err := l.faces.detect(l, it, prefix)
+	faces, err := l.faces.detect(ctx, l, it, prefix)
 	if err != nil {
+		if ctx.Err() != nil {
+			return false
+		}
 		l.logf("faces %s: %v", it.Rel, err)
 		if isTransient(err) {
-			return // container unreachable: try again on the next pass
+			return true // container unreachable: try again on the next pass
 		}
 		faces = nil
 	}
@@ -190,6 +224,7 @@ func (l *Library) scanFaces(it *Item) {
 	l.mu.Unlock()
 	l.applyMetaFaces(it) // names from the file's metadata (a new cache)
 	l.markDirty()
+	return true
 }
 
 // ItemFaces returns a copy of the faces of an item.

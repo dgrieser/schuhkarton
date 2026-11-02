@@ -21,6 +21,8 @@ import (
 	"time"
 
 	"github.com/dgrieser/schuhkarton/internal/helper"
+
+	"github.com/dgrieser/schuhkarton/internal/schedule"
 )
 
 // Kind distinguishes photos from videos.
@@ -72,6 +74,9 @@ type Options struct {
 	OCR    OCROptions    // text recognition; empty Model or Scope: off
 	Speech SpeechOptions // speech recognition in videos; empty Model: off
 	Dupes  DupeOptions   // the search for duplicates
+	// Window: the background work (thumbnails, faces, remote jobs, metadata,
+	// duplicates, import) runs only inside it; zero: any time.
+	Window schedule.Window
 	// Rules file the files into folders by their metadata (none: nothing moves).
 	Rules RuleSet
 	// Import is a folder that empties itself into the library.
@@ -156,14 +161,18 @@ func (it *Item) Key() string { return it.key }
 
 // Status reports background progress for the UI.
 type Status struct {
-	Phase    string `json:"phase"`
-	Photos   int    `json:"photos"`
-	Videos   int    `json:"videos"`
-	Meta     int64  `json:"meta"`
-	MetaTodo int64  `json:"metaTodo"`
-	Thumbs   int64  `json:"thumbs"`
-	Posters  int64  `json:"posters"`
-	Previews int64  `json:"previews"`
+	Phase string `json:"phase"`
+	// Window is the background time window ("23:00–05:00", empty: any
+	// time); while it is closed, WindowNext is the unix time it opens.
+	Window     string `json:"window,omitempty"`
+	WindowNext int64  `json:"windowNext,omitempty"`
+	Photos     int    `json:"photos"`
+	Videos     int    `json:"videos"`
+	Meta       int64  `json:"meta"`
+	MetaTodo   int64  `json:"metaTodo"`
+	Thumbs     int64  `json:"thumbs"`
+	Posters    int64  `json:"posters"`
+	Previews   int64  `json:"previews"`
 	// ThumbFail and PreviewFail count files whose thumbnail or video preview
 	// could not be made (broken files); the UI counts them as done.
 	ThumbFail   int64  `json:"thumbFail"`
@@ -526,6 +535,12 @@ func (l *Library) Status() Status {
 		Scanned:     l.cnt.scanned.Load(),
 		Errors:      l.cnt.errors.Load(),
 		Version:     l.Version(),
+	}
+	if w := l.opt.Window; !w.Any() {
+		s.Window = w.String()
+		if now := time.Now(); !w.Open(now) {
+			s.WindowNext = w.Next(now).Unix()
+		}
 	}
 	s.DupeMode = "on"
 	if l.opt.Dupes.Off {

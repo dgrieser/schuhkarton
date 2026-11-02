@@ -100,8 +100,9 @@ The setup page walks through:
 2. **Storage:** where the cache lives. If an **existing cache** turns up (for
    example from an older version or a backup), you can use it as it is or
    copy it in. Its thumbnails, faces, names and favorites are then there at
-   once. Also choose preview options and the rescan interval; this step shows
-   whether exiftool and ffmpeg were found.
+   once. Also choose preview options, the rescan interval and the time
+   window for background work; this step shows whether exiftool and ffmpeg
+   were found.
 3. **Faces:** off (the default), or the face recognition container, with the
    `docker run` command to copy, a token and a connection test.
 4. **Backup:** the folder, how often, and what to back up.
@@ -616,6 +617,9 @@ backup:
   originals: true
   cache: true
   config: true
+background:                   # time window for background work; both empty: any time
+  from: ""                    # e.g. "23:00"
+  to: ""                      # e.g. "05:00" (a window may pass midnight)
 worker:                       # for "schuhkarton worker"
   listen: 0.0.0.0:8089
   token: ""
@@ -624,6 +628,17 @@ worker:                       # for "schuhkarton worker"
 
 Thumbnail sizes apply to new thumbnails; to rebuild all of them, delete
 `thumbs/` in the cache folder.
+
+**Background work at night:** `background.from` and `background.to` (on the
+settings page under *Storage*) keep the work Schuhkarton does on its own
+inside a daily time window, e.g. 23:00 to 05:00: thumbnails and previews,
+faces, descriptions, text and speech recognition, writing metadata into
+files, duplicates, the import folder, regular rescans and backups. Work that
+is still running when the window closes stops and goes on in the next one;
+a scan or an import that has begun finishes. The status shows when the work
+starts again. The scan at start, what somebody opens (a thumbnail, a video)
+and what an admin starts by hand (*Rescan*, *Back up now*) run at once.
+Empty fields (the default) mean any time.
 
 ## Backup and restore
 
