@@ -927,14 +927,14 @@ func (l *Library) rankCopies(items []*Item) ([]*Item, []string) {
 		px[it] = int64(w) * int64(h)
 		maxPx = max(maxPx, px[it])
 		maxSize = max(maxSize, it.Size)
-		maxFmt = max(maxFmt, formatRank[strings.ToLower(path.Ext(it.Rel))])
+		maxFmt = max(maxFmt, formatRank[it.Ext()])
 	}
 	for _, it := range items {
 		r := &rankInfo{}
 		if p := px[it]; p > 0 {
 			r.score += 40 * math.Log2(float64(p)+1) / math.Log2(float64(maxPx)+2)
 		}
-		fr := formatRank[strings.ToLower(path.Ext(it.Rel))]
+		fr := formatRank[it.Ext()]
 		r.score += float64(fr) * 3
 		if maxSize > 0 {
 			r.score += 4 * float64(it.Size) / float64(maxSize)
@@ -992,7 +992,7 @@ func (l *Library) rankCopies(items []*Item) ([]*Item, []string) {
 	if larger && len(ranked) > 1 {
 		why = append(why, "größte Auflösung")
 	}
-	if fr := formatRank[strings.ToLower(path.Ext(best.Rel))]; fr == maxFmt && fr >= 3 {
+	if fr := formatRank[best.Ext()]; fr == maxFmt && fr >= 3 {
 		why = append(why, "Originalformat")
 	}
 	if best.TakenSrc == "exif" || best.TakenSrc == "edit" {

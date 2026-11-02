@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -274,11 +275,19 @@ func (l *Library) Scan(ctx context.Context) error {
 			return err
 		}
 	}
+	var refresh []string
+	formatsDone := l.formatsKnown.Load()
+	if !formatsDone {
+		refresh, formatsDone = l.checkFormats(ctx, items)
+	}
 	for _, it := range items {
 		l.finishItem(it)
 	}
 	pairLive(items)
 	l.setItems(items)
+	if formatsDone && ctx.Err() == nil && len(offline) == 0 { // files and folders not read are checked next time
+		l.formatsKnown.Store(true)
+	}
 	l.saveIndex()
 	l.recluster()
 	l.phase.Store("bereit")
@@ -288,8 +297,76 @@ func (l *Library) Scan(ctx context.Context) error {
 	l.ocrJob.kick()
 	l.speechJob.kick()
 	l.kickXMP()
+	if len(refresh) > 0 {
+		l.logf("scan: %d files decoded by their content now, described again", len(refresh))
+		l.Redescribe(refresh)
+		l.Rerecognize(refresh)
+	}
 	l.PurgeTrash()
 	return nil
+}
+
+// checkFormats looks once at the start of every photo an older index knew,
+// for those whose name does not fit their content (format.go). It returns
+// the ids of those shown turned wrong before: their thumbnails and faces
+// are made again, their descriptions and texts too (by the caller). all is
+// false when a file could not be read: then the check runs again next scan.
+func (l *Library) checkFormats(ctx context.Context, items []*Item) (refresh []string, all bool) {
+	var todo []*Item
+	for _, it := range items {
+		if it.Kind == Photo && it.Format == "" {
+			todo = append(todo, it)
+		}
+	}
+	l.phase.Store("Dateiformate werden geprüft")
+	found := make([]string, len(todo))
+	read := make([]bool, len(todo))
+	var wg sync.WaitGroup
+	next := make(chan int)
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range next {
+				found[i], read[i] = checkFormat(l.Path(todo[i]))
+			}
+		}()
+	}
+	for i := range todo {
+		if ctx.Err() != nil {
+			break
+		}
+		next <- i
+	}
+	close(next)
+	wg.Wait()
+	all = ctx.Err() == nil
+	for i, it := range todo {
+		all = all && read[i]
+		if found[i] == "" {
+			continue
+		}
+		l.logf("scan: %s is %s inside", it.Rel, found[i])
+		l.mu.Lock()
+		before := l.displayOrient(it)
+		_, sideBefore := xmpTarget(l.Path(it), it.Ext())
+		it.Format = found[i]
+		turned := l.displayOrient(it) != before
+		if _, side := xmpTarget(l.Path(it), it.Ext()); side != sideBefore {
+			it.MetaSig = "" // the metadata goes into the file now (or beside it): written again
+		}
+		faces := len(it.Faces)
+		if turned {
+			it.Faces, it.FacesDone = nil, false
+		}
+		l.mu.Unlock()
+		if turned {
+			l.removeDerivatives(it.key, faces)
+			l.people.renameLabelItems(map[string]string{it.ID: ""})
+			refresh = append(refresh, it.ID)
+		}
+	}
+	return refresh, all
 }
 
 // Scanning reports whether a scan is running.
@@ -338,16 +415,25 @@ func (l *Library) readMeta(ctx context.Context, todo []*Item) error {
 		}
 		// what Schuhkarton wrote into RAW files and the like lives beside them
 		var sides []string
+		sideOf := map[int]string{} // chunk index -> its sidecar
+		moved := map[int]bool{}    // a sidecar from the time the name decided, the file takes it now
 		for j, it := range chunk {
 			it.MetaSig = ""
+			it.Format = detectFormat(paths[j])
 			if m := res[paths[j]]; m != nil {
 				applyMeta(it, m)
-				if _, side := xmpTarget(paths[j]); !side {
+				if _, side := xmpTarget(paths[j], it.Ext()); !side {
 					l.adoptXMP(it, m)
 				}
 			}
-			if p, side := xmpTarget(paths[j]); side && exists(p) {
+			p, side := xmpTarget(paths[j], it.Ext())
+			if !side && it.Format != "" && it.MetaSig == "" {
+				p, side = xmpTarget(paths[j], strings.ToLower(path.Ext(paths[j])))
+				moved[j] = side
+			}
+			if side && exists(p) {
 				sides = append(sides, p)
+				sideOf[j] = p
 			}
 			it.MetaDone = true
 		}
@@ -356,10 +442,11 @@ func (l *Library) readMeta(ctx context.Context, todo []*Item) error {
 			if err != nil {
 				l.logf("exiftool: %v", err)
 			}
-			for j, it := range chunk {
-				if p, side := xmpTarget(paths[j]); side {
-					if m := sres[p]; m != nil {
-						l.adoptXMP(it, m)
+			for j, p := range sideOf {
+				if m := sres[p]; m != nil {
+					l.adoptXMP(chunk[j], m)
+					if moved[j] {
+						chunk[j].MetaSig = "" // written into the file next
 					}
 				}
 			}

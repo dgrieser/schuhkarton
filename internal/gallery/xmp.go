@@ -54,6 +54,7 @@ const exiftoolConfig = `# Written by Schuhkarton: the XMP-schuhkarton namespace.
     AIModel     => { Name => 'SkAIModel' },
     AIDate      => { Name => 'SkAIDate' },
     AIPeople    => { Name => 'SkAIPeople' },
+    AISource    => { Name => 'SkAISource' },
     AITagsDe    => { Name => 'SkAITagsDe', List => 'Bag' },
     AITagsEn    => { Name => 'SkAITagsEn', List => 'Bag' },
     Text        => { Name => 'SkText' },
@@ -96,9 +97,10 @@ var xmpInPlace = map[string]bool{
 	".mov": true, ".mp4": true, ".m4v": true, ".3gp": true, ".3g2": true,
 }
 
-// xmpTarget returns the file the metadata goes into.
-func xmpTarget(path string) (target string, sidecar bool) {
-	if xmpInPlace[strings.ToLower(filepath.Ext(path))] {
+// xmpTarget returns the file the metadata goes into; ext is the format of
+// the file at path (Item.Ext).
+func xmpTarget(path, ext string) (target string, sidecar bool) {
+	if xmpInPlace[ext] {
 		return path, false
 	}
 	return path + ".xmp", true
@@ -120,6 +122,7 @@ type xmpPlan struct {
 	AIModel           string   `json:",omitempty"`
 	AIAt              int64    `json:",omitempty"`
 	AIPeople          int      `json:",omitempty"`
+	AISource          string   `json:",omitempty"` // what the model saw of a video (AIInfo.From)
 	Tags              []string `json:",omitempty"` // keywords for dc:Subject
 	OCR               bool     `json:",omitempty"` // text recognition ran (Text may be empty)
 	Text, TextModel   string   `json:",omitempty"`
@@ -155,6 +158,7 @@ func (l *Library) xmpPlanFor(it *Item) xmpPlan {
 		p.AltDe, p.AltEn = a.De, a.En
 		p.TagsDe, p.TagsEn = a.TagsDe, a.TagsEn
 		p.AIModel, p.AIAt, p.AIPeople = cmp.Or(a.Model, "?"), a.At, a.People
+		p.AISource = a.From
 		p.Alt, p.Tags = a.De, a.TagsDe
 		if l.firstLang() == "en" {
 			p.Alt, p.Tags = a.En, a.TagsEn
@@ -274,7 +278,7 @@ func (l *Library) adoptXMP(it *Item, m map[string]any) {
 	if model := str(m, "SkAIModel"); model != "" && l.AIOf(it) == nil {
 		l.setAI(it, &AIInfo{De: str(m, "AltTextAccessibility-de"), En: str(m, "AltTextAccessibility-en"),
 			TagsDe: list(m, "SkAITagsDe"), TagsEn: list(m, "SkAITagsEn"), People: int(num(m, "SkAIPeople")),
-			Model: model, At: parseXMPDate(str(m, "SkAIDate"))})
+			Model: model, At: parseXMPDate(str(m, "SkAIDate")), From: str(m, "SkAISource")})
 	}
 	if model := str(m, "SkTextModel"); model != "" && l.ocrOf(it) == nil {
 		l.setOCR(it, &OCRInfo{Text: str(m, "SkText"), Model: model, At: parseXMPDate(str(m, "SkTextDate"))})
@@ -509,7 +513,7 @@ func (l *Library) writeXMPOne(ctx context.Context, it *Item) error {
 	j := &l.xmpJob
 	p := l.xmpPlanFor(it)
 	sig := p.sig()
-	target, side := xmpTarget(l.Path(it))
+	target, side := xmpTarget(l.Path(it), it.Ext())
 	et, err := l.xmpTool()
 	if err != nil {
 		return &aiError{msg: "exiftool: " + err.Error(), fatal: true}
@@ -531,7 +535,11 @@ func (l *Library) writeXMPOne(ctx context.Context, it *Item) error {
 			return nil
 		}
 	}
-	if err := et.write(target, args); err != nil {
+	write := func(p string) error { return et.write(p, args) }
+	if !side {
+		write = func(p string) error { return l.withRealName(it, p, func(p string) error { return et.write(p, args) }) }
+	}
+	if err := write(target); err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -588,6 +596,7 @@ func xmpArgs(p *xmpPlan, sig string, cur map[string]any, video bool) []string {
 			people = strconv.Itoa(p.AIPeople)
 		}
 		set("XMP-schuhkarton:SkAIPeople", people)
+		set("XMP-schuhkarton:SkAISource", p.AISource)
 	}
 	// keywords: the others' stay, Schuhkarton's are replaced
 	if subj, ours, ok := mergeList(list(cur, "Subject"), list(cur, "SkTags"), p.Tags); ok {

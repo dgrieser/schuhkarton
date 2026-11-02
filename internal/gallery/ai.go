@@ -49,6 +49,12 @@ type AIInfo struct {
 	Model  string   `json:"model,omitempty"`
 	Tokens int      `json:"tokens,omitempty"`
 	At     int64    `json:"at"`
+	// From tells what the model saw of a video (video.go): "video" (a small
+	// clip), "frames" (pictures from it), "frame" (one picture, the clip
+	// failed); "" for photos and videos described before.
+	From string `json:"from,omitempty"`
+	// Tried is when the clip failed (From "frame"); tried again after a week.
+	Tried int64 `json:"tried,omitempty"`
 	// Err is the last failure for this file; it is tried again after a week.
 	Err string `json:"err,omitempty"`
 }
@@ -182,6 +188,9 @@ func (l *Library) aiTask() jobTask {
 			a := l.ai.items[l.favKey(it)]
 			l.ai.mu.Unlock()
 			switch {
+			case a.ok() && it.Kind == Video && l.media.ffmpeg != "" &&
+				(a.From == "" || a.From == "frame" && now.Sub(time.Unix(a.Tried, 0)) >= aiRetryFailed):
+				return false, false // described from one frame: now from the video
 			case a.ok():
 				return true, false
 			case a != nil && a.Err != "" && now.Sub(time.Unix(a.At, 0)) < aiRetryFailed:
@@ -209,6 +218,14 @@ func (l *Library) describeAll(ctx context.Context) error { return l.jobPass(ctx,
 // job has to stop (service problems); problems with this file are recorded.
 func (l *Library) describeOne(ctx context.Context, it *Item) error {
 	j := &l.aiJob
+	if it.Kind == Video && l.media.ffmpeg != "" {
+		if l.speechPending(it) {
+			return nil // waits for the spoken words; the speech job kicks again
+		}
+		if done, err := l.describeVideo(ctx, it); done || err != nil {
+			return err
+		}
+	}
 	img, err := l.jobImage(ctx, it, l.opt.AI.ImageSize, false)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -228,6 +245,9 @@ func (l *Library) describeOne(ctx context.Context, it *Item) error {
 		l.setAI(it, &AIInfo{Err: err.Error(), At: time.Now().Unix(), Model: j.client.opt.Model})
 		j.handled(true, 0)
 		return nil
+	}
+	if it.Kind == Video && l.media.ffmpeg != "" {
+		info.From, info.Tried = "frame", time.Now().Unix() // the clip could not be made
 	}
 	l.setAI(it, info)
 	l.search.updateAI(it.ID, info)
@@ -249,6 +269,7 @@ type aiClient struct {
 	opt      AIOptions
 	http     *http.Client
 	noKwargs atomic.Bool // the server refuses chat_template_kwargs
+	noVideo  atomic.Bool // the service takes no videos: frames instead (video.go)
 }
 
 func newAIClient(o AIOptions) *aiClient {
@@ -382,9 +403,11 @@ func (c *aiClient) Models(ctx context.Context) ([]string, error) {
 	return out, nil
 }
 
-const aiSystem = "You write search metadata for photos in a private family photo library. Reply with one JSON object only, without markdown."
+const aiSystem = "You write search metadata for photos and videos in a private family photo library. Reply with one JSON object only, without markdown."
 
-func (c *aiClient) prompt() string {
+// prompt asks for the description of a photo; subject "video" asks for a
+// video, extra adds rules about what the model gets.
+func (c *aiClient) prompt(subject string, extra ...string) string {
 	de, en := false, false
 	for _, l := range c.opt.Languages {
 		de = de || l == "de"
@@ -393,11 +416,11 @@ func (c *aiClient) prompt() string {
 	var keys, rules []string
 	if de {
 		keys = append(keys, `"de": "…"`)
-		rules = append(rules, "- de: what the photo shows, 1–2 sentences in German.")
+		rules = append(rules, "- de: what the "+subject+" shows, 1–2 sentences in German.")
 	}
 	if en {
 		keys = append(keys, `"en": "…"`)
-		rules = append(rules, "- en: what the photo shows, 1–2 sentences in English.")
+		rules = append(rules, "- en: what the "+subject+" shows, 1–2 sentences in English.")
 	}
 	if de {
 		keys = append(keys, `"tags_de": ["…"]`)
@@ -414,29 +437,42 @@ func (c *aiClient) prompt() string {
 		tagKeys = append(tagKeys, "tags_en (English)")
 	}
 	langs := strings.Join(tagKeys, " and ")
-	return "Describe this photo for a search index.\nReturn JSON: {" + strings.Join(keys, ", ") + "}\n" +
+	people := "- people: how many people are visible (0 if none).\n"
+	names := "- Never name or identify people"
+	if subject == "video" {
+		people = "- people: the most people visible at the same time (0 if none).\n"
+		names = "- Never identify people by their looks (names only from spoken words)"
+	}
+	return "Describe this " + subject + " for a search index.\n" + strings.Join(extra, "") +
+		"Return JSON: {" + strings.Join(keys, ", ") + "}\n" +
 		strings.Join(rules, "\n") + "\n" +
 		"- " + langs + ": 8–20 short lowercase search words each, mostly nouns: visible objects, the kind of place or scene " +
 		"(beach, kitchen, playground, forest), activity or occasion (birthday, hiking, swimming), season, weather, time of day, " +
 		"notable colours, animals, plants, vehicles, food, and the kind of picture (screenshot, document, receipt, drawing, map, " +
 		"text) when it is not an ordinary photo.\n" +
-		"- people: how many people are visible (0 if none).\n" +
-		"- Never name or identify people and never guess the age of adults or anybody's ethnicity; say child, baby, woman, man, group.\n" +
+		people +
+		names + " and never guess the age of adults or anybody's ethnicity; say child, baby, woman, man, group.\n" +
 		"- If there is readable text, say what kind of text it is instead of copying it."
 }
 
 // describe sends one JPEG and parses the answer.
 func (c *aiClient) describe(ctx context.Context, img []byte) (*AIInfo, error) {
+	return c.ask(ctx, c.prompt("photo"), imagePart(img))
+}
+
+func imagePart(jpg []byte) any {
+	return map[string]any{"type": "image_url", "image_url": map[string]any{"url": "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(jpg)}}
+}
+
+// ask sends the prompt with pictures or a video and parses the answer.
+func (c *aiClient) ask(ctx context.Context, prompt string, media ...any) (*AIInfo, error) {
 	req := map[string]any{
 		"model":       c.opt.Model,
 		"temperature": 0.2,
 		"max_tokens":  800,
 		"messages": []any{
 			map[string]any{"role": "system", "content": aiSystem},
-			map[string]any{"role": "user", "content": []any{
-				map[string]any{"type": "text", "text": c.prompt()},
-				map[string]any{"type": "image_url", "image_url": map[string]any{"url": "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(img)}},
-			}},
+			map[string]any{"role": "user", "content": append([]any{map[string]any{"type": "text", "text": prompt}}, media...)},
 		},
 	}
 	if c.opt.Thinking {

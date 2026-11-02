@@ -401,8 +401,14 @@ func (l *Library) writeTags(it *Item, args []string) error {
 		full = append(full, "-api", "QuickTimeUTC=1")
 	}
 	full = append(full, args...)
-	full = append(full, l.Path(it))
-	out, err := exifToolCmd(l.opt.ExifTool, full...).CombinedOutput()
+	return l.withRealName(it, l.Path(it), func(p string) error {
+		return exifToolWrite(l.opt.ExifTool, append(full, p))
+	})
+}
+
+// exifToolWrite runs exiftool once and returns its error message.
+func exifToolWrite(bin string, full []string) error {
+	out, err := exifToolCmd(bin, full...).CombinedOutput()
 	if strings.Contains(string(out), "1 image files updated") || strings.Contains(string(out), "1 image files unchanged") {
 		return nil
 	}

@@ -17,7 +17,6 @@ import (
 	"net/http"
 	"os"
 	"path"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -544,7 +543,7 @@ func (s *Server) face(w http.ResponseWriter, r *http.Request) {
 }
 
 func contentType(it *gallery.Item) string {
-	ext := strings.ToLower(filepath.Ext(it.Rel))
+	ext := it.Ext() // by the content when the name says another format
 	switch ext {
 	case ".heic", ".heif":
 		return "image/heic"

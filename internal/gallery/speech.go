@@ -135,6 +135,9 @@ func (l *Library) setSpeech(it *Item, s *SpeechInfo) {
 	l.speech.mu.Unlock()
 	l.speech.ver.Add(1)
 	l.markSpeechDirty()
+	if it.Kind == Video {
+		l.kickAISoon() // its description may wait for the words
+	}
 }
 
 // renameSpeech moves texts to new keys ("" drops them).
@@ -160,16 +163,32 @@ func (l *Library) renameSpeech(pairs map[string]string) {
 // Retranscribe forgets what was heard in ids, so it is recognized again.
 func (l *Library) Retranscribe(ids []string) int {
 	n := 0
+	var videos []*Item
 	l.speech.mu.Lock()
 	for _, id := range ids {
 		if it := l.Get(id); it != nil && l.SpeechApplies(it) {
 			delete(l.speech.items, l.favKey(it))
 			n++
+			if it.Kind == Video {
+				videos = append(videos, it)
+			}
 		}
 	}
 	l.speech.mu.Unlock()
 	l.speech.ver.Add(1)
 	l.markSpeechDirty()
+	// a video's description used the old words: made again with the new
+	// ones (video.go), the old one stays until then
+	for _, it := range videos {
+		l.ai.mu.Lock()
+		if a := l.ai.items[l.favKey(it)]; a.ok() && a.From != "" {
+			cp := *a
+			cp.From = ""
+			l.ai.items[l.favKey(it)] = &cp
+			l.markAIDirty()
+		}
+		l.ai.mu.Unlock()
+	}
 	l.speechJob.kick()
 	l.kickXMP() // the old result leaves the files too
 	return n

@@ -72,8 +72,8 @@ func FindFFmpeg(hint string) string {
 
 // needsOrient: HEIF and AVIF carry their rotation in the container, which
 // the decoder applies; EXIF orientation must not be applied again.
-func needsOrient(path string) bool {
-	switch strings.ToLower(filepath.Ext(path)) {
+func needsOrient(ext string) bool {
+	switch ext {
 	case ".heic", ".heif", ".avif":
 		return false
 	}
@@ -154,7 +154,7 @@ func (l *Library) Ensure(ctx context.Context, it *Item, variant string) (string,
 
 func (l *Library) makePhotoThumbs(it *Item, want string) error {
 	src := l.Path(it)
-	ext := strings.ToLower(filepath.Ext(src))
+	ext := it.Ext()
 	sp, lp := l.CachePath(it, VarSmall), l.CachePath(it, VarLarge)
 	both := want == VarLarge || l.opt.Previews
 	q := l.opt.Quality
@@ -170,7 +170,7 @@ func (l *Library) makePhotoThumbs(it *Item, want string) error {
 		img, err = decodeFile(src)
 	}
 	if err == nil {
-		o := l.displayOrient(it, src)
+		o := l.displayOrient(it)
 		// scaling is rotation-invariant here, so scale first and rotate the small result
 		b := img.Bounds()
 		w, h := b.Dx(), b.Dy()
@@ -527,7 +527,7 @@ func (l *Library) PrintAsIs(it *Item) bool {
 	if it.Kind != Photo || it.Rot != 0 {
 		return false
 	}
-	switch strings.ToLower(filepath.Ext(it.Rel)) {
+	switch it.Ext() {
 	case ".jpg", ".jpeg", ".jpe", ".png", ".gif", ".webp":
 		return true
 	}
@@ -561,7 +561,7 @@ func (l *Library) decodeOriginal(it *Item, n int) (image.Image, error) {
 	src := l.Path(it)
 	var img image.Image
 	var err error
-	if rawExt[strings.ToLower(filepath.Ext(src))] {
+	if rawExt[it.Ext()] {
 		var b []byte
 		if b, err = extractPreview(l.opt.ExifTool, src); err == nil {
 			img, _, err = image.Decode(bytes.NewReader(b))
@@ -575,7 +575,7 @@ func (l *Library) decodeOriginal(it *Item, n int) (image.Image, error) {
 	if n > 0 {
 		img = resizeFit(img, n, n) // before turning: cheaper
 	}
-	return orient(img, l.displayOrient(it, src)), nil
+	return orient(img, l.displayOrient(it)), nil
 }
 
 // decodeExternal decodes a photo Go cannot read at full size with the
