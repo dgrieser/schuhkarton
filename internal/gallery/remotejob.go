@@ -6,6 +6,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/dgrieser/schuhkarton/internal/schedule"
 )
 
 // remoteJob sends files one by one to an OpenAI-compatible service in the
@@ -84,9 +86,20 @@ func (l *Library) jobLoop(ctx context.Context, j *remoteJob, t jobTask) {
 		case <-j.wake:
 		case <-timer.C:
 		}
+		if !l.opt.Window.Open(time.Now()) {
+			j.paused.Store(0) // no old pause shown: the window decides now
+			l.jobTodo(j, t)   // the counts for the UI meanwhile
+		}
+		wctx, cancel, ok := l.opt.Window.Wait(ctx)
+		if !ok {
+			t.save()
+			return
+		}
 		j.paused.Store(0) // running again: no pause, no old error
 		j.err.Store("")
-		err := l.jobPass(ctx, j, t)
+		err := l.jobPass(wctx, j, t)
+		closed := schedule.Closed(ctx, wctx)
+		cancel()
 		if ctx.Err() != nil {
 			t.save()
 			return
@@ -94,6 +107,8 @@ func (l *Library) jobLoop(ctx context.Context, j *remoteJob, t jobTask) {
 		wait := 20 * time.Minute // look again now and then (new photos come with scans, which kick)
 		var ae *aiError
 		switch {
+		case closed:
+			wait = time.Second // waits for the next window
 		case err == nil:
 			backoff = time.Minute
 		case errors.As(err, &ae) && ae.fatal:
@@ -120,27 +135,7 @@ func (l *Library) jobLoop(ctx context.Context, j *remoteJob, t jobTask) {
 // jobPass works on every eligible file that is not handled yet, newest
 // first. It returns early on errors that concern the service, not a file.
 func (l *Library) jobPass(ctx context.Context, j *remoteJob, t jobTask) error {
-	var todo []*Item
-	var total, have, failed int64
-	now := time.Now()
-	for _, it := range l.Items() {
-		if !t.eligible(it) {
-			continue
-		}
-		total++
-		switch done, bad := t.state(it, now); {
-		case done:
-			have++
-			if bad {
-				failed++
-			}
-		default:
-			todo = append(todo, it)
-		}
-	}
-	j.todo.Store(total)
-	j.done.Store(have)
-	j.fail.Store(failed)
+	todo := l.jobTodo(j, t)
 	if len(todo) == 0 {
 		return nil
 	}
@@ -177,6 +172,33 @@ func (l *Library) jobPass(ctx context.Context, j *remoteJob, t jobTask) error {
 		stopErr = nil
 	}
 	return stopErr
+}
+
+// jobTodo returns the files a job has still to work on and stores the
+// counts for the UI.
+func (l *Library) jobTodo(j *remoteJob, t jobTask) []*Item {
+	var todo []*Item
+	var total, have, failed int64
+	now := time.Now()
+	for _, it := range l.Items() {
+		if !t.eligible(it) {
+			continue
+		}
+		total++
+		switch done, bad := t.state(it, now); {
+		case done:
+			have++
+			if bad {
+				failed++
+			}
+		default:
+			todo = append(todo, it)
+		}
+	}
+	j.todo.Store(total)
+	j.done.Store(have)
+	j.fail.Store(failed)
+	return todo
 }
 
 // jobRate measures how many files a job handles per hour, over the last

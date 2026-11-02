@@ -54,7 +54,7 @@
   function buildSteps() {
     STEPS = [
       { id: 'fotos', title: t('Fotos'), render: renderFolders, ok: () => C.library.folders.length > 0 && C.library.folders.every((f) => { const c = checks.get(f.path); return !c || c.exists; }) },
-      { id: 'speicher', title: t('Speicher'), render: renderStorage, ok: () => !!C.cache.dir },
+      { id: 'speicher', title: t('Speicher'), render: renderStorage, ok: () => !!C.cache.dir && !C.background?.from === !C.background?.to && (!C.background?.from || C.background.from !== C.background.to) },
       { id: 'gesichter', title: t('Gesichter'), render: renderFaces, ok: () => C.faces.mode !== 'remote' || !!C.faces.url },
       { id: 'ki', title: t('KI'), render: renderAI, ok: () => !aiUsed() || (/^https?:\/\//.test(C.ai.url || '') && (C.ai.mode !== 'on' || !!C.ai.model) && (!ocrOn() || !!C.ai.ocr_model) && (!speechOn() || !!C.ai.speech_model)) },
       { id: 'sicherung', title: t('Sicherung'), render: renderBackup, ok: () => true },
@@ -86,7 +86,7 @@
     $('#next').disabled = !ok;
     $('#hint').textContent = ok ? '' : ({ fotos: t('Mindestens einen Fotoordner hinzufügen.'), gesichter: t('Adresse des Containers angeben oder Gesichter ausschalten.'),
       zugriff: t('Adresse mit Port angeben, z.B. 0.0.0.0:8088.'), konto: t('Name und Passwort (mindestens 8 Zeichen, zweimal gleich) für das Admin-Konto angeben.'),
-      fertig: t('Erst ein Admin-Konto anlegen.') }[STEPS[step].id] || '');
+      fertig: t('Erst ein Admin-Konto anlegen.'), speicher: C.cache.dir ? t('Zeitfenster: Beginn und Ende angeben (verschieden) oder beide leer lassen.') : '' }[STEPS[step].id] || '');
   }
 
   // --- step 1: folders ----------------------------------------------------------
@@ -260,6 +260,12 @@
           </select></label>
           <label class="field"><span>${t('Gleichzeitige Jobs')}</span><input type="number" id="workers" min="1" max="64" value="${C.media.workers}" ${dis('media.workers')}></label>
         </div>
+        <h3>${t('Hintergrundarbeit')}</h3>
+        <p class="muted">${t('Vorschaubilder, Gesichter, Beschreibungen, Text- und Spracherkennung, Schreiben in Dateien, Duplikate, Import, regelmäßiges Einlesen und Sicherung laufen nur in diesem Zeitfenster, z.B. nachts von 23:00 bis 05:00. Leer: jederzeit. Was jemand anschaut oder von Hand startet, läuft sofort.')}</p>
+        <div class="row2">
+          <label class="field"><span>${t('Von')}</span><input type="time" id="bgfrom" value="${esc(C.background?.from || '')}" ${dis('background.from')}>${lockNote('background.from')}</label>
+          <label class="field"><span>${t('Bis')}</span><input type="time" id="bgto" value="${esc(C.background?.to || '')}" ${dis('background.to')}>${lockNote('background.to')}</label>
+        </div>
         <h3>${t('Werkzeuge')}</h3><ul class="tools">${tools}</ul>
         <p class="muted small">${t('Fehlt etwas: {a} und {b} über die Paketverwaltung installieren (z.B. {c}), dann neu starten.', { a: '<code>exiftool</code>', b: '<code>ffmpeg</code>', c: '<code>apt install libimage-exiftool-perl ffmpeg</code>' })}</p>
       </section>`;
@@ -291,6 +297,9 @@
     $('#trans', el).onchange = (e) => { C.media.transcode = e.target.checked; };
     $('#rescan', el).onchange = (e) => { C.library.rescan = e.target.value; };
     $('#workers', el).oninput = (e) => { C.media.workers = Math.max(1, +e.target.value || 1); };
+    C.background ??= { from: '', to: '' };
+    $('#bgfrom', el).oninput = (e) => { C.background.from = e.target.value; validate(); };
+    $('#bgto', el).oninput = (e) => { C.background.to = e.target.value; validate(); };
   }
 
   // --- step 3: faces --------------------------------------------------------------

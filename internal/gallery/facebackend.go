@@ -34,7 +34,8 @@ type FaceInfo struct {
 // faceBackend finds faces in one item and stores their crops.
 type faceBackend interface {
 	probe() FaceInfo
-	detect(l *Library, it *Item, cropPrefix string) ([]Face, error)
+	// detect stops when ctx ends (the local helper finishes the photo it has).
+	detect(ctx context.Context, l *Library, it *Item, cropPrefix string) ([]Face, error)
 }
 
 // errTransient marks failures worth retrying later (container down).
@@ -51,7 +52,7 @@ func (f *localFaces) probe() FaceInfo {
 	return FaceInfo{Mode: "local", Detection: i.Detection, Recognition: i.Recognition, Error: i.Error, Missing: i.Missing}
 }
 
-func (f *localFaces) detect(l *Library, it *Item, prefix string) ([]Face, error) {
+func (f *localFaces) detect(ctx context.Context, l *Library, it *Item, prefix string) ([]Face, error) {
 	hf, err := f.pool.Faces(l.Path(it), prefix)
 	if err != nil {
 		return nil, err
@@ -143,12 +144,12 @@ type WorkerFace struct {
 
 // detect sends a 1600 px JPEG (or the original, when Go cannot decode it)
 // and stores the returned crops next to the other face crops.
-func (f *remoteFaces) detect(l *Library, it *Item, prefix string) ([]Face, error) {
+func (f *remoteFaces) detect(ctx context.Context, l *Library, it *Item, prefix string) ([]Face, error) {
 	body, name, err := l.faceImage(it)
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequest(http.MethodPost, f.url+"/v1/faces", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, f.url+"/v1/faces", bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -159,6 +160,9 @@ func (f *remoteFaces) detect(l *Library, it *Item, prefix string) ([]Face, error
 	}
 	resp, err := f.client.Do(req)
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		var ne net.Error
 		if errors.As(err, &ne) || errors.Is(err, io.EOF) || strings.Contains(err.Error(), "connection refused") {
 			f.mu.Lock()

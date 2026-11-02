@@ -2090,11 +2090,13 @@
       // files that cannot be read (broken videos …) count as done: from the server (…Fail), or when nothing moved for 90 s
       let missing = 0, noAI = 0, noOCR = 0, first = null; // first: share done of the first running job, for the ring in the narrow sidebar
       // steady: a slow job (descriptions) that is never taken for unreadable files; note: a line below the bar
+      // outside the background window nothing moves: no bar counts as stuck
+      const waiting = !!s.windowNext;
       const bar = (label, a, b, fail = 0, { steady = false, note = '' } = {}) => {
         if (!(b > 0)) return;
         if (a + fail >= b) { missing = Math.max(missing, fail); return; }
         const st = stalled[label], now = Date.now();
-        if (!st || st.a !== a || st.b !== b) stalled[label] = { a, b, t: now };
+        if (!st || st.a !== a || st.b !== b || waiting) stalled[label] = { a, b, t: now };
         else if (!steady && !scanning && now - st.t > 90000) { missing = Math.max(missing, b - a); return; }
         busy = true;
         first ??= a / b;
@@ -2131,6 +2133,11 @@
       if (s.import && Account.can('admin')) {
         if (s.import.waiting) rows.push(`<div class="row"><span>${t('Import')}: ${pl(s.import.waiting, '{n} Datei wird noch geschrieben', '{n} Dateien werden noch geschrieben')}</span></div>`);
         if (s.import.error) rows.push(`<div class="row"><span class="bad" title="${esc(t(s.import.error))}">${t('Import')}: ${esc(t(s.import.error))}</span></div>`);
+      }
+      if (waiting && rows.length) {
+        const at = new Date(s.windowNext * 1000).toLocaleTimeString(LANG === 'en' ? 'en-GB' : 'de-DE', { hour: '2-digit', minute: '2-digit' });
+        rows.unshift(`<div class="row"><span class="faint" title="${esc(t('Zeitfenster für Hintergrundarbeit: {w}', { w: s.window }))}">${t('Hintergrundarbeit ab {t}', { t: at })}</span></div>`);
+        busy = scanning; // nothing to watch closely until then
       }
       const bk = res.backup;
       if (bk?.running) { busy = true; rows.push(`<div class="row"><span>${t('Sicherung')}: ${esc(t(bk.phase || ''))} · ${t('{n} kopiert', { n: num(bk.copied) })}</span></div>`); }

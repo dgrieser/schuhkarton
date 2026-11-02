@@ -24,6 +24,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/dgrieser/schuhkarton/internal/schedule"
 )
 
 // Source is one photo folder.
@@ -42,6 +44,9 @@ type Options struct {
 	Cache      bool
 	Config     bool
 	Every      time.Duration
+	// Window: regular backups run only inside it and stop at its end (they
+	// go on in the next one); one started by hand runs at once.
+	Window schedule.Window
 }
 
 // Status describes the current or last run.
@@ -135,10 +140,14 @@ func (r *Runner) Loop(ctx context.Context) {
 		}
 	}
 	for {
+		// a regular run waits for the window; from now on when the laptop slept past it
+		at := r.opt.Window.Next(later(next, time.Now()))
 		r.mu.Lock()
-		r.st.Next = next
+		r.st.Next = at
 		r.mu.Unlock()
-		t := time.NewTimer(time.Until(next))
+		// the wall clock decides: a long timer oversleeps a suspended laptop
+		t := time.NewTimer(min(time.Until(at), time.Minute))
+		manual := false
 		select {
 		case <-ctx.Done():
 			t.Stop()
@@ -146,11 +155,28 @@ func (r *Runner) Loop(ctx context.Context) {
 		case <-t.C:
 		case <-r.now:
 			t.Stop()
+			manual = true
 		}
-		r.run(ctx)
+		rctx, cancel := ctx, context.CancelFunc(func() {})
+		if !manual {
+			if now := time.Now(); now.Before(next) || !r.opt.Window.Open(now) {
+				continue
+			}
+			var ok bool
+			if rctx, cancel, ok = r.opt.Window.Wait(ctx); !ok { // open: at once, ends with the window
+				return
+			}
+		}
+		r.run(rctx)
+		closed := schedule.Closed(ctx, rctx)
+		cancel()
 		switch {
 		case ctx.Err() != nil:
 			return
+		case closed:
+			r.set(func(s *Status) { s.Error = "Zeitfenster zu Ende, geht im nächsten weiter" })
+			r.saveStatus()
+			next = time.Now() // waits for the next window
 		case r.opt.Every <= 0:
 			next = time.Now().Add(100 * 365 * 24 * time.Hour) // only on demand
 		case !r.Status().Complete:
@@ -210,18 +236,18 @@ func (r *Runner) backup(ctx context.Context) error {
 	if r.opt.Config && r.opt.ConfigPath != "" {
 		r.set(func(s *Status) { s.Phase = "Einstellungen" })
 		if _, err := os.Stat(r.opt.ConfigPath); err == nil {
-			r.copyIfChanged(r.opt.ConfigPath, filepath.Join(r.opt.Dir, "config", "config.yaml"))
+			r.copyIfChanged(ctx, r.opt.ConfigPath, filepath.Join(r.opt.Dir, "config", "config.yaml"))
 		}
 		// accounts (password hashes) live next to the settings
 		if users := filepath.Join(filepath.Dir(r.opt.ConfigPath), "users.json"); fileExists(users) {
-			r.copyIfChanged(users, filepath.Join(r.opt.Dir, "config", "users.json"))
+			r.copyIfChanged(ctx, users, filepath.Join(r.opt.Dir, "config", "users.json"))
 		}
 	}
 	if r.opt.Cache && r.opt.CacheDir != "" {
 		r.set(func(s *Status) { s.Phase = "Cache" })
 		for _, f := range []string{"index.gob.gz", "people.json", "favorites.json", "edits.json", "trash.json", "ai.json", "ocr.json", "speech.json", "marks.json", "notes.json", "dupes.json", "import.json", "roots.json"} {
 			if _, err := os.Stat(filepath.Join(r.opt.CacheDir, f)); err == nil {
-				r.copyIfChanged(filepath.Join(r.opt.CacheDir, f), filepath.Join(r.opt.Dir, "cache", f))
+				r.copyIfChanged(ctx, filepath.Join(r.opt.CacheDir, f), filepath.Join(r.opt.Dir, "cache", f))
 			}
 		}
 		for _, sub := range []string{"thumbs", "faces"} {
@@ -242,7 +268,7 @@ func (r *Runner) backup(ctx context.Context) error {
 			}
 		}
 	}
-	return nil
+	return ctx.Err() // a copy cut short at the end leaves the run incomplete
 }
 
 func (r *Runner) excluded(name string) bool {
@@ -280,7 +306,7 @@ func (r *Runner) mirror(ctx context.Context, src, dst string, skip func(string) 
 			return nil
 		}
 		rel, _ := filepath.Rel(src, p)
-		r.copyIfChanged(p, filepath.Join(dst, rel))
+		r.copyIfChanged(ctx, p, filepath.Join(dst, rel))
 		return nil
 	})
 }
@@ -292,7 +318,7 @@ const mtimeWindow = 2 * time.Second
 
 // copyIfChanged copies when the target is missing or differs in size or
 // modification time.
-func (r *Runner) copyIfChanged(src, dst string) {
+func (r *Runner) copyIfChanged(ctx context.Context, src, dst string) {
 	si, err := os.Stat(src)
 	if err != nil {
 		r.set(func(s *Status) { s.Failed++ })
@@ -316,7 +342,10 @@ func (r *Runner) copyIfChanged(src, dst string) {
 			return
 		}
 	}
-	if err := copyFile(src, dst, si); err != nil {
+	if err := copyFile(ctx, src, dst, si); err != nil {
+		if ctx.Err() != nil {
+			return // cut short (stopped, or the time window closed): copied next time
+		}
 		log.Printf("Sicherung %s: %v", src, err)
 		r.set(func(s *Status) { s.Failed++ })
 		return
@@ -327,7 +356,7 @@ func (r *Runner) copyIfChanged(src, dst string) {
 	r.set(func(s *Status) { s.Copied++; s.Bytes += si.Size() })
 }
 
-func copyFile(src, dst string, si os.FileInfo) error {
+func copyFile(ctx context.Context, src, dst string, si os.FileInfo) error {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
 		return err
 	}
@@ -341,7 +370,7 @@ func copyFile(src, dst string, si os.FileInfo) error {
 	if err != nil {
 		return err
 	}
-	if _, err := io.Copy(out, in); err != nil {
+	if _, err := io.Copy(out, ctxReader{ctx, in}); err != nil {
 		out.Close()
 		os.Remove(tmp)
 		return err
@@ -357,6 +386,19 @@ func copyFile(src, dst string, si os.FileInfo) error {
 	return os.Rename(tmp, dst)
 }
 
+// ctxReader stops a copy when ctx ends.
+type ctxReader struct {
+	ctx context.Context
+	r   io.Reader
+}
+
+func (c ctxReader) Read(p []byte) (int, error) {
+	if err := c.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return c.r.Read(p)
+}
+
 // Inside reports whether path is inside (or equal to) dir.
 func Inside(path, dir string) bool {
 	rel, err := filepath.Rel(dir, path)
@@ -366,4 +408,11 @@ func Inside(path, dir string) bool {
 func fileExists(p string) bool {
 	_, err := os.Stat(p)
 	return err == nil
+}
+
+func later(a, b time.Time) time.Time {
+	if a.After(b) {
+		return a
+	}
+	return b
 }

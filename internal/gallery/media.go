@@ -102,6 +102,19 @@ func exists(p string) bool {
 // Ensure makes sure a derivative exists and returns its path. Concurrent
 // requests for the same file share one generation.
 func (l *Library) Ensure(ctx context.Context, it *Item, variant string) (string, error) {
+	// what a viewer asks for is made to the end, also when the viewer leaves
+	return l.ensure(ctx, context.WithoutCancel(ctx), it, variant)
+}
+
+// ensureBG is Ensure for the background work: the making stops with ctx
+// (the time window closed).
+func (l *Library) ensureBG(ctx context.Context, it *Item, variant string) (string, error) {
+	return l.ensure(ctx, ctx, it, variant)
+}
+
+// ensure waits for the file as long as ctx lives; work is the context the
+// making runs in.
+func (l *Library) ensure(ctx, work context.Context, it *Item, variant string) (string, error) {
 	p := l.CachePath(it, variant)
 	if exists(p) {
 		return p, nil
@@ -116,6 +129,9 @@ func (l *Library) Ensure(ctx context.Context, it *Item, variant string) (string,
 			return "", ctx.Err()
 		}
 		if pc.err != nil {
+			if errors.Is(pc.err, context.Canceled) && ctx.Err() == nil {
+				return l.ensure(ctx, work, it, variant) // the background stopped making it: make it here
+			}
 			return "", pc.err
 		}
 		return p, nil
@@ -129,14 +145,16 @@ func (l *Library) Ensure(ctx context.Context, it *Item, variant string) (string,
 		return "", err
 	}
 	switch {
+	case work.Err() != nil: // the background stopped (one photo in hand is finished, it takes seconds)
+		c.err = work.Err()
 	case it.Kind == Photo && (variant == VarSmall || variant == VarLarge):
 		c.err = l.makePhotoThumbs(it, variant)
 	case it.Kind == Video && variant == VarSmall:
-		c.err = l.makePoster(it)
+		c.err = l.makePoster(work, it)
 	case it.Kind == Video && variant == VarLarge:
-		c.err = l.makePosterLarge(it)
+		c.err = l.makePosterLarge(work, it)
 	case it.Kind == Video && variant == VarPreview && l.opt.VideoPreviews:
-		c.err = l.makeVideoPreview(it)
+		c.err = l.makeVideoPreview(work, it)
 	default:
 		c.err = errors.New("unknown variant")
 	}
@@ -144,7 +162,11 @@ func (l *Library) Ensure(ctx context.Context, it *Item, variant string) (string,
 		c.err = errors.New("not generated")
 	}
 	if c.err != nil {
-		l.cnt.errors.Add(1)
+		if work.Err() != nil {
+			c.err = work.Err()
+		} else {
+			l.cnt.errors.Add(1)
+		}
 		return "", c.err
 	}
 	return p, nil
@@ -395,26 +417,33 @@ func (l *Library) posterAt(it *Item) float64 {
 	}
 }
 
-func (l *Library) runFFmpeg(args ...string) error {
+// runFFmpeg runs ffmpeg for at most ten minutes; it stops when ctx ends.
+func (l *Library) runFFmpeg(ctx context.Context, args ...string) error {
 	if l.media.ffmpeg == "" {
 		return errors.New("ffmpeg not found")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	tctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, l.media.ffmpeg, append([]string{"-v", "error", "-y", "-nostdin"}, args...)...)
+	cmd := exec.CommandContext(tctx, l.media.ffmpeg, append([]string{"-v", "error", "-y", "-nostdin"}, args...)...)
 	if out, err := cmd.CombinedOutput(); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		return fmt.Errorf("ffmpeg: %v %s", err, firstLine(out))
 	}
 	return nil
 }
 
-func (l *Library) makePoster(it *Item) error {
+func (l *Library) makePoster(ctx context.Context, it *Item) error {
 	p := l.CachePath(it, VarSmall)
-	err := l.runFFmpeg("-ss", fmt.Sprintf("%.2f", l.posterAt(it)), "-i", l.Path(it), "-frames:v", "1",
+	err := l.runFFmpeg(ctx, "-ss", fmt.Sprintf("%.2f", l.posterAt(it)), "-i", l.Path(it), "-frames:v", "1",
 		"-vf", scaleShort(l.smallShort()), "-q:v", "4", p+".tmp.jpg")
-	if err != nil {
+	if err != nil && ctx.Err() == nil {
 		// some files cannot seek: take the first frame
-		err = l.runFFmpeg("-i", l.Path(it), "-frames:v", "1", "-vf", scaleShort(l.smallShort()), "-q:v", "4", p+".tmp.jpg")
+		err = l.runFFmpeg(ctx, "-i", l.Path(it), "-frames:v", "1", "-vf", scaleShort(l.smallShort()), "-q:v", "4", p+".tmp.jpg")
 	}
 	if err != nil {
 		return err
@@ -426,9 +455,9 @@ func (l *Library) makePoster(it *Item) error {
 	return os.Rename(p+".tmp.jpg", p)
 }
 
-func (l *Library) makePosterLarge(it *Item) error {
+func (l *Library) makePosterLarge(ctx context.Context, it *Item) error {
 	p := l.CachePath(it, VarLarge)
-	if err := l.runFFmpeg("-ss", fmt.Sprintf("%.2f", l.posterAt(it)), "-i", l.Path(it), "-frames:v", "1",
+	if err := l.runFFmpeg(ctx, "-ss", fmt.Sprintf("%.2f", l.posterAt(it)), "-i", l.Path(it), "-frames:v", "1",
 		"-vf", scaleLong(l.largeLong()), "-q:v", "3", p+".tmp.jpg"); err != nil {
 		return err
 	}
@@ -437,7 +466,7 @@ func (l *Library) makePosterLarge(it *Item) error {
 
 // makeVideoPreview builds a short silent loop: the whole clip for short
 // videos, otherwise a few snippets spread over the video.
-func (l *Library) makeVideoPreview(it *Item) error {
+func (l *Library) makeVideoPreview(ctx context.Context, it *Item) error {
 	p := l.CachePath(it, VarPreview)
 	tmp := p + ".tmp.mp4"
 	vf := scaleShort(l.opt.VideoPreviewSize) + ",fps=24,setsar=1,format=yuv420p"
@@ -447,7 +476,7 @@ func (l *Library) makeVideoPreview(it *Item) error {
 	var err error
 	if it.Duration <= 0 || it.Duration <= 6 {
 		args := append([]string{"-i", src, "-t", "6", "-vf", vf}, enc...)
-		err = l.runFFmpeg(args...)
+		err = l.runFFmpeg(ctx, args...)
 	} else {
 		n, seg := 5, 1.2
 		if it.Duration < 30 {
@@ -468,11 +497,11 @@ func (l *Library) makeVideoPreview(it *Item) error {
 		}
 		fmt.Fprintf(&filter, "concat=n=%d:v=1:a=0[out]", n)
 		args = append(args, "-filter_complex", filter.String(), "-map", "[out]")
-		err = l.runFFmpeg(append(args, enc...)...)
-		if err != nil {
+		err = l.runFFmpeg(ctx, append(args, enc...)...)
+		if err != nil && ctx.Err() == nil {
 			// fall back to the beginning of the video
 			args := append([]string{"-i", src, "-t", "5", "-vf", vf}, enc...)
-			err = l.runFFmpeg(args...)
+			err = l.runFFmpeg(ctx, args...)
 		}
 	}
 	if err != nil {

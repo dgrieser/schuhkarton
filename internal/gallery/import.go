@@ -157,13 +157,16 @@ func (l *Library) importLoop(ctx context.Context) {
 	t := time.NewTicker(o.Every)
 	defer t.Stop()
 	for {
-		if err := l.importOnce(ctx); err != nil && ctx.Err() == nil {
-			l.importJob.lastErr.Store(err.Error())
-			l.logf("import: %v", err)
-		} else if err == nil {
-			l.importJob.lastErr.Store("")
+		// only inside the background window; a started import is not cut short
+		if l.opt.Window.Open(time.Now()) {
+			if err := l.importOnce(ctx); err != nil && ctx.Err() == nil {
+				l.importJob.lastErr.Store(err.Error())
+				l.logf("import: %v", err)
+			} else if err == nil {
+				l.importJob.lastErr.Store("")
+			}
+			l.saveImportStems()
 		}
-		l.saveImportStems()
 		select {
 		case <-ctx.Done():
 			return

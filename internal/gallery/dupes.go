@@ -508,7 +508,13 @@ func (l *Library) dupeLoop(ctx context.Context) {
 		case <-l.dupe.wake:
 		case <-tick.C:
 		}
-		l.findDupes(ctx)
+		wctx, cancel, ok := l.opt.Window.Wait(ctx)
+		if !ok {
+			l.saveDupes()
+			return
+		}
+		l.findDupes(wctx)
+		cancel()
 	}
 }
 
