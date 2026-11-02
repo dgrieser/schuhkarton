@@ -299,6 +299,12 @@ func decodeFile(p string) (image.Image, error) {
 		return nil, err
 	}
 	defer f.Close()
+	if heifTool() != "" && isHEIF(f) {
+		if img, err := decodeHEIFTool(p); err == nil {
+			return img, nil
+		}
+		// odd file: the built-in decoder may still manage
+	}
 	img, _, err := image.Decode(f)
 	return img, err
 }
@@ -341,15 +347,7 @@ func scale(img image.Image, s float64) image.Image {
 		return img
 	}
 	w, h := max(1, int(float64(b.Dx())*s+0.5)), max(1, int(float64(b.Dy())*s+0.5))
-	// fast pre-shrink, then a good filter for the last step
-	if b.Dx() > w*3 {
-		mid := image.NewRGBA(image.Rect(0, 0, w*2, h*2))
-		draw.ApproxBiLinear.Scale(mid, mid.Bounds(), img, b, draw.Src, nil)
-		img, b = mid, mid.Bounds()
-	}
-	dst := image.NewRGBA(image.Rect(0, 0, w, h))
-	draw.CatmullRom.Scale(dst, dst.Bounds(), img, b, draw.Src, nil)
-	return dst
+	return areaResize(img, w, h)
 }
 
 // orient applies an EXIF orientation (1..8).
