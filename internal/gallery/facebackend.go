@@ -196,9 +196,9 @@ func (f *remoteFaces) detect(l *Library, it *Item, prefix string) ([]Face, error
 // of at most 1600 px, made here when Go can decode the file.
 func (l *Library) faceImage(it *Item) ([]byte, string, error) {
 	src := l.Path(it)
-	if !rawExt[strings.ToLower(filepath.Ext(src))] {
+	if !rawExt[it.Ext()] {
 		if img, err := decodeFile(src); err == nil {
-			img = orient(resizeFit(img, 1600, 1600), l.displayOrient(it, src))
+			img = orient(resizeFit(img, 1600, 1600), l.displayOrient(it))
 			var buf bytes.Buffer
 			if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: 90}); err == nil {
 				return buf.Bytes(), "face.jpg", nil

@@ -384,6 +384,20 @@ to 30 minutes, and the sidebar says until when. Admins can have single photos
 or a selection described again. Names of people are never asked for or
 stored.
 
+**Videos** are described from what happens in them, not from one frame.
+ffmpeg makes a small silent clip for the model: H.264, at most 480 px on the
+long edge and 32 frames, two per second for short videos and spread over the
+whole length of longer ones (key frames only, which is fast). It goes to the
+service as a `video_url` together with the words spoken in the video, so a
+video waits for speech recognition when that is on. With
+`Qwen3.8-27B-NVFP4` at mittwald a video takes about 2,500–3,000 tokens and
+2–3 seconds (a photo about 1,100). Services that take no videos (the answer
+names "video") get 8 frames of the clip as pictures instead, which is
+remembered until the settings change. Without ffmpeg, or when the clip
+cannot be made, the preview frame is described (the clip is tried again
+after a week). Video descriptions made
+from one frame by older versions are made again from the clip.
+
 ### Text recognition (OCR)
 
 The same service can read the text in pictures: letters, recipes, notes,
@@ -444,7 +458,16 @@ exiftool, so other programs see it and a lost cache does not lose it:
 | AI description | `XMP-iptcCore:AltTextAccessibility` (x-default in the first AI language, `de`, `en`) |
 | AI keywords | `XMP-dc:Subject`, next to the keywords already there |
 | People | `XMP-iptcExt:PersonInImage`, and named faces as MWG regions (`XMP-mwg-rs:RegionInfo`) |
-| Recognized and spoken text, models, dates | the `XMP-schuhkarton` namespace (`https://github.com/dgrieser/schuhkarton/ns/1.0/`) |
+| Recognized and spoken text, models, dates, what the model saw of a video | the `XMP-schuhkarton` namespace (`https://github.com/dgrieser/schuhkarton/ns/1.0/`) |
+
+Files whose name does not fit their content, like a HEIC photo saved as
+`IMG_1.jpeg`, keep their name: Schuhkarton recognizes the format by the
+first bytes of the file (once for a library indexed by an older version)
+and decodes, turns, prints and serves the file by what it is. exiftool
+refuses to write such a file ("Not a valid JPEG (looks more like a MOV)"),
+so it writes a copy with the right extension in the cache, whose content
+then goes back into the file itself (name, links, owner and permissions
+stay; a failed write puts the old content back).
 
 Keywords, names and face regions from other programs stay; Schuhkarton
 only replaces what it wrote itself (remembered in `XMP-schuhkarton:Tags`,

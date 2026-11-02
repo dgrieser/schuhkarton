@@ -30,9 +30,9 @@ func composeOrient(o, deg int) int {
 // displayOrient is the orientation to apply to the decoded pixels of an
 // item: EXIF (unless the decoder already applied the container rotation)
 // plus an admin rotation.
-func (l *Library) displayOrient(it *Item, src string) int {
+func (l *Library) displayOrient(it *Item) int {
 	o := it.Orient
-	if !needsOrient(src) {
+	if !needsOrient(it.Ext()) {
 		o = 1
 	}
 	return composeOrient(o, it.Rot)
@@ -62,8 +62,8 @@ func rotateJPEGFile(src, dst string, deg int) error {
 
 // orientWritable reports whether the rotation can go into the file as an
 // EXIF orientation that every viewer honours.
-func orientWritable(rel string) bool {
-	switch strings.ToLower(path.Ext(rel)) {
+func orientWritable(ext string) bool {
+	switch ext {
 	case ".jpg", ".jpeg", ".jpe", ".tif", ".tiff":
 		return true
 	}
@@ -94,7 +94,7 @@ func (l *Library) Rotate(ids []string, deg int, by string) (EditResult, error) {
 		}
 		oldKey := it.key
 		written := false
-		if l.opt.WriteFiles && l.opt.ExifTool != "" && it.Rot == 0 && orientWritable(it.Rel) {
+		if l.opt.WriteFiles && l.opt.ExifTool != "" && it.Rot == 0 && orientWritable(it.Ext()) {
 			no := composeOrient(it.Orient, deg)
 			if err := l.writeTags(it, []string{fmt.Sprintf("-Orientation#=%d", no)}); err != nil {
 				res.warn("%s: %v", path.Base(it.Rel), err)

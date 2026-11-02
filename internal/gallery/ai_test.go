@@ -47,8 +47,30 @@ type fakeAI struct {
 	calls       atomic.Int32
 	speechCalls atomic.Int32
 	noKwarg     bool // refuse chat_template_kwargs like a strict server
+	noVideo     bool // refuse video_url like a server started without video input
 	mu          sync.Mutex
 	lastReq     map[string]any
+}
+
+// media counts the videos and pictures of the last request and returns its prompt.
+func (f *fakeAI) media() (videos, pictures int, prompt string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	msgs, _ := f.lastReq["messages"].([]any)
+	for _, m := range msgs {
+		parts, _ := m.(map[string]any)["content"].([]any)
+		for _, p := range parts {
+			switch pm := p.(map[string]any); pm["type"] {
+			case "video_url":
+				videos++
+			case "image_url":
+				pictures++
+			case "text":
+				prompt, _ = pm["text"].(string)
+			}
+		}
+	}
+	return
 }
 
 func (f *fakeAI) server(t *testing.T) *httptest.Server {
@@ -76,6 +98,11 @@ func (f *fakeAI) server(t *testing.T) *httptest.Server {
 			if _, ok := req["chat_template_kwargs"]; ok && f.noKwarg {
 				w.WriteHeader(400)
 				io.WriteString(w, `{"error":{"message":"Unrecognized request argument: chat_template_kwargs"}}`)
+				return
+			}
+			if v, _, _ := f.media(); v > 0 && f.noVideo {
+				w.WriteHeader(400)
+				io.WriteString(w, `{"error":{"message":"At most 0 video(s) may be provided in one prompt."}}`)
 				return
 			}
 			if req["model"] == "GLM-OCR" { // text recognition: plain text, in a code fence like some models do

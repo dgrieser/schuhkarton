@@ -108,6 +108,7 @@ type Item struct {
 	Kind     Kind
 	Size     int64
 	MTime    int64
+	Format   string // extension by the content when the name says another format (format.go)
 
 	Taken     int64 // wall-clock time of capture, stored as if it were UTC
 	TakenSrc  string
@@ -268,15 +269,17 @@ type Library struct {
 	marks     markStore // guarded by favMu
 	notes     noteStore
 
-	opMu        sync.Mutex // one admin operation (edit, rotate, move, trash) at a time
-	rules       atomic.Pointer[compiledRules]
-	rulesJob    rulesJob
-	importJob   importJob
-	scannedOnce atomic.Bool  // the first scan is through
-	offline     atomic.Value // []string: library folders the last scan could not read
-	rootDev     rootDevices  // device each library folder had its files on
-	editGen     atomic.Int64 // counts metadata edits, so plans notice them
-	closing     atomic.Bool  // Close has begun: no new filing runs
+	opMu         sync.Mutex // one admin operation (edit, rotate, move, trash) at a time
+	rules        atomic.Pointer[compiledRules]
+	rulesJob     rulesJob
+	importJob    importJob
+	scannedOnce  atomic.Bool  // the first scan is through
+	formatsKnown atomic.Bool  // every item's format was checked by its content (format.go)
+	aiSoon       atomic.Bool  // descriptions start again shortly (video.go)
+	offline      atomic.Value // []string: library folders the last scan could not read
+	rootDev      rootDevices  // device each library folder had its files on
+	editGen      atomic.Int64 // counts metadata edits, so plans notice them
+	closing      atomic.Bool  // Close has begun: no new filing runs
 	// rulesChunkHook runs before each chunk of a filing run (tests only)
 	rulesChunkHook func(start int)
 	editMu         sync.Mutex           // guards edits
@@ -301,6 +304,7 @@ const indexVersion = 3
 type indexFile struct {
 	Version int
 	Items   []*Item
+	Formats bool // the formats of all items were checked (Item.Format)
 }
 
 // Open loads a cached index (if any) and prepares the library. Call Scan
@@ -627,6 +631,7 @@ func (l *Library) loadIndex() {
 		items = append(items, it)
 	}
 	l.setItems(items)
+	l.formatsKnown.Store(idx.Formats)
 	l.logf("index cache: %d items", len(items))
 }
 
@@ -663,7 +668,7 @@ func (l *Library) saveIndex() {
 	}
 	zw := gzip.NewWriter(f)
 	l.mu.RLock()
-	err = gob.NewEncoder(zw).Encode(indexFile{Version: indexVersion, Items: l.items})
+	err = gob.NewEncoder(zw).Encode(indexFile{Version: indexVersion, Items: l.items, Formats: l.formatsKnown.Load()})
 	l.mu.RUnlock()
 	if err == nil {
 		err = zw.Close()
