@@ -14,7 +14,6 @@ builds:
     env:
       - CGO_ENABLED=0
     goos:
-      - linux
       - darwin
       - windows
     goarch:
@@ -37,11 +36,13 @@ builds:
       - -X github.com/dgrieser/schuhkarton/internal/version.Date={{ .CommitDate }}
     mod_timestamp: "{{ .CommitTimestamp }}"
 
-  # Fully static for musl (Alpine): the HEIC/AVIF decoders otherwise load
-  # libheif/libavif at run time if present, which links the binary against
-  # the glibc loader. With nodynamic they always use their built-in WASM.
+  # Linux: fully static. The HEIC/AVIF decoders otherwise load libheif/
+  # libavif at run time if present, which links the binary against the glibc
+  # loader and, through purego, needs glibc 2.34 or newer (Raspberry Pi OS 11
+  # has 2.31: "undefined symbol: pthread_attr_getstacksize") and breaks musl.
+  # With nodynamic they always use their built-in WASM.
   - <<: *build
-    id: schuhkarton-static
+    id: schuhkarton-linux
     goos:
       - linux
     ignore: []
@@ -51,6 +52,7 @@ builds:
 archives:
   - ids:
       - schuhkarton
+      - schuhkarton-linux
     name_template: >-
       {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}{{ with .Arm }}v{{ . }}{{ end }}
     formats:
@@ -71,7 +73,7 @@ nfpms:
   - &package
     id: packages
     ids:
-      - schuhkarton
+      - schuhkarton-linux
     package_name: schuhkarton
     file_name_template: "{{ .ConventionalFileName }}"
     vendor: dgrieser
@@ -145,7 +147,7 @@ nfpms:
   - <<: *package
     id: alpine
     ids:
-      - schuhkarton-static
+      - schuhkarton-linux
     formats:
       - apk
 

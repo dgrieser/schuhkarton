@@ -70,8 +70,8 @@ On Linux there are also packages with a system service (see
 | `.pkg.tar.zst` | Arch Linux | `sudo pacman -U schuhkarton-<version>-1-x86_64.pkg.tar.zst` |
 | `.apk` | Alpine (OpenRC) | `apk add --allow-untrusted schuhkarton_<version>_x86_64.apk` |
 
-The binary in the Linux archives, `.deb`, `.rpm` and Arch packages needs
-glibc; the `.apk` has a fully static one for musl.
+The Linux binary is fully static: it runs on any glibc or musl system, older
+ones like Raspberry Pi OS 11 (bullseye) included.
 
 Or build it with Go 1.26 or newer: `make install` installs it into `~/bin`.
 
