@@ -65,6 +65,7 @@ Optionen:
 
 func main() {
 	log.SetFlags(log.Ltime)
+	defaultMemoryLimit()
 	args := takeHome(os.Args[1:])
 	cmd := "serve"
 	if len(args) > 0 {

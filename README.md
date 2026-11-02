@@ -83,7 +83,10 @@ Optional tools, found on the `PATH`:
 | `ffmpeg` | video thumbnails, previews, HEVC playback | `apt install ffmpeg`, `brew install ffmpeg` |
 
 Without exiftool, dates come from file and folder names. HEIC and AVIF photos
-are decoded by the binary itself; no extra tool is needed.
+are decoded by the binary itself; no extra tool is needed. On 32-bit ARM (a
+Raspberry Pi with the 32-bit OS) that decoder is very slow (minutes per
+photo); install `libheif-examples` there and `heif-dec`/`heif-convert` is used
+instead.
 
 ## First start
 
