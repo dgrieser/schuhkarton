@@ -161,6 +161,8 @@ func (f *fakeAI) server(t *testing.T) *httptest.Server {
 }
 
 func TestAIClientErrors(t *testing.T) {
+	defer func(u time.Duration) { rateUnknown = u }(rateUnknown)
+	rateUnknown = 5 * time.Millisecond // its 429 is sent again a few times: quickly
 	f := &fakeAI{}
 	srv := f.server(t)
 	ctx := context.Background()
@@ -320,6 +322,8 @@ func TestJobRate(t *testing.T) {
 }
 
 func TestAILoopPausesWhenBusy(t *testing.T) {
+	defer func(u time.Duration) { rateUnknown = u }(rateUnknown)
+	rateUnknown = 5 * time.Millisecond // the 429 retries of send, quickly
 	f := &fakeAI{}
 	srv := f.server(t)
 	root := t.TempDir()
