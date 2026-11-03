@@ -5,6 +5,7 @@ import (
 	"image/color"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -133,5 +134,17 @@ func TestSlowDecodeLendsSlot(t *testing.T) {
 	<-done
 	for _, r := range mine {
 		r()
+	}
+}
+
+func TestHEIFLast(t *testing.T) {
+	list := []*Item{{Rel: "a.HEIC"}, {Rel: "b.jpg"}, {Rel: "c.jpeg", Format: ".heic"}, {Rel: "d.png"}, {Rel: "e.avif"}}
+	heifLast(list)
+	var got []string
+	for _, it := range list {
+		got = append(got, it.Rel)
+	}
+	if strings.Join(got, " ") != "b.jpg d.png a.HEIC c.jpeg e.avif" {
+		t.Errorf("order %v", got)
 	}
 }

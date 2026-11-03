@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 
@@ -83,6 +84,12 @@ func (l *Library) generate(ctx context.Context) {
 		return
 	}
 	l.logf("background: %d thumbnails, %d video previews, %d face scans", len(thumbs), len(previews), len(faces))
+	if !wasmCompiled {
+		// HEIC/AVIF that the native tool cannot read take minutes each here:
+		// last, so they do not hold up everything else
+		heifLast(thumbs)
+		heifLast(faces)
+	}
 
 	var wg sync.WaitGroup
 	run := func(list []*Item, workers int, fn func(*Item)) {
@@ -249,3 +256,25 @@ func (l *Library) Go(fn func()) {
 
 // GenerateAll creates every missing derivative and returns when done.
 func (l *Library) GenerateAll(ctx context.Context) { l.generate(ctx) }
+
+// heifLast moves HEIC/AVIF photos to the end, keeping the order otherwise.
+func heifLast(list []*Item) {
+	slices.SortStableFunc(list, func(a, b *Item) int {
+		ha, hb := heifItem(a), heifItem(b)
+		switch {
+		case ha == hb:
+			return 0
+		case hb:
+			return -1
+		}
+		return 1
+	})
+}
+
+func heifItem(it *Item) bool {
+	switch it.Ext() {
+	case ".heic", ".heif", ".avif", ".hif":
+		return true
+	}
+	return false
+}
