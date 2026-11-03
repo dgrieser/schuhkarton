@@ -153,3 +153,33 @@ func TestSpillOldestFirst(t *testing.T) {
 		t.Error("variantOf")
 	}
 }
+
+// Photos whose large preview moved to tier 2 count as having one.
+func TestHavePreview(t *testing.T) {
+	defer func(g time.Duration) { spillGrace = g }(spillGrace)
+	spillGrace = 0
+	overflowSameDiskOK = true
+	defer func() { overflowSameDiskOK = false }()
+	root, over := t.TempDir(), t.TempDir()
+	for i := range 3 {
+		saveJPEG(t, filepath.Join(root, "2020", "IMG_2020010"+string(rune('1'+i))+"_120000.jpg"), picture(int64(300+i), 800, 600, 0), 90)
+	}
+	l, err := Open(Options{Roots: []Root{{Name: "B", Path: root}}, CacheDir: t.TempDir(), Workers: 1, MaxCache: -1, OverflowDir: over})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	ctx := context.Background()
+	l.Scan(ctx)
+	l.GenerateAll(ctx)
+	items := l.Items()
+	l.Ensure(ctx, items[0], VarLarge) // here
+	l.Ensure(ctx, items[1], VarLarge) // moved below
+	if err := l.moveToTier2(ctx, l.CachePath(items[1], VarLarge), l.overflowFile(items[1].key, VarLarge)); err != nil {
+		t.Fatal(err)
+	}
+	have := l.havePreview()
+	if !have(items[0]) || !have(items[1]) || have(items[2]) {
+		t.Errorf("here %v, tier 2 %v, none %v", have(items[0]), have(items[1]), have(items[2]))
+	}
+}

@@ -36,9 +36,10 @@ type jobTask struct {
 	// has to stop (service problems); problems with the file are recorded.
 	one  func(ctx context.Context, it *Item) error
 	save func()
-	// first, when set, puts the files it returns true for at the front
-	// (cheap ones first: descriptions of photos with a large preview)
-	first func(*Item) bool
+	// first, when set, is asked once per pass for a test that puts the
+	// files it returns true for at the front (cheap ones first:
+	// descriptions of photos with a large preview)
+	first func() func(*Item) bool
 }
 
 func (j *remoteJob) kick() {
@@ -143,9 +144,10 @@ func (l *Library) jobPass(ctx context.Context, j *remoteJob, t jobTask) error {
 		return nil
 	}
 	if t.first != nil { // one look per file, the order kept otherwise
+		first := t.first()
 		var front, back []*Item
 		for _, it := range todo {
-			if t.first(it) {
+			if first(it) {
 				front = append(front, it)
 			} else {
 				back = append(back, it)
