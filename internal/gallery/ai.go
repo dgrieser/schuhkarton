@@ -204,6 +204,10 @@ func (l *Library) aiTask() jobTask {
 				l.logf("ai.json: %v", err)
 			}
 		},
+		// photos with a large preview here first: their picture for the
+		// model comes from it in a moment, not from the original on a
+		// network share (only this cache folder is looked at: cheap)
+		first: func(it *Item) bool { return it.Kind == Photo && exists(l.CachePath(it, VarLarge)) },
 	}
 }
 
@@ -310,14 +314,38 @@ func (c *aiClient) do(ctx context.Context, method, path string, body any, out an
 }
 
 // send makes one API call with a ready body and decodes the JSON answer.
+// It keeps to the account's requests per minute (ratelimit.go): it waits
+// while none are left, and after a 429 it sends the same request again in
+// the next minute; only repeated 429 come back (the job pauses then).
 func (c *aiClient) send(ctx context.Context, method, path, contentType string, body []byte, out any) error {
+	b := budgetFor(c.opt.URL, c.opt.Key)
+	for try := 0; ; try++ {
+		tk, err := b.wait(ctx)
+		if err != nil {
+			return err
+		}
+		h, err := c.sendOnce(ctx, method, path, contentType, body, out)
+		limited := rateLimited(err)
+		b.seen(h, limited, tk)
+		if !limited || try+1 >= rateRetries {
+			return err
+		}
+	}
+}
+
+func rateLimited(err error) bool {
+	var ae *aiError
+	return errors.As(err, &ae) && ae.status == 429
+}
+
+func (c *aiClient) sendOnce(ctx context.Context, method, path, contentType string, body []byte, out any) (http.Header, error) {
 	var rd io.Reader
 	if body != nil {
 		rd = bytes.NewReader(body)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, c.opt.URL+path, rd)
 	if err != nil {
-		return &aiError{msg: "Adresse ungültig: " + err.Error(), fatal: true}
+		return nil, &aiError{msg: "Adresse ungültig: " + err.Error(), fatal: true}
 	}
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
@@ -328,19 +356,19 @@ func (c *aiClient) send(ctx context.Context, method, path, contentType string, b
 	resp, err := c.http.Do(req)
 	if err != nil {
 		if ctx.Err() != nil {
-			return ctx.Err()
+			return nil, ctx.Err()
 		}
-		return &aiError{msg: "Dienst nicht erreichbar: " + err.Error(), transient: true}
+		return nil, &aiError{msg: "Dienst nicht erreichbar: " + err.Error(), transient: true}
 	}
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if resp.StatusCode/100 != 2 {
-		return classify(resp.StatusCode, b)
+		return resp.Header, classify(resp.StatusCode, b)
 	}
 	if err := json.Unmarshal(b, out); err != nil {
-		return &aiError{msg: "unerwartete Antwort: " + err.Error()}
+		return resp.Header, &aiError{msg: "unerwartete Antwort: " + err.Error()}
 	}
-	return nil
+	return resp.Header, nil
 }
 
 func classify(status int, body []byte) *aiError {

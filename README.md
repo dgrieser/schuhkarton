@@ -621,7 +621,7 @@ ai:                           # image descriptions by a vision model (optional)
   api_key: ""                 # the key itself, or:
   api_key_env: ""             # the name of a variable holding it, e.g. MITTWALD_LLM_API_KEY
   model: Qwen3.8-27B-NVFP4    # a model that understands images
-  workers: 2                  # requests at the same time
+  workers: 2                  # requests at the same time (paced to the service's requests per minute)
   languages: [de, en]
   image_size: 1024            # long edge of the image sent
   thinking: false             # let reasoning models think first (slower)
