@@ -46,6 +46,61 @@
   const admin = { name: '', pw: '', pw2: '' }; // first admin (install, or no admin yet)
 
   const locked = (key) => S.locked?.[key];
+  // background windows: days as in the settings file ("mon-fri", "sat,sun";
+  // empty: every day), as a bit set Sunday = 1 … Saturday = 64
+  // the same names as schedule.ParseDays
+  const DAYS = {
+    sun: 0, su: 0, so: 0, sonntag: 0, sunday: 0, mon: 1, mo: 1, montag: 1, monday: 1, tue: 2, tu: 2, di: 2, dienstag: 2, tuesday: 2,
+    wed: 3, we: 3, mi: 3, mittwoch: 3, wednesday: 3, thu: 4, th: 4, do: 4, donnerstag: 4, thursday: 4,
+    fri: 5, fr: 5, freitag: 5, friday: 5, sat: 6, sa: 6, samstag: 6, saturday: 6,
+  };
+  const parseDays = (s) => {
+    s = (s || '').trim().toLowerCase();
+    if (['', '*', 'daily', 'täglich', 'all', 'alle'].includes(s)) return 127;
+    if (s === 'none') return 0; // all days unticked: not "every day"; the step asks for one
+    let m = 0;
+    for (const part of s.split(',')) {
+      const [a, b] = part.trim().split('-').map((x) => DAYS[x.trim()]);
+      if (a === undefined || (part.includes('-') && b === undefined)) return 0;
+      for (let d = a; ; d = (d + 1) % 7) { m |= 1 << d; if (d === (b ?? a)) break; }
+    }
+    return m;
+  };
+  const daysText = (m) => {
+    if (m === 127) return '';
+    if (!m) return 'none';
+    const names = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'], order = [1, 2, 3, 4, 5, 6, 0], out = [];
+    for (let i = 0; i < 7;) {
+      if (!(m & (1 << order[i]))) { i++; continue; }
+      let j = i;
+      while (j + 1 < 7 && m & (1 << order[j + 1])) j++;
+      out.push(j > i ? `${names[order[i]]}-${names[order[j]]}` : names[order[i]]);
+      i = j + 1;
+    }
+    return out.join(',');
+  };
+  // the background windows in a line, for the summary
+  const bgSummary = () => {
+    const B = C.background || {}, short = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'];
+    const days = (m) => m === 127 ? t('täglich') : [1, 2, 3, 4, 5, 6, 0].filter((d) => m & (1 << d)).map((d) => t(short[d])).join(', ');
+    const parts = (B.windows || []).map((w) => `${days(parseDays(w.days))} ${w.from}–${w.to}`);
+    if (B.from && B.to) parts.unshift(`${t('täglich')} ${B.from}–${B.to}`);
+    for (const o of B.once || []) parts.push(`${t('einmalig')} ${(o.from || '').replace('T', ' ')}–${o.to}`);
+    return parts.length ? esc(parts.join(' · ')) : t('jederzeit');
+  };
+  const windowsOK = () => {
+    const B = C.background || {};
+    const pair = (a, b) => !!a && !!b && a !== b;
+    if (!B.from !== !B.to || (B.from && !pair(B.from, B.to))) return false;
+    return (B.windows || []).every((w) => parseDays(w.days) && pair(w.from, w.to)) &&
+      (B.once || []).every((o) => /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}/.test(o.from || '') && /\d{2}:\d{2}$/.test(o.to || ''));
+  };
+  // cache.max_size like "4GB" needs cache.overflow_dir (see config.ParseSize)
+  const cacheCapOK = () => {
+    const m = (C.cache.max_size || '').trim(), o = (C.cache.overflow_dir || '').trim();
+    if (!m) return !o || o.startsWith('/') || /^[A-Za-z]:[\\/]/.test(o);
+    return /^\d+(\.\d+)?\s*([KMGT]i?B?|B)?$/i.test(m) && (o.startsWith('/') || /^[A-Za-z]:[\\/]/.test(o));
+  };
   const lockNote = (key) => (locked(key) ? `<span class="lock">${t('festgelegt durch {x}', { x: esc(locked(key)) })}</span>` : '');
   const dis = (key) => (locked(key) ? 'disabled' : '');
 
@@ -54,7 +109,7 @@
   function buildSteps() {
     STEPS = [
       { id: 'fotos', title: t('Fotos'), render: renderFolders, ok: () => C.library.folders.length > 0 && C.library.folders.every((f) => { const c = checks.get(f.path); return !c || c.exists; }) },
-      { id: 'speicher', title: t('Speicher'), render: renderStorage, ok: () => !!C.cache.dir && !C.background?.from === !C.background?.to && (!C.background?.from || C.background.from !== C.background.to) },
+      { id: 'speicher', title: t('Speicher'), render: renderStorage, ok: () => !!C.cache.dir && windowsOK() && cacheCapOK() },
       { id: 'gesichter', title: t('Gesichter'), render: renderFaces, ok: () => C.faces.mode !== 'remote' || !!C.faces.url },
       { id: 'ki', title: t('KI'), render: renderAI, ok: () => !aiUsed() || (/^https?:\/\//.test(C.ai.url || '') && (C.ai.mode !== 'on' || !!C.ai.model) && (!ocrOn() || !!C.ai.ocr_model) && (!speechOn() || !!C.ai.speech_model)) },
       { id: 'sicherung', title: t('Sicherung'), render: renderBackup, ok: () => true },
@@ -86,7 +141,7 @@
     $('#next').disabled = !ok;
     $('#hint').textContent = ok ? '' : ({ fotos: t('Mindestens einen Fotoordner hinzufügen.'), gesichter: t('Adresse des Containers angeben oder Gesichter ausschalten.'),
       zugriff: t('Adresse mit Port angeben, z.B. 0.0.0.0:8088.'), konto: t('Name und Passwort (mindestens 8 Zeichen, zweimal gleich) für das Admin-Konto angeben.'),
-      fertig: t('Erst ein Admin-Konto anlegen.'), speicher: C.cache.dir ? t('Zeitfenster: Beginn und Ende angeben (verschieden) oder beide leer lassen.') : '' }[STEPS[step].id] || '');
+      fertig: t('Erst ein Admin-Konto anlegen.'), speicher: !C.cache.dir ? '' : !cacheCapOK() ? t('Obergrenze wie 4GB oder 500MB, dazu einen Auslagerungsordner (absoluter Pfad).') : t('Zeitfenster: mindestens ein Tag, Beginn und Ende (verschieden); einmalige mit Datum.') }[STEPS[step].id] || '');
   }
 
   // --- step 1: folders ----------------------------------------------------------
@@ -231,6 +286,14 @@
           <div class="addrow"><input id="cdir" value="${esc(C.cache.dir)}" spellcheck="false" ${dis('cache.dir')}>
           <button class="btn" id="cbrowse" ${dis('cache.dir')}>${icon('folder')}<span>${t('Durchsuchen')}</span></button></div>
           ${lockNote('cache.dir')}<div class="stat" id="cstat"></div></label>
+        <h3>${t('Obergrenze und Auslagerung')}</h3>
+        <p class="muted">${t('Wird der Cache-Ordner größer als die Obergrenze, wandern große Vorschauen, Video-Vorschauen und umgewandelte Videos in den Auslagerungsordner (die ältesten zuerst, z.B. auf das NAS) und werden von dort gelesen. Vorschaubilder, Gesichter und Index bleiben hier. Der Auslagerungsordner muss schon existieren und auf einer anderen Platte liegen; fehlt er (Netzlaufwerk nicht eingehängt), wird nichts ausgelagert. Obergrenze leer: keine.')}</p>
+        <div class="row2">
+          <label class="field"><span>${t('Obergrenze')}</span><input id="cmax" placeholder="4GB" value="${esc(C.cache.max_size || '')}" spellcheck="false" ${dis('cache.max_size')}>${lockNote('cache.max_size')}</label>
+          <label class="field"><span>${t('Auslagerungsordner')}</span>
+            <div class="addrow"><input id="cover" placeholder="/mnt/nas/schuhkarton-cache" value="${esc(C.cache.overflow_dir || '')}" spellcheck="false" ${dis('cache.overflow_dir')}>
+            <button class="btn" id="cobrowse" ${dis('cache.overflow_dir')}>${icon('folder')}</button></div>${lockNote('cache.overflow_dir')}</label>
+        </div>
         ${caches.length ? `<h3>${t('Vorhandene Caches')}</h3><p class="muted">${t('Ein Cache von früher spart Stunden: Vorschaubilder, Gesichter und Namen sind dann sofort da. Er passt, wenn die Ordnernamen gleich sind.')}</p>
           <div class="caches">${caches.map((c) => `
             <div class="cache ${importPath === c.path || C.cache.dir === c.path ? 'on' : ''}">
@@ -260,14 +323,19 @@
           </select></label>
           <label class="field"><span>${t('Gleichzeitige Jobs')}</span><input type="number" id="workers" min="1" max="64" value="${C.media.workers}" ${dis('media.workers')}></label>
         </div>
+        ${S.slowHEIF ? `<label class="field"><span>${t('HEIC/AVIF gleichzeitig auf dem langsamen Weg')}</span><input type="number" id="slowdec" min="1" max="8" value="${C.media.slow_decodes || 1}" ${dis('media.slow_decodes')}>${lockNote('media.slow_decodes')}
+          <span class="muted small">${t('Auf diesem Prozessor braucht der eingebaute HEIC/AVIF-Decoder Minuten und einige hundert MB pro Foto. Er springt nur ein, wo heif-dec fehlt oder ein Foto nicht lesen kann. Weitere Fotos warten, statt den Speicher zu füllen.')}</span></label>` : ''}
         <h3>${t('Hintergrundarbeit')}</h3>
-        <p class="muted">${t('Vorschaubilder, Gesichter, Beschreibungen, Text- und Spracherkennung, Schreiben in Dateien, Duplikate, Import, regelmäßiges Einlesen und Sicherung laufen nur in diesem Zeitfenster, z.B. nachts von 23:00 bis 05:00. Leer: jederzeit. Was jemand anschaut oder von Hand startet, läuft sofort.')}</p>
-        <div class="row2">
-          <label class="field"><span>${t('Von')}</span><input type="time" id="bgfrom" value="${esc(C.background?.from || '')}" ${dis('background.from')}>${lockNote('background.from')}</label>
-          <label class="field"><span>${t('Bis')}</span><input type="time" id="bgto" value="${esc(C.background?.to || '')}" ${dis('background.to')}>${lockNote('background.to')}</label>
-        </div>
+        <p class="muted">${t('Vorschaubilder, Gesichter, Beschreibungen, Text- und Spracherkennung, Schreiben in Dateien, Duplikate, Import, regelmäßiges Einlesen und Sicherung laufen nur in diesen Zeitfenstern, z.B. Mo–Fr 23:00–08:00 und Sa–So 00:00–07:00. Ein Fenster über Mitternacht gehört zum Tag, an dem es beginnt. Keine Fenster: jederzeit. Was jemand anschaut oder von Hand startet, läuft sofort.')}</p>
+        <div id="bgwin"></div>
+        <div class="btns"><button class="btn" id="bgadd" ${dis('background.windows')}>${icon('plus')}<span>${t('Zeitfenster')}</span></button></div>
+        <h3>${t('Einmalig')}</h3>
+        <p class="muted">${t('Zusätzliche Zeiten, z.B. heute 09:00–13:00. Sie fallen weg, wenn sie vorbei sind.')}</p>
+        <div id="bgonce"></div>
+        <div class="btns"><button class="btn" id="bgoadd" ${dis('background.once')}>${icon('plus')}<span>${t('Einmalig')}</span></button></div>
+        ${lockNote('background.windows')}${lockNote('background.once')}
         <h3>${t('Werkzeuge')}</h3><ul class="tools">${tools}</ul>
-        <p class="muted small">${t('Fehlt etwas: {a} und {b} über die Paketverwaltung installieren (z.B. {c}), dann neu starten.', { a: '<code>exiftool</code>', b: '<code>ffmpeg</code>', c: '<code>apt install libimage-exiftool-perl ffmpeg</code>' })}</p>
+        <p class="muted small">${t('Fehlt etwas: {a} und {b} über die Paketverwaltung installieren (z.B. {c}), dann neu starten.', { a: '<code>exiftool</code>', b: '<code>ffmpeg</code>', c: '<code>apt install libimage-exiftool-perl ffmpeg</code>' })}${S.slowHEIF ? ' ' + t('{a} kommt mit {b}.', { a: '<code>heif-dec</code>', b: '<code>apt install libheif-examples</code>' }) : ''}</p>
       </section>`;
     const cdir = $('#cdir', el);
     const checkC = async () => {
@@ -279,6 +347,10 @@
     cdir.oninput = () => { C.cache.dir = cdir.value.trim(); clearTimeout(cdir._t); cdir._t = setTimeout(checkC, 400); validate(); };
     checkC();
     $('#cbrowse', el).onclick = () => pick(cdir.value, (p) => { cdir.value = p; cdir.oninput(); });
+    const cmax = $('#cmax', el), cover = $('#cover', el);
+    cmax.oninput = () => { C.cache.max_size = cmax.value.trim(); validate(); };
+    cover.oninput = () => { C.cache.overflow_dir = cover.value.trim(); validate(); };
+    $('#cobrowse', el).onclick = () => pick(cover.value || '/', (p) => { cover.value = p; cover.oninput(); });
     for (const b of $$('[data-use]', el)) b.onclick = () => { C.cache.dir = b.dataset.use; importPath = ''; renderStorage(el); };
     for (const b of $$('[data-imp]', el)) b.onclick = () => { importPath = importPath === b.dataset.imp ? '' : b.dataset.imp; renderStorage(el); };
     const ip = $('#ipath', el);
@@ -297,9 +369,67 @@
     $('#trans', el).onchange = (e) => { C.media.transcode = e.target.checked; };
     $('#rescan', el).onchange = (e) => { C.library.rescan = e.target.value; };
     $('#workers', el).oninput = (e) => { C.media.workers = Math.max(1, +e.target.value || 1); };
-    C.background ??= { from: '', to: '' };
-    $('#bgfrom', el).oninput = (e) => { C.background.from = e.target.value; validate(); };
-    $('#bgto', el).oninput = (e) => { C.background.to = e.target.value; validate(); };
+    const slowdec = $('#slowdec', el);
+    if (slowdec) slowdec.oninput = (e) => { C.media.slow_decodes = Math.max(1, Math.min(8, +e.target.value || 1)); };
+    // the older single window becomes a rule for every day
+    const B = (C.background ??= { from: '', to: '' });
+    B.windows ||= [];
+    B.once ||= [];
+    if (B.from && B.to && !locked('background.from') && !locked('background.to')) {
+      B.windows.unshift({ days: '', from: B.from, to: B.to });
+      B.from = B.to = '';
+    }
+    const order = [1, 2, 3, 4, 5, 6, 0];
+    const short = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'];
+    const wdis = dis('background.windows'), odis = dis('background.once');
+    const drawWin = () => {
+      $('#bgwin', el).innerHTML = B.windows.map((w, i) => {
+        const m = parseDays(w.days);
+        return `<div class="bgrow" data-i="${i}"><div class="chips">${order.map((d) => `<button type="button" class="chip ${m & (1 << d) ? 'on' : ''}" data-d="${d}" ${wdis}>${t(short[d])}</button>`).join('')}</div>
+          <input type="time" class="bgf" value="${esc(w.from || '')}" ${wdis}><span>–</span><input type="time" class="bgt" value="${esc(w.to || '')}" ${wdis}>
+          <button class="btn" data-del="${i}" title="${t('Entfernen')}" ${wdis}>${icon('x')}</button></div>`;
+      }).join('') || `<p class="muted small">${t('Keine Zeitfenster: Hintergrundarbeit läuft jederzeit.')}</p>`;
+      $('#bgwin', el).querySelectorAll('.bgrow').forEach((row) => {
+        const w = B.windows[+row.dataset.i];
+        row.querySelectorAll('[data-d]').forEach((b) => b.onclick = () => {
+          w.days = daysText(parseDays(w.days) ^ (1 << +b.dataset.d)); drawWin(); validate();
+        });
+        $('.bgf', row).oninput = (e) => { w.from = e.target.value; validate(); };
+        $('.bgt', row).oninput = (e) => { w.to = e.target.value; validate(); };
+        $('[data-del]', row).onclick = () => { B.windows.splice(+row.dataset.i, 1); drawWin(); validate(); };
+      });
+    };
+    const drawOnce = () => {
+      $('#bgonce', el).innerHTML = B.once.map((o, i) => {
+        const [date, from] = (o.from || '').replace('T', ' ').split(' ');
+        return `<div class="bgrow" data-i="${i}"><input type="date" class="bgd" value="${esc(date || '')}" ${odis}>
+          <input type="time" class="bgf" value="${esc((from || '').slice(0, 5))}" ${odis}><span>–</span><input type="time" class="bgt" value="${esc((o.to || '').slice(-5))}" ${odis}>
+          <button class="btn" data-del="${i}" title="${t('Entfernen')}" ${odis}>${icon('x')}</button></div>`;
+      }).join('');
+      $('#bgonce', el).querySelectorAll('.bgrow').forEach((row) => {
+        const o = B.once[+row.dataset.i];
+        // an end with its own date (several days) keeps it; only the time is edited here
+        const endDay = /^\d{4}-\d{2}-\d{2}/.exec(o.to || '')?.[0];
+        const set = () => {
+          o.from = `${$('.bgd', row).value} ${$('.bgf', row).value}`;
+          o.to = endDay ? `${endDay} ${$('.bgt', row).value}` : $('.bgt', row).value;
+          validate();
+        };
+        $('.bgd', row).oninput = set;
+        $('.bgf', row).oninput = set;
+        $('.bgt', row).oninput = set;
+        $('[data-del]', row).onclick = () => { B.once.splice(+row.dataset.i, 1); drawOnce(); validate(); };
+      });
+    };
+    $('#bgadd', el).onclick = () => { B.windows.push({ days: 'mon-fri', from: '23:00', to: '06:00' }); drawWin(); validate(); };
+    $('#bgoadd', el).onclick = () => {
+      const now = new Date(), p = (n) => String(n).padStart(2, '0');
+      const day = `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}`;
+      B.once.push({ from: `${day} ${p(now.getHours())}:00`, to: `${p((now.getHours() + 4) % 24)}:00` });
+      drawOnce(); validate();
+    };
+    drawWin();
+    drawOnce();
   }
 
   // --- step 3: faces --------------------------------------------------------------
@@ -905,6 +1035,8 @@
           ${row(t('Fotos'), f.map((x) => `${esc(x.name)} <span class="muted">${esc(x.path)}</span>`).join('<br>'))}
           ${row(t('Cache'), esc(C.cache.dir) + (importPath ? `<br><span class="muted">${t('übernimmt {x}', { x: esc(importPath) })}</span>` : ''))}
           ${row(t('Vorschauen'), [C.cache.previews ? t('große vorab') : t('große bei Bedarf'), C.media.video_previews ? t('animierte Videos') : t('Videos ohne Animation'), C.media.transcode ? t('HEVC umwandeln') : ''].filter(Boolean).join(' · '))}
+          ${row(t('Hintergrundarbeit'), bgSummary())}
+          ${C.cache.max_size ? row(t('Obergrenze'), `${esc(C.cache.max_size)} → ${esc(C.cache.overflow_dir || '')}`) : ''}
           ${row(t('Gesichter'), C.faces.mode === 'off' ? t('aus') : C.faces.mode === 'remote' ? `${t('Container')} ${esc(C.faces.url)}` : t('Python auf diesem Rechner'))}
           ${row(t('KI'), !aiUsed() ? t('aus') : [esc(aiPreset() === 'mittwald' ? 'mittwald AI hosting' : C.ai.url),
             C.ai.mode === 'on' ? `${t('Beschreibungen')}: ${esc(C.ai.model)} (${(C.ai.languages || []).join(', ')})` : '',

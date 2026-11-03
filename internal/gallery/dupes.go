@@ -109,6 +109,9 @@ type dupeStore struct {
 	ver    int64 // -1: group again; else the item list the groups were made for (see listVer)
 	dirty  atomic.Bool
 
+	grouped time.Time // last grouping
+	pending int       // changes since the last grouping (new hashes, written files)
+
 	dims             sync.Map // cache key -> [2]int pixel size from the file header
 	wake             chan struct{}
 	done, todo, nGrp atomic.Int64
@@ -194,6 +197,25 @@ func (l *Library) renameDupes(pairs map[string]string) {
 		l.markDupesDirty()
 	}
 	l.kickDupes()
+}
+
+// carryDupeSig keeps the picture hashes of a file whose picture did not
+// change (only its metadata was written, so its cache key moved): hashing it
+// again would not tell anything new. Its bytes did change, so whether it is
+// still identical to another file is checked at the next grouping, which a
+// night of metadata writes leaves to dupeRegroup instead of one per file.
+func (l *Library) carryDupeSig(it *Item, oldKey, newKey string) {
+	l.dupe.mu.Lock()
+	s := l.dupe.sigs[l.favKey(it)]
+	carried := s != nil && s.Key == oldKey
+	if carried {
+		s.Key = newKey
+		l.dupe.pending++
+	}
+	l.dupe.mu.Unlock()
+	if carried {
+		l.markDupesDirty()
+	}
 }
 
 // --- hashing ------------------------------------------------------------------
@@ -587,18 +609,33 @@ func (l *Library) findDupes(ctx context.Context) {
 			l.markDupesDirty()
 		}
 	}
+	// Grouping compares the whole library (seconds on a small machine): a
+	// changed item list groups at once, new hashes (photos coming in one by
+	// one) at most every dupeRegroup; the first time at once.
 	l.dupe.mu.Lock()
-	stale := l.dupe.ver != l.listVer() || hashed.Load() > 0
+	listChanged := l.dupe.ver != l.listVer()
+	if hashed.Load() > 0 {
+		l.dupe.pending++
+	}
+	due := listChanged || l.dupe.pending > 0 && time.Since(l.dupe.grouped) >= dupeRegroup
+	seen := l.dupe.pending
 	l.dupe.mu.Unlock()
-	if stale && ctx.Err() == nil {
+	if due && ctx.Err() == nil {
 		g0 := time.Now()
 		l.groupDupes()
+		l.dupe.mu.Lock()
+		// changes that came in while grouping wait for the next one
+		l.dupe.grouped, l.dupe.pending = time.Now(), l.dupe.pending-seen
+		l.dupe.mu.Unlock()
 		if n := hashed.Load(); n > 0 {
 			l.logf("duplicates: %d hashed in %s, grouped in %s: %d groups", n, g0.Sub(start).Round(time.Millisecond),
 				time.Since(g0).Round(time.Millisecond), l.dupe.nGrp.Load())
 		}
 	}
 }
+
+// dupeRegroup is the least time between two groupings for new hashes.
+var dupeRegroup = 10 * time.Minute
 
 // --- grouping -----------------------------------------------------------------
 

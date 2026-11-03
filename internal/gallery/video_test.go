@@ -3,6 +3,7 @@ package gallery
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -169,5 +170,53 @@ func TestVideoClipLong(t *testing.T) {
 	}
 	if len(distinct) != len(pics) {
 		t.Errorf("%d of %d pictures differ: copies instead of frames spread over the video", len(distinct), len(pics))
+	}
+}
+
+// A video of a fraction of a second, or of one frame, still makes a clip of
+// at least two frames (the model refuses one frame with HTTP 400).
+func TestVideoClipShort(t *testing.T) {
+	ff, err := exec.LookPath("ffmpeg")
+	et := FindExifTool("")
+	if err != nil || et == "" {
+		t.Skip("ffmpeg or exiftool not installed")
+	}
+	root := t.TempDir()
+	for name, src := range map[string]string{"short.mp4": "testsrc=s=640x360:r=30:d=0.25", "one.mp4": "testsrc=s=640x360:r=1:d=1", "fast.mp4": "testsrc=s=640x360:r=120:d=0.9"} {
+		args := []string{"-v", "error", "-f", "lavfi", "-i", src}
+		if name == "one.mp4" {
+			args = append(args, "-frames:v", "1")
+		}
+		if out, err := exec.Command(ff, append(args, "-c:v", "mpeg4", filepath.Join(root, name))...).CombinedOutput(); err != nil {
+			t.Fatalf("%v %s", err, out)
+		}
+	}
+	l, err := Open(Options{Roots: []Root{{Name: "B", Path: root}}, CacheDir: t.TempDir(), Workers: 1, FFmpeg: ff, ExifTool: et})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	if err := l.Scan(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"short.mp4", "one.mp4", "fast.mp4"} {
+		it := byRel(l, name)
+		clip, frames, err := l.videoClip(context.Background(), it)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		cnt, err := exec.Command(filepath.Join(filepath.Dir(ff), "ffprobe"), "-v", "error", "-count_frames", "-select_streams", "v:0",
+			"-show_entries", "stream=nb_read_frames", "-of", "csv=p=0", clip).Output()
+		os.Remove(clip)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var n int
+		fmt.Sscanf(strings.TrimSpace(string(cnt)), "%d", &n)
+		// a few frames over the whole video, not the first 32 of 108
+		t.Logf("%s %vs: %d frames, %d reported", name, it.Duration, n, frames)
+		if n < clipMinFrames || frames < clipMinFrames || n > 8 || frames < n {
+			t.Errorf("%s (%vs): clip of %d frames, %d expected", name, it.Duration, n, frames)
+		}
 	}
 }

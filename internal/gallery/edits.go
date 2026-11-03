@@ -484,15 +484,28 @@ func (l *Library) rekey(it *Item, oldKey string, rot int) {
 			os.Remove(from)
 		}
 	}
+	l.tiers.mu.Lock() // not while the file moves to tier 2
 	for _, v := range []string{VarSmall, VarLarge, VarPreview, VarH264} {
 		move(l.cacheFile(oldKey, v), l.cacheFile(newKey, v), rot != 0 && (v == VarSmall || v == VarLarge))
+		if from := l.overflowFile(oldKey, v); from != "" && exists(from) {
+			move(from, l.overflowFile(newKey, v), rot != 0 && v == VarLarge)
+			// moved over just now, waiting for its removal here (spillGrace)
+			// under the old name: the copy here is not needed any more
+			if exists(l.overflowFile(newKey, v)) {
+				os.Remove(l.cacheFile(newKey, v))
+			}
+		}
 	}
+	l.tiers.mu.Unlock()
 	for i := range len(it.Faces) {
 		move(l.faceFile(oldKey, i), l.faceFile(newKey, i), rot != 0)
 	}
 	l.mu.Lock()
 	it.key = newKey
 	l.mu.Unlock()
+	if rot == 0 {
+		l.carryDupeSig(it, oldKey, newKey)
+	}
 }
 
 // removeDerivatives deletes everything cached for a key.
@@ -500,9 +513,14 @@ func (l *Library) removeDerivatives(key string, faces int) {
 	if len(key) < 2 {
 		return
 	}
+	l.tiers.mu.Lock()
 	for _, v := range []string{VarSmall, VarLarge, VarPreview, VarH264} {
 		os.Remove(l.cacheFile(key, v))
+		if p := l.overflowFile(key, v); p != "" {
+			os.Remove(p)
+		}
 	}
+	l.tiers.mu.Unlock()
 	for i := range faces {
 		os.Remove(l.faceFile(key, i))
 	}

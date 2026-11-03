@@ -11,6 +11,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -347,5 +348,67 @@ func TestDistinctShots(t *testing.T) {
 	}
 	if distinctShots(a, &Item{TakenSrc: "name", Taken: 5000}) {
 		t.Error("a copy without camera time may still be the same photo")
+	}
+}
+
+// Writing metadata into a file keeps its hash (no hashing, no grouping of
+// the whole library again); new hashes group at most every dupeRegroup.
+func TestDupesAfterWriteAndRegroup(t *testing.T) {
+	l, root := dupeLib(t)
+	ctx := context.Background()
+	groups := l.dupe.nGrp.Load()
+	it := l.Items()[0]
+	old := it.key
+	f, err := os.OpenFile(l.Path(it), os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Write([]byte{0}) // as if exiftool wrote: size and time change
+	f.Close()
+	os.Chtimes(l.Path(it), time.Now(), time.Now().Add(time.Minute))
+	l.afterWrite(it, 0)
+	if it.key == old {
+		t.Fatal("key did not change")
+	}
+	g0 := l.dupe.grouped
+	l.findDupes(ctx)
+	if l.dupe.grouped != g0 || l.dupe.pending == 0 {
+		t.Error("a metadata write grouped again at once, or not later")
+	}
+	if !l.dupe.dirty.Load() {
+		t.Error("carried hash not saved")
+	}
+
+	// a new photo: hashed now, grouped when dupeRegroup has passed
+	saveJPEG(t, filepath.Join(root, "2024/IMG_20240101_120000.jpg"), picture(77, 900, 600, 0), 90)
+	if err := l.Scan(ctx); err != nil {
+		t.Fatal(err)
+	}
+	l.GenerateAll(ctx)
+	l.findDupes(ctx) // the item list changed: grouped at once
+	g1 := l.dupe.grouped
+	if g1 == g0 || l.dupe.pending != 0 {
+		t.Fatal("a changed list was not grouped")
+	}
+	l.dupe.mu.Lock()
+	for k := range l.dupe.sigs {
+		if strings.HasSuffix(k, "IMG_20240101_120000.jpg") {
+			delete(l.dupe.sigs, k) // as if not hashed yet
+		}
+	}
+	l.dupe.mu.Unlock()
+	l.findDupes(ctx)
+	if l.dupe.grouped != g1 || l.dupe.pending == 0 {
+		t.Error("a single new hash grouped at once")
+	}
+	old2 := dupeRegroup
+	dupeRegroup = 0
+	defer func() { dupeRegroup = old2 }()
+	l.findDupes(ctx)
+	if l.dupe.grouped == g1 || l.dupe.pending != 0 {
+		t.Error("pending hashes not grouped after dupeRegroup")
+	}
+	if l.dupe.nGrp.Load() != groups {
+		t.Errorf("groups %d, want %d", l.dupe.nGrp.Load(), groups)
 	}
 }

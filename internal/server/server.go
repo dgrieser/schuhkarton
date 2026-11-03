@@ -627,8 +627,7 @@ func (s *Server) video(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Umwandeln ist ausgeschaltet", http.StatusNotFound)
 		return
 	}
-	cached := s.lib.CachePath(it, gallery.VarH264)
-	if _, err := os.Stat(cached); err == nil {
+	if cached := s.lib.CachedPath(it, gallery.VarH264); cached != "" {
 		w.Header().Set("Content-Type", "video/mp4")
 		http.ServeFile(w, r, cached)
 		return

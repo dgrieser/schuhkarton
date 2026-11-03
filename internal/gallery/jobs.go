@@ -58,6 +58,10 @@ func (l *Library) Start(ctx context.Context) {
 		l.bg.Add(1)
 		go l.dupeLoop(ctx)
 	}
+	if l.opt.OverflowDir != "" && l.opt.MaxCache >= 0 {
+		l.bg.Add(1)
+		go l.spillLoop(ctx)
+	}
 	if l.opt.Import.Dir != "" {
 		l.bg.Add(1)
 		go l.importLoop(ctx)
@@ -167,7 +171,7 @@ func (l *Library) mediaTodo() (thumbs, previews, faces []*Item) {
 	fs := l.FaceStatus()
 	faceOK, recog := fs.Detection, fs.Recognition
 	for _, it := range items {
-		if !exists(l.CachePath(it, VarSmall)) || (l.opt.Previews && it.Kind == Photo && !exists(l.CachePath(it, VarLarge))) {
+		if !exists(l.CachePath(it, VarSmall)) || (l.opt.Previews && it.Kind == Photo && !l.hasCached(it, VarLarge)) {
 			thumbs = append(thumbs, it)
 		} else if it.Kind == Photo {
 			nThumb++
@@ -175,7 +179,7 @@ func (l *Library) mediaTodo() (thumbs, previews, faces []*Item) {
 			nPoster++
 		}
 		if it.Kind == Video && l.opt.VideoPreviews {
-			if exists(l.CachePath(it, VarPreview)) {
+			if l.hasCached(it, VarPreview) {
 				nPrev++
 			} else {
 				previews = append(previews, it)

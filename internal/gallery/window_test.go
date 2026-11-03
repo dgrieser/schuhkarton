@@ -18,7 +18,7 @@ func TestWindowHoldsBackgroundWork(t *testing.T) {
 	writeTestJPEG(t, filepath.Join(root, "b.jpg"), 40, 30)
 	now := time.Now()
 	m := now.Hour()*60 + now.Minute()
-	w := schedule.Window{From: (m + 120) % 1440, To: (m + 180) % 1440}
+	w := schedule.Daily((m+120)%1440, (m+180)%1440)
 	l, err := Open(Options{Roots: []Root{{Name: "B", Path: root}}, CacheDir: t.TempDir(), Workers: 1, Window: w})
 	if err != nil {
 		t.Fatal(err)

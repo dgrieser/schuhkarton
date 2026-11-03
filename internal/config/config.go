@@ -9,11 +9,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -42,6 +44,9 @@ type Config struct {
 	path   string
 	found  bool
 	locked map[string]string // key -> where it was fixed ("SCHUHKARTON_X", "--flag")
+	// prunedOnce: one-time background windows that were over at loading
+	// were dropped (dropPastOnce in the runner writes the file then)
+	prunedOnce bool
 }
 
 // Server is the web server.
@@ -148,14 +153,91 @@ type Rule struct {
 // "05:00": only at night. What people ask for (opening a photo, a rescan or
 // backup started by hand) runs at once.
 type Background struct {
+	// From and To are one window for every day (the older form; Windows
+	// may take it over).
+	From string `yaml:"from" json:"from"`
+	To   string `yaml:"to" json:"to"`
+	// Windows are weekly windows, like mon-fri 23:00–08:00.
+	Windows []BackgroundWindow `yaml:"windows,omitempty" json:"windows"`
+	// Once are one-time windows; they drop out when they are over.
+	Once []BackgroundOnce `yaml:"once,omitempty" json:"once"`
+}
+
+// BackgroundWindow is a weekly window: days like "mon-fri", "sat,sun" or
+// empty (every day), times like 23:00 and 08:00 (past midnight it belongs
+// to the day it starts on).
+type BackgroundWindow struct {
+	Days string `yaml:"days,omitempty" json:"days"`
 	From string `yaml:"from" json:"from"`
 	To   string `yaml:"to" json:"to"`
 }
 
-// Window returns the parsed time window (any time when it is not valid).
+// BackgroundOnce is a one-time window: from "2026-11-03 09:00", to "13:00"
+// (or a full date and time).
+type BackgroundOnce struct {
+	From string `yaml:"from" json:"from"`
+	To   string `yaml:"to" json:"to"`
+}
+
+// Window returns the time windows (the valid parts; Validate tells about
+// the others).
 func (c *Config) Window() schedule.Window {
-	w, _ := schedule.Parse(c.Background.From, c.Background.To)
+	w, _ := c.window()
 	return w
+}
+
+func (c *Config) window() (schedule.Window, []string) {
+	var w schedule.Window
+	var errs []string
+	if r, err := schedule.ParseRule("", c.Background.From, c.Background.To); err != nil {
+		errs = append(errs, fmt.Sprintf("background %q–%q: %v", c.Background.From, c.Background.To, err))
+	} else if r != nil {
+		w.Rules = append(w.Rules, *r)
+	}
+	for i, b := range c.Background.Windows {
+		r, err := schedule.ParseRule(b.Days, b.From, b.To)
+		if err == nil && r == nil {
+			err = fmt.Errorf("need a start and an end time")
+		}
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("background.windows %d (%s %s–%s): %v", i+1, b.Days, b.From, b.To, err))
+			continue
+		}
+		w.Rules = append(w.Rules, *r)
+	}
+	for i, o := range c.Background.Once {
+		s, err := schedule.ParseSpan(o.From, o.To, time.Local)
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("background.once %d (%s–%s): %v", i+1, o.From, o.To, err))
+			continue
+		}
+		w.Extra = append(w.Extra, s)
+	}
+	return w, errs
+}
+
+// PrunedOnce tells whether loading dropped one-time windows that are over
+// (the file still has them until it is saved).
+func (c *Config) PrunedOnce() bool { return c.prunedOnce }
+
+// ClearPruned forgets PrunedOnce (after the file was written).
+func (c *Config) ClearPruned() { c.prunedOnce = false }
+
+// DropPastOnce removes the one-time windows that are over and tells
+// whether there were any.
+func (c *Config) DropPastOnce(now time.Time) bool {
+	var keep []BackgroundOnce
+	for _, o := range c.Background.Once {
+		if s, err := schedule.ParseSpan(o.From, o.To, time.Local); err == nil && !s.To.After(now) {
+			continue
+		}
+		keep = append(keep, o)
+	}
+	if len(keep) == len(c.Background.Once) {
+		return false
+	}
+	c.Background.Once = keep
+	return true
 }
 
 // Cache is where everything derived lives.
@@ -164,19 +246,69 @@ type Cache struct {
 	// Previews also generates the large lightbox previews in advance
 	// (useful for folders on a slow network share).
 	Previews bool `yaml:"previews" json:"previews"`
+	// MaxSize caps the cache folder ("4GB"; empty: no cap). Above it the
+	// large files (lightbox previews, video previews, converted videos)
+	// move to OverflowDir, oldest first; thumbnails, faces and the index
+	// stay. They are read from there and not moved back.
+	MaxSize     string `yaml:"max_size" json:"max_size"`
+	OverflowDir string `yaml:"overflow_dir" json:"overflow_dir"`
+}
+
+// MaxBytes is the cache cap in bytes (-1: none).
+func (c Cache) MaxBytes() int64 {
+	n, err := ParseSize(c.MaxSize)
+	if err != nil || strings.TrimSpace(c.MaxSize) == "" {
+		return -1
+	}
+	return n
+}
+
+// ParseSize reads sizes like "4GB", "500 MB", "2G" or "1048576" (K, M, G, T
+// count in 1024).
+func ParseSize(s string) (int64, error) {
+	s = strings.ToUpper(strings.TrimSpace(s))
+	if s == "" {
+		return 0, nil
+	}
+	s = strings.TrimSuffix(strings.TrimSuffix(s, "IB"), "B")
+	mult := int64(1)
+	if n := len(s); n > 0 {
+		switch s[n-1] {
+		case 'K':
+			mult = 1 << 10
+		case 'M':
+			mult = 1 << 20
+		case 'G':
+			mult = 1 << 30
+		case 'T':
+			mult = 1 << 40
+		}
+		if mult > 1 {
+			s = strings.TrimSpace(s[:n-1])
+		}
+	}
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil || f < 0 || math.IsInf(f, 0) || math.IsNaN(f) || f*float64(mult) >= math.MaxInt64 {
+		return 0, fmt.Errorf("%q ist keine Größe wie 4GB", s)
+	}
+	return int64(f * float64(mult)), nil
 }
 
 // Media controls thumbnails, video previews and the external tools.
 type Media struct {
-	Workers          int    `yaml:"workers" json:"workers"`
-	ThumbSize        int    `yaml:"thumb_size" json:"thumb_size"`     // short edge of grid thumbnails
-	PreviewSize      int    `yaml:"preview_size" json:"preview_size"` // long edge of lightbox previews
-	JPEGQuality      int    `yaml:"jpeg_quality" json:"jpeg_quality"`
-	VideoPreviews    bool   `yaml:"video_previews" json:"video_previews"`
-	VideoPreviewSize int    `yaml:"video_preview_size" json:"video_preview_size"` // short edge
-	Transcode        bool   `yaml:"transcode" json:"transcode"`                   // H.264 for browsers without HEVC
-	FFmpeg           string `yaml:"ffmpeg" json:"ffmpeg"`
-	ExifTool         string `yaml:"exiftool" json:"exiftool"`
+	Workers          int  `yaml:"workers" json:"workers"`
+	ThumbSize        int  `yaml:"thumb_size" json:"thumb_size"`     // short edge of grid thumbnails
+	PreviewSize      int  `yaml:"preview_size" json:"preview_size"` // long edge of lightbox previews
+	JPEGQuality      int  `yaml:"jpeg_quality" json:"jpeg_quality"`
+	VideoPreviews    bool `yaml:"video_previews" json:"video_previews"`
+	VideoPreviewSize int  `yaml:"video_preview_size" json:"video_preview_size"` // short edge
+	Transcode        bool `yaml:"transcode" json:"transcode"`                   // H.264 for browsers without HEVC
+	// SlowDecodes is how many HEIC/AVIF photos are decoded at the same time
+	// where the built-in decoder is slow (32-bit ARM, minutes and some
+	// hundred MB per photo; with heif-dec only for the files it cannot read).
+	SlowDecodes int    `yaml:"slow_decodes" json:"slow_decodes"`
+	FFmpeg      string `yaml:"ffmpeg" json:"ffmpeg"`
+	ExifTool    string `yaml:"exiftool" json:"exiftool"`
 }
 
 // Faces controls face detection and people.
@@ -307,7 +439,7 @@ func Defaults() *Config {
 		Cache: Cache{Dir: DefaultCacheDir()},
 		Media: Media{
 			Workers: max(2, runtime.NumCPU()/2), ThumbSize: 360, PreviewSize: 2048, JPEGQuality: 82,
-			VideoPreviews: true, VideoPreviewSize: 240, Transcode: true,
+			VideoPreviews: true, VideoPreviewSize: 240, Transcode: true, SlowDecodes: 1,
 		},
 		Faces: Faces{Mode: "off", Workers: max(1, runtime.NumCPU()/4), MinScore: 0.86, ClusterThreshold: 0.48, NamedThreshold: 0.42},
 		AI: AI{Mode: "off", URL: MittwaldAIURL, Model: "Qwen3.8-27B-NVFP4", Workers: 2, Languages: []string{"de", "en"}, ImageSize: 1024,
@@ -365,8 +497,12 @@ func envOrKeep(name string) string {
 // normalize fills gaps and expands ~ in paths.
 func (c *Config) normalize() {
 	d := Defaults()
+	if c.DropPastOnce(time.Now()) {
+		c.prunedOnce = true
+	}
 	// relative cache and model folders live beside the configuration file
 	c.Cache.Dir = besideConfig(c.path, ExpandHome(cmpOr(c.Cache.Dir, d.Cache.Dir)))
+	c.Cache.OverflowDir = ExpandHome(strings.TrimSpace(c.Cache.OverflowDir))
 	for i := range c.Library.Folders {
 		c.Library.Folders[i].Path = ExpandHome(c.Library.Folders[i].Path)
 	}
@@ -424,6 +560,9 @@ func (c *Config) normalize() {
 	c.UI.MapTiles = cmpOr(c.UI.MapTiles, d.UI.MapTiles)
 	if c.Media.Workers <= 0 {
 		c.Media.Workers = d.Media.Workers
+	}
+	if c.Media.SlowDecodes <= 0 {
+		c.Media.SlowDecodes = d.Media.SlowDecodes
 	}
 	if c.Media.ThumbSize <= 0 {
 		c.Media.ThumbSize = d.Media.ThumbSize
@@ -494,6 +633,31 @@ func (c *Config) Validate() error {
 		if !filepath.IsAbs(f.Path) {
 			errs = append(errs, fmt.Sprintf("Ordner %q: Pfad muss absolut sein", f.Path))
 		}
+	}
+	if _, err := ParseSize(c.Cache.MaxSize); err != nil {
+		errs = append(errs, fmt.Sprintf("cache.max_size: %v", err))
+	}
+	if o := c.Cache.OverflowDir; o != "" {
+		// also through symbolic links: previews in a photo folder would be
+		// scanned as photos
+		ro := RealPath(o)
+		overlaps := func(d string) bool {
+			rd := RealPath(d)
+			return inside(o, d) || inside(d, o) || inside(ro, rd) || inside(rd, ro)
+		}
+		switch {
+		case !filepath.IsAbs(o):
+			errs = append(errs, fmt.Sprintf("cache.overflow_dir %q: Pfad muss absolut sein", o))
+		case overlaps(c.Cache.Dir):
+			errs = append(errs, fmt.Sprintf("cache.overflow_dir %q: nicht im Cache-Ordner und nicht darüber", o))
+		}
+		for _, f := range c.Library.Folders {
+			if filepath.IsAbs(o) && overlaps(f.Path) {
+				errs = append(errs, fmt.Sprintf("cache.overflow_dir %q: nicht in einem Foto-Ordner und nicht darüber", o))
+			}
+		}
+	} else if strings.TrimSpace(c.Cache.MaxSize) != "" {
+		errs = append(errs, "cache.max_size braucht cache.overflow_dir")
 	}
 	switch c.AI.Mode {
 	case "off", "on":
@@ -571,9 +735,8 @@ func (c *Config) Validate() error {
 			errs = append(errs, fmt.Sprintf("library.rescan %q: %v", c.Library.Rescan, err))
 		}
 	}
-	if _, err := schedule.Parse(c.Background.From, c.Background.To); err != nil {
-		errs = append(errs, fmt.Sprintf("background %q–%q: %v", c.Background.From, c.Background.To, err))
-	}
+	_, werrs := c.window()
+	errs = append(errs, werrs...)
 	if c.Backup.Dir != "" {
 		if !filepath.IsAbs(c.Backup.Dir) {
 			errs = append(errs, "Sicherungsordner: Pfad muss absolut sein")

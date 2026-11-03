@@ -220,6 +220,7 @@ func (s *Setup) state(w http.ResponseWriter, r *http.Request) {
 		"tokenAuto":  c.Server.Token == "auto",
 		"listen":     s.o.Listen(),
 		"tools":      setup.Tools(c.Media.ExifTool, c.Media.FFmpeg),
+		"slowHEIF":   gallery.SlowHEIF(),
 		"caches":     gallery.FindCaches(setup.CacheCandidates(c.Cache.Dir)),
 		"cache":      setup.CheckCache(c.Cache.Dir),
 		"version":    version.String(),
@@ -434,6 +435,8 @@ func merge(cur, in *config.Config) *config.Config {
 	set("library.rescan", func() { n.Library.Rescan = in.Library.Rescan })
 	set("background.from", func() { n.Background.From = strings.TrimSpace(in.Background.From) })
 	set("background.to", func() { n.Background.To = strings.TrimSpace(in.Background.To) })
+	set("background.windows", func() { n.Background.Windows = in.Background.Windows })
+	set("background.once", func() { n.Background.Once = in.Background.Once })
 	set("library.folder_meta", func() { n.Library.FolderMeta = in.Library.FolderMeta })
 	set("library.write_files", func() { n.Library.WriteFiles = in.Library.WriteFiles })
 	set("library.write_metadata", func() { n.Library.WriteMetadata = in.Library.WriteMetadata })
@@ -447,9 +450,12 @@ func merge(cur, in *config.Config) *config.Config {
 	})
 	set("cache.dir", func() { n.Cache.Dir = config.ExpandHome(strings.TrimSpace(in.Cache.Dir)) })
 	set("cache.previews", func() { n.Cache.Previews = in.Cache.Previews })
+	set("cache.max_size", func() { n.Cache.MaxSize = strings.TrimSpace(in.Cache.MaxSize) })
+	set("cache.overflow_dir", func() { n.Cache.OverflowDir = config.ExpandHome(strings.TrimSpace(in.Cache.OverflowDir)) })
 	set("media.workers", func() { n.Media.Workers = in.Media.Workers })
 	set("media.video_previews", func() { n.Media.VideoPreviews = in.Media.VideoPreviews })
 	set("media.transcode", func() { n.Media.Transcode = in.Media.Transcode })
+	set("media.slow_decodes", func() { n.Media.SlowDecodes = in.Media.SlowDecodes })
 	set("media.thumb_size", func() { n.Media.ThumbSize = in.Media.ThumbSize })
 	set("media.exiftool", func() { n.Media.ExifTool = in.Media.ExifTool })
 	set("media.ffmpeg", func() { n.Media.FFmpeg = in.Media.FFmpeg })
