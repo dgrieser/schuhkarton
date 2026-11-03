@@ -424,6 +424,12 @@ func (l *Library) readMeta(ctx context.Context, todo []*Item) error {
 				applyMeta(it, m)
 				if _, side := xmpTarget(paths[j], it.Ext()); !side {
 					l.adoptXMP(it, m)
+				} else if str(m, "SkSig") != "" {
+					// written into the file by an older version (videos):
+					// taken over, and written again beside it; a sidecar
+					// read below wins
+					l.adoptXMP(it, m)
+					it.MetaSig = ""
 				}
 			}
 			p, side := xmpTarget(paths[j], it.Ext())

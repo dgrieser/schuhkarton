@@ -1,12 +1,17 @@
 package gallery
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
+	"encoding/gob"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestStoredBox(t *testing.T) {
@@ -224,5 +229,138 @@ func TestXMPPlanRegions(t *testing.T) {
 	if info, sigs, ok := mergeRegions(&p, map[string]any{}); !ok || len(sigs) != 1 ||
 		!strings.Contains(info, "Name=Anna,Type=Face") || !strings.Contains(info, "{W=40,H=30,Unit=pixel}") {
 		t.Errorf("mwg: %s %v", info, sigs)
+	}
+}
+
+// A leftover "_exiftool_tmp" from a stopped write goes; one that is still
+// being written stays.
+func TestExifToolStaleTmp(t *testing.T) {
+	et := FindExifTool("")
+	if et == "" {
+		t.Skip("exiftool not installed")
+	}
+	dir := t.TempDir()
+	p := filepath.Join(dir, "a.jpg")
+	saveJPEG(t, p, picture(3, 64, 48, 0), 90)
+	tool, err := startExifTool(et, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tool.close()
+	tmp := p + "_exiftool_tmp"
+	os.WriteFile(tmp, []byte("half"), 0o644)
+	if err := tool.write(p, []string{"-XMP-dc:Description=frisch"}); err == nil || exists(tmp) == false {
+		t.Errorf("a fresh temporary file was removed: %v", err)
+	}
+	old := time.Now().Add(-time.Hour)
+	os.Chtimes(tmp, old, old)
+	if err := tool.write(p, []string{"-XMP-dc:Description=alt"}); err != nil || exists(tmp) {
+		t.Errorf("leftover not removed: %v", err)
+	}
+}
+
+// Videos get a sidecar, the video file itself stays as it is; videos whose
+// metadata an older version wrote into them are written again, beside them.
+func TestVideoSidecar(t *testing.T) {
+	et := FindExifTool("")
+	ff, err := exec.LookPath("ffmpeg")
+	if et == "" || err != nil {
+		t.Skip("exiftool or ffmpeg not installed")
+	}
+	root := t.TempDir()
+	v := filepath.Join(root, "v.mp4")
+	if out, err := exec.Command(ff, "-v", "error", "-f", "lavfi", "-i", "testsrc=s=160x120:r=10:d=1", "-c:v", "mpeg4", v).CombinedOutput(); err != nil {
+		t.Fatalf("%v %s", err, out)
+	}
+	before, _ := os.Stat(v)
+	opt := Options{Roots: []Root{{Name: "B", Path: root}}, CacheDir: t.TempDir(), Workers: 1, ExifTool: et, FFmpeg: ff, WriteMetadata: true}
+	l, err := Open(opt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := l.Scan(ctx); err != nil {
+		t.Fatal(err)
+	}
+	it := byRel(l, "v.mp4")
+	l.setAI(it, &AIInfo{De: "Ein Testbild.", En: "A test picture.", Model: "vision-1", At: 1700000000})
+	if err := l.jobPass(ctx, &l.xmpJob, l.xmpTask()); err != nil {
+		t.Fatal(err)
+	}
+	l.closeXMPTools()
+	after, _ := os.Stat(v)
+	if !exists(v+".xmp") || after.Size() != before.Size() || !after.ModTime().Equal(before.ModTime()) || it.MetaSig == "" {
+		t.Fatalf("sidecar %v, video changed %v, sig %q", exists(v+".xmp"), after.Size() != before.Size(), it.MetaSig)
+	}
+	l.saveIndex()
+	l.Close()
+
+	// an index of an older version: the video had its metadata inside
+	f, _ := os.Open(filepath.Join(opt.CacheDir, "index.gob.gz"))
+	zr, _ := gzip.NewReader(f)
+	var idx indexFile
+	gob.NewDecoder(zr).Decode(&idx)
+	f.Close()
+	idx.VideoSidecars = false
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	gob.NewEncoder(zw).Encode(idx)
+	zw.Close()
+	os.WriteFile(filepath.Join(opt.CacheDir, "index.gob.gz"), buf.Bytes(), 0o644)
+	l2, err := Open(opt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l2.Close()
+	if it2 := byRel(l2, "v.mp4"); it2 == nil || it2.MetaSig != "" {
+		t.Errorf("old video not marked for its sidecar: %+v", it2)
+	}
+}
+
+// A video an older version wrote into: a new cache takes its descriptions
+// over and writes them into a sidecar.
+func TestVideoEmbeddedLegacy(t *testing.T) {
+	et := FindExifTool("")
+	ff, err := exec.LookPath("ffmpeg")
+	if et == "" || err != nil {
+		t.Skip("exiftool or ffmpeg not installed")
+	}
+	root := t.TempDir()
+	v := filepath.Join(root, "v.mp4")
+	if out, err := exec.Command(ff, "-v", "error", "-f", "lavfi", "-i", "testsrc=s=160x120:r=10:d=1", "-c:v", "mpeg4", v).CombinedOutput(); err != nil {
+		t.Fatalf("%v %s", err, out)
+	}
+	xmpInPlace[".mp4"] = true // as before
+	opt := Options{Roots: []Root{{Name: "B", Path: root}}, CacheDir: t.TempDir(), Workers: 1, ExifTool: et, FFmpeg: ff, WriteMetadata: true}
+	l, err := Open(opt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	l.Scan(ctx)
+	l.setAI(byRel(l, "v.mp4"), &AIInfo{De: "Ein Testbild.", En: "A test picture.", Model: "vision-1", At: 1700000000})
+	l.jobPass(ctx, &l.xmpJob, l.xmpTask())
+	l.closeXMPTools()
+	l.Close()
+	delete(xmpInPlace, ".mp4")
+	if exists(v + ".xmp") {
+		t.Fatal("sidecar while writing in place")
+	}
+
+	opt.CacheDir = t.TempDir() // a new cache
+	l2, err := Open(opt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l2.Close()
+	l2.Scan(ctx)
+	it := byRel(l2, "v.mp4")
+	if ai := l2.AIOf(it); ai == nil || ai.De != "Ein Testbild." || it.MetaSig != "" {
+		t.Fatalf("taken over: %+v sig %q", ai, it.MetaSig)
+	}
+	l2.jobPass(ctx, &l2.xmpJob, l2.xmpTask())
+	l2.closeXMPTools()
+	if !exists(v+".xmp") || it.MetaSig == "" {
+		t.Error("no sidecar written")
 	}
 }

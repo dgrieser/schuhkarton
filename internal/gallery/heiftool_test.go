@@ -1,6 +1,7 @@
 package gallery
 
 import (
+	"context"
 	"image"
 	"image/color"
 	"os"
@@ -102,14 +103,16 @@ func TestHEIFToolAfterBuiltIn(t *testing.T) {
 	}
 }
 
-// A HEIC waiting for the slow path gives its decode slot back meanwhile.
+// A HEIC waiting for the slow path holds no decode slot meanwhile.
 func TestSlowDecodeLendsSlot(t *testing.T) {
 	compiled, tool := wasmCompiled, heifTool
 	wasmCompiled, heifTool = false, func() string { return "" }
 	defer func() { wasmCompiled, heifTool = compiled, tool; setSlowDecodes(1) }()
 	setSlowDecodes(1)
-	heic := filepath.Join(t.TempDir(), "x.heic")
+	dir := t.TempDir()
+	heic := filepath.Join(dir, "x.heic")
 	os.WriteFile(heic, append([]byte("\x00\x00\x00\x18ftypheic\x00\x00\x00\x00mif1heic"), make([]byte, 64)...), 0o644)
+	l := &Library{opt: Options{CacheDir: dir}}
 	busy := slowSlot() // somebody else on the slow path
 	var mine []func()
 	for range cap(decodeSlots) - 1 {
@@ -117,15 +120,13 @@ func TestSlowDecodeLendsSlot(t *testing.T) {
 	}
 	done := make(chan struct{})
 	go func() {
-		release := decodeSlot() // the last slot
-		decodeHeld(heic)
-		release()
+		l.convert(context.Background(), ConvertRequest{Src: heic, Outputs: []ConvertOutput{{Path: filepath.Join(dir, "o.jpg"), Quality: 80}}}, false)
 		close(done)
 	}()
 	got := make(chan func())
 	go func() { got <- decodeSlot() }()
 	select {
-	case r := <-got: // the waiting HEIC lent its slot
+	case r := <-got: // the waiting HEIC holds no slot
 		busy()
 		r()
 	case <-time.After(2 * time.Second):

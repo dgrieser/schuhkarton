@@ -90,11 +90,11 @@ func (l *Library) writeExifConfig() {
 }
 
 // xmpInPlace: formats exiftool writes XMP into safely. Everything else
-// (RAW, AVI, BMP, MTS …) gets a sidecar.
+// (RAW, BMP …) gets a sidecar, and so do all videos: writing into a video
+// rewrites the whole file, gigabytes over a network share for a few lines.
 var xmpInPlace = map[string]bool{
 	".jpg": true, ".jpeg": true, ".jpe": true, ".tif": true, ".tiff": true, ".png": true, ".gif": true,
 	".webp": true, ".heic": true, ".heif": true, ".avif": true,
-	".mov": true, ".mp4": true, ".m4v": true, ".3gp": true, ".3g2": true,
 }
 
 // xmpTarget returns the file the metadata goes into; ext is the format of
@@ -833,7 +833,30 @@ func (e *exifTool) readOne(path string, tags []string) (map[string]any, error) {
 }
 
 // write applies assignments (escaped for -E) to one file, keeping its time.
+// An exiftool that was stopped mid-write (Schuhkarton restarted) leaves
+// "<file>_exiftool_tmp" behind, and exiftool then refuses the file; such a
+// leftover that nobody writes to any more goes, and the write is tried again.
 func (e *exifTool) write(path string, args []string) error {
+	err := e.writeOnce(path, args)
+	if err != nil && strings.Contains(err.Error(), "Temporary file already exists") && removeStaleTmp(path+"_exiftool_tmp") {
+		err = e.writeOnce(path, args)
+	}
+	return err
+}
+
+// staleTmpAge: a temporary file not written to for this long is a leftover
+// (a running write keeps changing it).
+var staleTmpAge = 2 * time.Minute
+
+func removeStaleTmp(p string) bool {
+	st, err := os.Stat(p)
+	if err != nil || time.Since(st.ModTime()) < staleTmpAge {
+		return false
+	}
+	return os.Remove(p) == nil
+}
+
+func (e *exifTool) writeOnce(path string, args []string) error {
 	full := append([]string{"-E", "-m", "-overwrite_original", "-P", "-charset", "filename=utf8", "-api", "LargeFileSupport=1"}, args...)
 	out, stderr, err := e.run(append(full, path))
 	if err != nil {

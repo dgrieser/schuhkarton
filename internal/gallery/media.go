@@ -103,18 +103,18 @@ func exists(p string) bool {
 // requests for the same file share one generation.
 func (l *Library) Ensure(ctx context.Context, it *Item, variant string) (string, error) {
 	// what a viewer asks for is made to the end, also when the viewer leaves
-	return l.ensure(ctx, context.WithoutCancel(ctx), it, variant)
+	return l.ensure(ctx, context.WithoutCancel(ctx), it, variant, false)
 }
 
 // ensureBG is Ensure for the background work: the making stops with ctx
 // (the time window closed).
 func (l *Library) ensureBG(ctx context.Context, it *Item, variant string) (string, error) {
-	return l.ensure(ctx, ctx, it, variant)
+	return l.ensure(ctx, ctx, it, variant, true)
 }
 
 // ensure waits for the file as long as ctx lives; work is the context the
 // making runs in.
-func (l *Library) ensure(ctx, work context.Context, it *Item, variant string) (string, error) {
+func (l *Library) ensure(ctx, work context.Context, it *Item, variant string, background bool) (string, error) {
 	p := l.CachePath(it, variant)
 	if q := l.cached(it, variant); q != "" {
 		return q, nil
@@ -130,7 +130,7 @@ func (l *Library) ensure(ctx, work context.Context, it *Item, variant string) (s
 		}
 		if pc.err != nil {
 			if errors.Is(pc.err, context.Canceled) && ctx.Err() == nil {
-				return l.ensure(ctx, work, it, variant) // the background stopped making it: make it here
+				return l.ensure(ctx, work, it, variant, background) // the background stopped making it: make it here
 			}
 			return "", pc.err
 		}
@@ -148,7 +148,7 @@ func (l *Library) ensure(ctx, work context.Context, it *Item, variant string) (s
 	case work.Err() != nil: // the background stopped (one photo in hand is finished, it takes seconds)
 		c.err = work.Err()
 	case it.Kind == Photo && (variant == VarSmall || variant == VarLarge):
-		c.err = l.makePhotoThumbs(it, variant)
+		c.err = l.makePhotoThumbs(work, it, variant, background)
 	case it.Kind == Video && variant == VarSmall:
 		c.err = l.makePoster(work, it)
 	case it.Kind == Video && variant == VarLarge:
@@ -175,44 +175,34 @@ func (l *Library) ensure(ctx, work context.Context, it *Item, variant string) (s
 
 // --- photos -------------------------------------------------------------------
 
-func (l *Library) makePhotoThumbs(it *Item, want string) error {
-	defer decodeSlot()()
+func (l *Library) makePhotoThumbs(ctx context.Context, it *Item, want string, background bool) error {
 	src := l.Path(it)
 	ext := it.Ext()
 	sp, lp := l.CachePath(it, VarSmall), l.CachePath(it, VarLarge)
 	both := want == VarLarge || l.opt.Previews && !l.hasCached(it, VarLarge)
 	q := l.opt.Quality
-	// Go decodes the common formats itself, HEIC and AVIF included
-	var img image.Image
-	var err error
-	if rawExt[ext] {
-		var b []byte
-		if b, err = extractPreview(l.opt.ExifTool, src); err == nil {
-			img, _, err = image.Decode(bytes.NewReader(b))
-		}
-	} else {
-		img, err = decodeHeld(src)
+	// Go decodes the common formats itself, HEIC and AVIF included, in the
+	// convert child (convert.go); scaling first and turning the small
+	// results is the same as the other way round, and cheaper
+	o := l.displayOrient(it)
+	req := ConvertRequest{Src: src, Raw: rawExt[ext], Orient: o}
+	if both {
+		req.Outputs = append(req.Outputs, ConvertOutput{Path: lp, Long: l.largeLong(), Quality: min(q+4, 95)})
 	}
+	if !exists(sp) {
+		req.Outputs = append(req.Outputs, ConvertOutput{Path: sp, Short: l.smallShort(), MaxLong: l.smallLong(), Quality: q, FromPrev: both})
+	}
+	res, err := l.convert(ctx, req, background)
 	if err == nil {
-		o := l.displayOrient(it)
-		// scaling is rotation-invariant here, so scale first and rotate the small result
-		b := img.Bounds()
-		w, h := b.Dx(), b.Dy()
+		w, h := res.W, res.H
 		if o >= 5 && o <= 8 {
 			w, h = h, w
 		}
 		l.setAspect(it, w, h)
-		if both {
-			large := resizeFit(img, l.largeLong(), l.largeLong())
-			if err := writeJPEG(lp, orient(large, o), min(q+4, 95)); err != nil {
-				return err
-			}
-			img = large
-		}
-		if !exists(sp) {
-			return writeJPEG(sp, orient(resizeShort(img, l.smallShort(), l.smallLong()), o), q)
-		}
 		return nil
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
 	}
 	if l.local != nil {
 		outs := []helper.ThumbSpec{{Path: sp, Short: l.smallShort(), MaxLong: l.smallLong(), Q: q}}
@@ -295,40 +285,13 @@ func firstLine(b []byte) string {
 	return s
 }
 
-func decodeFile(p string) (image.Image, error) { return decodeImage(p, false) }
-
-// decodeHeld is decodeFile for a caller that holds a decode slot: while a
-// HEIC waits for or runs on the slow path, that slot goes back to the pool,
-// so other photos are not stuck behind it.
-func decodeHeld(p string) (image.Image, error) { return decodeImage(p, true) }
-
-func decodeImage(p string, held bool) (image.Image, error) {
-	f, err := os.Open(p)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	if !wasmCompiled && isHEIF(f) {
-		if heifTool() != "" {
-			if img, err := decodeHEIFTool(p); err == nil {
-				return img, nil
-			}
-			// odd file (the tool's libheif is too old for it): the built-in
-			// decoder may still manage
-		}
-		if held {
-			<-decodeSlots
-			defer func() { decodeSlots <- struct{}{} }()
-		}
+// decodeFile decodes a picture in this process (cached JPEGs and the like;
+// photos go through the convert child, see convert.go).
+func decodeFile(p string) (image.Image, error) {
+	img, err := decodeForConvert(p, false)
+	if errors.Is(err, errNeedSlow) {
 		defer slowSlot()()
-	}
-	img, _, err := image.Decode(f)
-	if err != nil && wasmCompiled && FindHEIFTool() != "" && rewind(f) && isHEIF(f) {
-		// the built-in decoder failed (a file it does not know): a native
-		// libheif may read it
-		if img2, err2 := decodeHEIFToolWith(FindHEIFTool(), p); err2 == nil {
-			return img2, nil
-		}
+		img, err = decodeForConvert(p, true)
 	}
 	return img, err
 }
@@ -592,10 +555,11 @@ func (l *Library) PrintAsIs(it *Item) bool {
 // odd formats by the helper or ffmpeg. Videos give their preview frame.
 func (l *Library) PrintImage(ctx context.Context, it *Item) ([]byte, error) {
 	if it.Kind == Photo {
-		img, err := l.decodeOriginal(it, 0)
-		if err != nil {
-			img, err = l.decodeExternal(ctx, it)
+		b, err := l.originalJPEG(ctx, it, 0, 95, false)
+		if err == nil {
+			return b, nil
 		}
+		img, err := l.decodeExternal(ctx, it)
 		if err == nil {
 			var buf bytes.Buffer
 			if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: 95}); err != nil {
@@ -605,31 +569,7 @@ func (l *Library) PrintImage(ctx context.Context, it *Item) ([]byte, error) {
 		}
 		l.logf("print %s: %v (preview instead)", it.Rel, err)
 	}
-	return l.renderJPEG(ctx, it, 0, false, 95)
-}
-
-// decodeOriginal decodes a photo with Go (RAW: the embedded JPEG), at most
-// n pixels on the long edge (0: full size), turned like in the viewer.
-func (l *Library) decodeOriginal(it *Item, n int) (image.Image, error) {
-	defer decodeSlot()()
-	src := l.Path(it)
-	var img image.Image
-	var err error
-	if rawExt[it.Ext()] {
-		var b []byte
-		if b, err = extractPreview(l.opt.ExifTool, src); err == nil {
-			img, _, err = image.Decode(bytes.NewReader(b))
-		}
-	} else {
-		img, err = decodeHeld(src)
-	}
-	if err != nil {
-		return nil, err
-	}
-	if n > 0 {
-		img = resizeFit(img, n, n) // before turning: cheaper
-	}
-	return orient(img, l.displayOrient(it)), nil
+	return l.renderJPEG(ctx, it, 0, false, 95, false)
 }
 
 // decodeExternal decodes a photo Go cannot read at full size with the
@@ -669,29 +609,38 @@ func (l *Library) decodeExternal(ctx context.Context, it *Item) (image.Image, er
 // the long edge (0: as it comes). original reads photos from the file even
 // when a large preview exists; files Go cannot decode fall back to the
 // preview.
-func (l *Library) renderJPEG(ctx context.Context, it *Item, n int, original bool, quality int) ([]byte, error) {
-	var img image.Image
-	var err error
+func (l *Library) renderJPEG(ctx context.Context, it *Item, n int, original bool, quality int, background bool) ([]byte, error) {
 	if it.Kind == Photo && (original || !l.hasCached(it, VarLarge)) {
-		img, err = l.decodeOriginal(it, n)
-	}
-	if img == nil {
-		// the large preview, oriented and rotated already; the helper or
-		// ffmpeg make it for files Go cannot decode
-		var p string
-		if p, err = l.Ensure(ctx, it, VarLarge); err == nil {
-			img, err = decodeFile(p)
+		if b, err := l.originalJPEG(ctx, it, n, quality, background); err == nil {
+			return b, nil
 		}
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		// a file Go cannot decode: from the large preview
 	}
+	// the large preview, oriented and rotated already; the helper or
+	// ffmpeg make it for files Go cannot decode; background work stops
+	// with its context
+	ensure := l.Ensure
+	if background {
+		ensure = l.ensureBG
+	}
+	p, err := ensure(ctx, it, VarLarge)
 	if err != nil {
 		return nil, err
 	}
-	if n > 0 {
-		img = resizeFit(img, n, n)
+	if n <= 0 {
+		return os.ReadFile(p)
 	}
-	var buf bytes.Buffer
-	if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: quality}); err != nil {
+	tmp, err := os.CreateTemp(l.opt.CacheDir, "conv-*.jpg")
+	if err != nil {
 		return nil, err
 	}
-	return buf.Bytes(), nil
+	tmp.Close()
+	defer os.Remove(tmp.Name())
+	if _, err := l.convert(ctx, ConvertRequest{Src: p, Outputs: []ConvertOutput{{Path: tmp.Name(), Long: n, Quality: quality}}}, background); err != nil {
+		return nil, err
+	}
+	return os.ReadFile(tmp.Name())
 }

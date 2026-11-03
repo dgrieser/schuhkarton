@@ -260,7 +260,7 @@ func (l *Library) describeOne(ctx context.Context, it *Item) error {
 // long edge (0: 1024). original reads photos from the file even when a large
 // preview exists (text recognition wants every pixel up to n).
 func (l *Library) jobImage(ctx context.Context, it *Item, n int, original bool) ([]byte, error) {
-	return l.renderJPEG(ctx, it, cmpInt(n, 1024), original, 82)
+	return l.renderJPEG(ctx, it, cmpInt(n, 1024), original, 82, true)
 }
 
 // --- client -------------------------------------------------------------------
