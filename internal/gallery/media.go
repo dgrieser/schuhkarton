@@ -116,8 +116,8 @@ func (l *Library) ensureBG(ctx context.Context, it *Item, variant string) (strin
 // making runs in.
 func (l *Library) ensure(ctx, work context.Context, it *Item, variant string) (string, error) {
 	p := l.CachePath(it, variant)
-	if exists(p) {
-		return p, nil
+	if q := l.cached(it, variant); q != "" {
+		return q, nil
 	}
 	fk := it.key + variant
 	c := &call{done: make(chan struct{})}
@@ -169,16 +169,18 @@ func (l *Library) ensure(ctx, work context.Context, it *Item, variant string) (s
 		}
 		return "", c.err
 	}
+	l.kickSpill()
 	return p, nil
 }
 
 // --- photos -------------------------------------------------------------------
 
 func (l *Library) makePhotoThumbs(it *Item, want string) error {
+	defer decodeSlot()()
 	src := l.Path(it)
 	ext := it.Ext()
 	sp, lp := l.CachePath(it, VarSmall), l.CachePath(it, VarLarge)
-	both := want == VarLarge || l.opt.Previews
+	both := want == VarLarge || l.opt.Previews && !l.hasCached(it, VarLarge)
 	q := l.opt.Quality
 	// Go decodes the common formats itself, HEIC and AVIF included
 	var img image.Image
@@ -189,7 +191,7 @@ func (l *Library) makePhotoThumbs(it *Item, want string) error {
 			img, _, err = image.Decode(bytes.NewReader(b))
 		}
 	} else {
-		img, err = decodeFile(src)
+		img, err = decodeHeld(src)
 	}
 	if err == nil {
 		o := l.displayOrient(it)
@@ -293,19 +295,41 @@ func firstLine(b []byte) string {
 	return s
 }
 
-func decodeFile(p string) (image.Image, error) {
+func decodeFile(p string) (image.Image, error) { return decodeImage(p, false) }
+
+// decodeHeld is decodeFile for a caller that holds a decode slot: while a
+// HEIC waits for or runs on the slow path, that slot goes back to the pool,
+// so other photos are not stuck behind it.
+func decodeHeld(p string) (image.Image, error) { return decodeImage(p, true) }
+
+func decodeImage(p string, held bool) (image.Image, error) {
 	f, err := os.Open(p)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
-	if heifTool() != "" && isHEIF(f) {
-		if img, err := decodeHEIFTool(p); err == nil {
-			return img, nil
+	if !wasmCompiled && isHEIF(f) {
+		if heifTool() != "" {
+			if img, err := decodeHEIFTool(p); err == nil {
+				return img, nil
+			}
+			// odd file (the tool's libheif is too old for it): the built-in
+			// decoder may still manage
 		}
-		// odd file: the built-in decoder may still manage
+		if held {
+			<-decodeSlots
+			defer func() { decodeSlots <- struct{}{} }()
+		}
+		defer slowSlot()()
 	}
 	img, _, err := image.Decode(f)
+	if err != nil && wasmCompiled && FindHEIFTool() != "" && rewind(f) && isHEIF(f) {
+		// the built-in decoder failed (a file it does not know): a native
+		// libheif may read it
+		if img2, err2 := decodeHEIFToolWith(FindHEIFTool(), p); err2 == nil {
+			return img2, nil
+		}
+	}
 	return img, err
 }
 
@@ -539,7 +563,9 @@ func (l *Library) StreamH264(ctx context.Context, it *Item, w io.Writer) error {
 	waitErr := cmd.Wait()
 	f.Close()
 	if copyErr == nil && waitErr == nil {
-		return os.Rename(tmp, final)
+		err := os.Rename(tmp, final)
+		l.kickSpill()
+		return err
 	}
 	os.Remove(tmp)
 	if copyErr != nil {
@@ -585,6 +611,7 @@ func (l *Library) PrintImage(ctx context.Context, it *Item) ([]byte, error) {
 // decodeOriginal decodes a photo with Go (RAW: the embedded JPEG), at most
 // n pixels on the long edge (0: full size), turned like in the viewer.
 func (l *Library) decodeOriginal(it *Item, n int) (image.Image, error) {
+	defer decodeSlot()()
 	src := l.Path(it)
 	var img image.Image
 	var err error
@@ -594,7 +621,7 @@ func (l *Library) decodeOriginal(it *Item, n int) (image.Image, error) {
 			img, _, err = image.Decode(bytes.NewReader(b))
 		}
 	} else {
-		img, err = decodeFile(src)
+		img, err = decodeHeld(src)
 	}
 	if err != nil {
 		return nil, err
@@ -645,7 +672,7 @@ func (l *Library) decodeExternal(ctx context.Context, it *Item) (image.Image, er
 func (l *Library) renderJPEG(ctx context.Context, it *Item, n int, original bool, quality int) ([]byte, error) {
 	var img image.Image
 	var err error
-	if it.Kind == Photo && (original || !exists(l.CachePath(it, VarLarge))) {
+	if it.Kind == Photo && (original || !l.hasCached(it, VarLarge)) {
 		img, err = l.decodeOriginal(it, n)
 	}
 	if img == nil {

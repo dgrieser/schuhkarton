@@ -23,11 +23,14 @@ import (
 // takes no videos gets 8 frames of the clip as pictures instead.
 
 const (
-	clipFrames  = 32  // frames of the clip at most
-	clipEdge    = 480 // long edge of the clip
-	clipFPS     = 2.0 // frames per second of short videos
-	clipPics    = 8   // frames sent as pictures when the service takes no videos
-	spokenChars = 3000
+	clipFrames = 32  // frames of the clip at most
+	clipEdge   = 480 // long edge of the clip
+	clipFPS    = 2.0 // frames per second of short videos
+	clipPics   = 8   // frames sent as pictures when the service takes no videos
+	// the model refuses a clip of one frame ("Got bad request", HTTP 400)
+	clipMinFrames = 2
+	clipShort     = 4.0 // frames of a video shorter than one second
+	spokenChars   = 3000
 	// longer videos are sampled by jumping to each frame; shorter ones are
 	// decoded whole, which reads the file once
 	clipSeekAbove = 60.0
@@ -60,15 +63,27 @@ func (l *Library) videoClip(ctx context.Context, it *Item) (string, int, error) 
 		in = []string{"-framerate", fmt.Sprintf("%.5f", float64(frames)/d), "-i", filepath.Join(dir, "f%02d.jpg")}
 	} else {
 		fps := clipFPS
+		vf := ""
 		switch {
 		case d <= 0: // unknown: one frame a second from the start
 			fps = 1
 		case d*clipFPS > clipFrames: // 32 frames spread over all of it
 			fps = clipFrames / d
+		case d*clipFPS < clipMinFrames:
+			// a fraction of a second: at 2 fps one frame or none would be
+			// left, and the model takes no clip below two frames. A few
+			// frames over all of it, and the last one once more for a video
+			// of a single frame.
+			fps = min(30, clipShort/d)
+			vf = fmt.Sprintf("fps=%.5f,tpad=stop_mode=clone:stop=1,%s", fps, scale)
+			frames = int(math.Ceil(d*fps)) + 1
 		default:
-			frames = max(1, int(math.Ceil(d*clipFPS)))
+			frames = max(clipMinFrames, int(math.Ceil(d*clipFPS)))
 		}
-		in = []string{"-i", l.Path(it), "-map", "0:v:0", "-an", "-sn", "-dn", "-vf", fmt.Sprintf("fps=%.5f,%s", fps, scale)}
+		if vf == "" {
+			vf = fmt.Sprintf("fps=%.5f,%s", fps, scale)
+		}
+		in = []string{"-i", l.Path(it), "-map", "0:v:0", "-an", "-sn", "-dn", "-vf", vf}
 	}
 	run := func(codec ...string) error {
 		args := append([]string{"-v", "error", "-nostdin", "-y"}, in...)

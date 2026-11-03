@@ -163,6 +163,10 @@ svg.i.fill { fill: currentColor; stroke: none; }
 input[type=range] { accent-color: var(--accent); width: 110px; }
 select.sel { height: 38px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); padding: 0 10px; }
 .chips { display: flex; gap: 8px; flex-wrap: wrap; }
+.bgrow { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
+.bgrow .chips { gap: 4px; }
+.bgrow .chip { padding: 4px 9px; }
+.bgrow input[type=time], .bgrow input[type=date] { width: auto; }
 .chip {
   display: inline-flex; align-items: center; gap: 8px;
   height: 32px; padding: 0 12px; border-radius: 99px;

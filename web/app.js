@@ -2135,7 +2135,10 @@
         if (s.import.error) rows.push(`<div class="row"><span class="bad" title="${esc(t(s.import.error))}">${t('Import')}: ${esc(t(s.import.error))}</span></div>`);
       }
       if (waiting && rows.length) {
-        const at = new Date(s.windowNext * 1000).toLocaleTimeString(LANG === 'en' ? 'en-GB' : 'de-DE', { hour: '2-digit', minute: '2-digit' });
+        const when = new Date(s.windowNext * 1000), loc = LANG === 'en' ? 'en-GB' : 'de-DE';
+        // the next window may be on another day (weekly windows)
+        const at = (when.toDateString() === new Date().toDateString() ? '' : when.toLocaleDateString(loc, { weekday: 'short' }) + ' ') +
+          when.toLocaleTimeString(loc, { hour: '2-digit', minute: '2-digit' });
         rows.unshift(`<div class="row"><span class="faint" title="${esc(t('Zeitfenster für Hintergrundarbeit: {w}', { w: s.window }))}">${t('Hintergrundarbeit ab {t}', { t: at })}</span></div>`);
         busy = scanning; // nothing to watch closely until then
       }

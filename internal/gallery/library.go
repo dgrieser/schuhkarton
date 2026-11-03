@@ -56,6 +56,11 @@ type Options struct {
 	VideoPreviews    bool // animated video previews
 	VideoPreviewSize int  // their short edge
 	Transcode        bool // H.264 for browsers that cannot play the original
+	SlowDecodes      int  // HEIC/AVIF decoded at once where that is slow (see heiftool.go)
+	// MaxCache caps the cache folder in bytes (-1: no cap); above it large
+	// files move to OverflowDir (see cachetier.go).
+	MaxCache    int64
+	OverflowDir string
 
 	// IgnoreFolders: no date, place or category from folder names.
 	IgnoreFolders bool
@@ -274,6 +279,7 @@ type Library struct {
 	xmpIdle   []*exifTool // exiftool processes for writing, between files
 	xmpFails  map[string]xmpFailure
 	xmpSoon   atomic.Bool // a pass is due in a minute
+	tiers     cacheTiers
 	dupe      dupeStore
 	marks     markStore // guarded by favMu
 	notes     noteStore
@@ -323,6 +329,10 @@ func Open(opt Options) (*Library, error) {
 		return nil, errors.New("no folders to serve")
 	}
 	opt = withDefaults(opt)
+	setSlowDecodes(opt.SlowDecodes)
+	if opt.OverflowDir == "" {
+		opt.MaxCache = -1
+	}
 	for _, d := range []string{"", "thumbs", "faces"} {
 		if err := os.MkdirAll(filepath.Join(opt.CacheDir, d), 0o755); err != nil {
 			return nil, err
@@ -373,6 +383,7 @@ func Open(opt Options) (*Library, error) {
 	}
 	l.people = newPeopleStore(filepath.Join(opt.CacheDir, "people.json"), opt.Faces.ClusterThreshold, opt.Faces.NamedThreshold)
 	l.importJob.wake = make(chan struct{}, 1)
+	l.tiers.wake = make(chan struct{}, 1)
 	l.loadEdits()
 	if err := l.SetRules(opt.Rules); err != nil {
 		l.logf("Regeln ausgeschaltet: %v", err)

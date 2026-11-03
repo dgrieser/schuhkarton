@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 
@@ -58,6 +59,10 @@ func (l *Library) Start(ctx context.Context) {
 		l.bg.Add(1)
 		go l.dupeLoop(ctx)
 	}
+	if l.opt.OverflowDir != "" && l.opt.MaxCache >= 0 {
+		l.bg.Add(1)
+		go l.spillLoop(ctx)
+	}
 	if l.opt.Import.Dir != "" {
 		l.bg.Add(1)
 		go l.importLoop(ctx)
@@ -79,6 +84,12 @@ func (l *Library) generate(ctx context.Context) {
 		return
 	}
 	l.logf("background: %d thumbnails, %d video previews, %d face scans", len(thumbs), len(previews), len(faces))
+	if !wasmCompiled {
+		// HEIC/AVIF that the native tool cannot read take minutes each here:
+		// last, so they do not hold up everything else
+		heifLast(thumbs)
+		heifLast(faces)
+	}
 
 	var wg sync.WaitGroup
 	run := func(list []*Item, workers int, fn func(*Item)) {
@@ -167,7 +178,7 @@ func (l *Library) mediaTodo() (thumbs, previews, faces []*Item) {
 	fs := l.FaceStatus()
 	faceOK, recog := fs.Detection, fs.Recognition
 	for _, it := range items {
-		if !exists(l.CachePath(it, VarSmall)) || (l.opt.Previews && it.Kind == Photo && !exists(l.CachePath(it, VarLarge))) {
+		if !exists(l.CachePath(it, VarSmall)) || (l.opt.Previews && it.Kind == Photo && !l.hasCached(it, VarLarge)) {
 			thumbs = append(thumbs, it)
 		} else if it.Kind == Photo {
 			nThumb++
@@ -175,7 +186,7 @@ func (l *Library) mediaTodo() (thumbs, previews, faces []*Item) {
 			nPoster++
 		}
 		if it.Kind == Video && l.opt.VideoPreviews {
-			if exists(l.CachePath(it, VarPreview)) {
+			if l.hasCached(it, VarPreview) {
 				nPrev++
 			} else {
 				previews = append(previews, it)
@@ -245,3 +256,25 @@ func (l *Library) Go(fn func()) {
 
 // GenerateAll creates every missing derivative and returns when done.
 func (l *Library) GenerateAll(ctx context.Context) { l.generate(ctx) }
+
+// heifLast moves HEIC/AVIF photos to the end, keeping the order otherwise.
+func heifLast(list []*Item) {
+	slices.SortStableFunc(list, func(a, b *Item) int {
+		ha, hb := heifItem(a), heifItem(b)
+		switch {
+		case ha == hb:
+			return 0
+		case hb:
+			return -1
+		}
+		return 1
+	})
+}
+
+func heifItem(it *Item) bool {
+	switch it.Ext() {
+	case ".heic", ".heif", ".avif", ".hif":
+		return true
+	}
+	return false
+}

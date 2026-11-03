@@ -244,6 +244,9 @@ func libOptions(cfg *config.Config) gallery.Options {
 		ThumbSize: cfg.Media.ThumbSize, PreviewSize: cfg.Media.PreviewSize, Quality: cfg.Media.JPEGQuality,
 		Previews: cfg.Cache.Previews, VideoPreviews: cfg.Media.VideoPreviews, VideoPreviewSize: cfg.Media.VideoPreviewSize,
 		Transcode:     cfg.Media.Transcode,
+		SlowDecodes:   cfg.Media.SlowDecodes,
+		MaxCache:      cfg.Cache.MaxBytes(),
+		OverflowDir:   cfg.Cache.OverflowDir,
 		IgnoreFolders: !cfg.Library.FolderMeta, WriteFiles: cfg.Library.WriteFiles, WriteMetadata: cfg.Library.WriteMetadata, TrashDays: cfg.Library.TrashDays,
 		DocFolders: cfg.Library.Documents,
 		Faces: gallery.FaceOptions{
@@ -346,6 +349,7 @@ func runServe(cmd string, args []string) error {
 		return err
 	}
 	r.cfg = cfg
+	go r.dropPastOnce(ctx)
 	if cfg.NeedsSetup() {
 		token := r.setupToken
 		r.sw.Set(server.NewSetup(server.SetupOptions{
@@ -398,11 +402,50 @@ type runner struct {
 	setupToken string
 
 	mu     sync.Mutex
+	saveMu sync.Mutex // one writer of the settings file
 	cfg    *config.Config
 	lib    *gallery.Library
 	cancel context.CancelFunc
 	token  string
 	ln     net.Listener
+}
+
+// dropPastOnce removes one-time background windows from the settings file
+// once they are over (the schedule ignores them anyway; the settings page
+// should not list them). No restart: nothing else changes.
+func (r *runner) dropPastOnce(ctx context.Context) {
+	t := time.NewTicker(time.Minute)
+	defer t.Stop()
+	var failed *config.Config // the settings it could not write: no new try every minute
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		r.saveMu.Lock()
+		r.mu.Lock()
+		cur := r.cfg
+		r.mu.Unlock()
+		if cur != nil && cur != failed && cur.Path() != "" && cur.Found() {
+			next := *cur
+			// over now, or already when the file was read (it still has them)
+			if next.DropPastOnce(time.Now()) || cur.PrunedOnce() {
+				next.ClearPruned()
+				if err := next.Save(); err != nil {
+					log.Printf("einmalige Zeitfenster entfernen: %v", err)
+					failed = cur
+				} else {
+					r.mu.Lock()
+					if r.cfg == cur {
+						r.cfg = &next
+					}
+					r.mu.Unlock()
+				}
+			}
+		}
+		r.saveMu.Unlock()
+	}
 }
 
 func (r *runner) config() *config.Config {
@@ -526,7 +569,17 @@ func (r *runner) stop() {
 func (r *runner) apply(ctx context.Context, p server.Plan, progress func(server.Progress)) (string, error) {
 	cfg := p.Config
 	progress(server.Progress{Phase: "Einstellungen speichern"})
-	if err := cfg.Save(); err != nil {
+	r.saveMu.Lock()
+	err := cfg.Save()
+	if err == nil {
+		// the new settings at once: dropPastOnce must not write the old
+		// ones back while the gallery restarts
+		r.mu.Lock()
+		r.cfg = cfg
+		r.mu.Unlock()
+	}
+	r.saveMu.Unlock()
+	if err != nil {
 		return "", err
 	}
 	r.sw.Set(restarting{})

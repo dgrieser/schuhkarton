@@ -525,6 +525,16 @@ The setup page writes `config.yaml` to `$XDG_CONFIG_HOME/schuhkarton/` (macOS:
 `~/Library/Application Support/schuhkarton/`, Windows: `%AppData%\schuhkarton\`).
 `-config FILE` or `SCHUHKARTON_CONFIG` names another file.
 
+**Cache on a small disk:** `cache.max_size` (e.g. `4GB`) with
+`cache.overflow_dir` (e.g. a folder on the NAS) keeps the cache folder below
+the cap: above it the large files (lightbox previews, video previews,
+converted videos) move to the overflow folder, oldest first, and are read
+from there; they are not moved back. Thumbnails, face crops and the index
+always stay in the cache folder. The overflow folder must exist already, on another
+disk: while it is missing or the share is not mounted, nothing moves. The moving is
+background work and keeps to the time window. The overflow folder can be rebuilt any time, so it is not
+part of the backup.
+
 **One data folder:** `-home DIR` (or `SCHUHKARTON_HOME=DIR`) keeps everything
 Schuhkarton writes in one place: `DIR/config.yaml`, `DIR/users.json` and the
 cache in `DIR/cache/` (index, thumbnails, faces, people, favorites, edits,
@@ -574,11 +584,14 @@ library:
 cache:
   dir: ~/.cache/schuhkarton
   previews: false             # true: large previews in advance (slow network shares)
+  max_size: ""                # e.g. 4GB: above it large previews and videos move to overflow_dir
+  overflow_dir: ""            # e.g. a folder on the NAS; read from there, not moved back
 media:
   workers: 12
   thumb_size: 360             # short edge of grid thumbnails
   preview_size: 2048          # long edge of lightbox previews
   jpeg_quality: 82
+  slow_decodes: 1             # 32-bit ARM: HEIC/AVIF decoded at once by the slow built-in decoder
   video_previews: true
   video_preview_size: 240
   transcode: true             # H.264 for browsers without HEVC
@@ -620,9 +633,14 @@ backup:
   originals: true
   cache: true
   config: true
-background:                   # time window for background work; both empty: any time
-  from: ""                    # e.g. "23:00"
-  to: ""                      # e.g. "05:00" (a window may pass midnight)
+background:                   # time windows for background work; none: any time
+  windows:                    # weekly; past midnight a window belongs to its start day
+    - {days: mon-fri, from: "23:00", to: "08:00"}
+    - {days: "sat,sun", from: "00:00", to: "07:00"}   # days empty: every day
+  once:                       # one-time, dropped when over
+    - {from: "2026-11-03 09:00", to: "13:00"}
+  from: ""                    # older form: one window for every day
+  to: ""
 worker:                       # for "schuhkarton worker"
   listen: 0.0.0.0:8089
   token: ""
@@ -632,16 +650,19 @@ worker:                       # for "schuhkarton worker"
 Thumbnail sizes apply to new thumbnails; to rebuild all of them, delete
 `thumbs/` in the cache folder.
 
-**Background work at night:** `background.from` and `background.to` (on the
-settings page under *Storage*) keep the work Schuhkarton does on its own
-inside a daily time window, e.g. 23:00 to 05:00: thumbnails and previews,
+**Background work at night:** `background.windows` (on the settings page
+under *Storage*) keep the work Schuhkarton does on its own inside weekly time
+windows, e.g. Monday to Friday 23:00 to 08:00 and at the weekend 00:00 to
+07:00; `background.once` adds one-time windows (today 09:00 to 13:00) that
+drop out of the settings when they are over. Days are written like
+`mon-fri`, `sat,sun` or `mo,mi,fr`. The windows cover thumbnails and previews,
 faces, descriptions, text and speech recognition, writing metadata into
 files, duplicates, the import folder, regular rescans and backups. Work that
 is still running when the window closes stops and goes on in the next one;
 a scan or an import that has begun finishes. The status shows when the work
 starts again. The scan at start, what somebody opens (a thumbnail, a video)
 and what an admin starts by hand (*Rescan*, *Back up now*) run at once.
-Empty fields (the default) mean any time.
+No windows (the default) means any time.
 
 ## Backup and restore
 

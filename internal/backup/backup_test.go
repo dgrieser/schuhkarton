@@ -209,7 +209,7 @@ func TestLoopWaitsForWindow(t *testing.T) {
 	os.WriteFile(filepath.Join(src, "a.jpg"), []byte("a"), 0o644)
 	now := time.Now()
 	m := now.Hour()*60 + now.Minute()
-	w := schedule.Window{From: (m + 120) % 1440, To: (m + 180) % 1440} // opens in two hours
+	w := schedule.Daily((m+120)%1440, (m+180)%1440) // opens in two hours
 	r := New(Options{Dir: dir, Sources: []Source{{"Bilder", src}}, Originals: true, Every: 24 * time.Hour, Window: w})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

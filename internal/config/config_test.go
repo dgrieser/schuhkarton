@@ -276,3 +276,104 @@ func TestSpeechAndMetadataSettings(t *testing.T) {
 		t.Errorf("env: %q %v %v", c.AI.Speech, c.Library.WriteMetadata, err)
 	}
 }
+
+func TestSlowDecodes(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config.yaml")
+	os.WriteFile(p, []byte("library:\n  folders: [{path: /srv/Bilder}]\nmedia:\n  slow_decodes: 0\n"), 0o600)
+	c, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Media.SlowDecodes != 1 {
+		t.Errorf("default %d", c.Media.SlowDecodes)
+	}
+	t.Setenv("SCHUHKARTON_MEDIA_SLOW_DECODES", "3")
+	if c, _ = Load(p); c.Media.SlowDecodes != 3 || c.Locked("media.slow_decodes") == "" {
+		t.Errorf("env %d", c.Media.SlowDecodes)
+	}
+}
+
+func TestCacheCap(t *testing.T) {
+	for in, want := range map[string]int64{"4GB": 4 << 30, "500 MB": 500 << 20, "2g": 2 << 30, "1048576": 1 << 20, "1.5GiB": 3 << 29, "": 0} {
+		if got, err := ParseSize(in); err != nil || got != want {
+			t.Errorf("ParseSize(%q) = %d, %v", in, got, err)
+		}
+	}
+	for _, bad := range []string{"viel", "10000000000000000000", "1e30T", "Inf"} {
+		if _, err := ParseSize(bad); err == nil {
+			t.Errorf("%s accepted", bad)
+		}
+	}
+	c := Defaults()
+	c.Cache.Dir = "/var/cache/sk"
+	c.Library.Folders = []Folder{{Path: "/srv/Bilder"}}
+	if c.Cache.MaxBytes() != -1 {
+		t.Error("no cap")
+	}
+	c.Cache.MaxSize = "4GB"
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "overflow_dir") {
+		t.Errorf("cap without overflow: %v", err)
+	}
+	for _, bad := range []string{"nas/cache", "/var/cache/sk/over", "/srv/Bilder/cache", "/srv"} {
+		c.Cache.OverflowDir = bad
+		if err := c.Validate(); err == nil {
+			t.Errorf("overflow %q accepted", bad)
+		}
+	}
+	t.Setenv("HOME", "/home/x")
+	p := filepath.Join(t.TempDir(), "config.yaml")
+	os.WriteFile(p, []byte("library:\n  folders: [{path: /srv/Bilder}]\ncache:\n  max_size: 4GB\n  overflow_dir: ~/nas-cache\n"), 0o600)
+	if l, err := Load(p); err != nil || l.Cache.OverflowDir != "/home/x/nas-cache" || l.Validate() != nil {
+		t.Errorf("~ in overflow_dir: %v %q", err, l.Cache.OverflowDir)
+	}
+	// a symbolic link into a photo folder
+	photos, links := t.TempDir(), t.TempDir()
+	os.Symlink(photos, filepath.Join(links, "cache"))
+	c.Library.Folders = []Folder{{Path: photos}}
+	c.Cache.OverflowDir = filepath.Join(links, "cache", "sub")
+	if err := c.Validate(); err == nil {
+		t.Error("overflow through a link into the photos accepted")
+	}
+	c.Library.Folders = []Folder{{Path: "/srv/Bilder"}}
+	c.Cache.OverflowDir = "/mnt/nas/cache"
+	if err := c.Validate(); err != nil || c.Cache.MaxBytes() != 4<<30 {
+		t.Errorf("valid: %v %d", err, c.Cache.MaxBytes())
+	}
+}
+
+func TestBackgroundWindows(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config.yaml")
+	os.WriteFile(p, []byte(`library:
+  folders: [{path: /srv/Bilder}]
+background:
+  windows:
+    - {days: mon-fri, from: "23:00", to: "08:00"}
+    - {days: "sat,sun", from: "00:00", to: "07:00"}
+  once:
+    - {from: "2000-01-01 09:00", to: "13:00"}
+    - {from: "2999-01-01 09:00", to: "13:00"}
+`), 0o600)
+	c, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Background.Once) != 1 || !c.PrunedOnce() { // the one in 2000 is over
+		t.Errorf("once %+v", c.Background.Once)
+	}
+	w := c.Window()
+	if len(w.Rules) != 2 || len(w.Extra) != 1 || w.Rules[0].From != 23*60 {
+		t.Errorf("window %+v", w)
+	}
+	c.Background.Windows = append(c.Background.Windows, BackgroundWindow{Days: "feiertags", From: "10:00", To: "11:00"})
+	c.Background.Once = append(c.Background.Once, BackgroundOnce{From: "morgen", To: "13:00"})
+	err = c.Validate()
+	if err == nil || !strings.Contains(err.Error(), "background.windows 3") || !strings.Contains(err.Error(), "background.once 2") {
+		t.Errorf("bad windows: %v", err)
+	}
+	// the older form still works
+	c2 := Defaults()
+	c2.Background = Background{From: "23:00", To: "05:00"}
+	if w := c2.Window(); len(w.Rules) != 1 || w.Rules[0].Days != 127 {
+		t.Errorf("older form %+v", w)
+	}
+}

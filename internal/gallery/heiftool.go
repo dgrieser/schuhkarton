@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -27,13 +28,61 @@ var heifTool = sync.OnceValue(func() string {
 	if wasmCompiled {
 		return ""
 	}
+	return FindHEIFTool()
+})
+
+// Decoding a photo holds tens of MB (a 12 MP picture, then its scaled
+// copies), a HEIC in interpreted WebAssembly some hundred MB for minutes.
+// A browser asks for many previews at once, so the decodes queue: as many
+// at a time as there are CPUs, and one at a time on the slow path.
+var (
+	decodeSlots = make(chan struct{}, max(2, runtime.NumCPU()))
+	slowSlots   atomic.Pointer[chan struct{}] // media.slow_decodes, 1 when not set
+)
+
+func setSlowDecodes(n int) {
+	ch := make(chan struct{}, max(1, n))
+	slowSlots.Store(&ch)
+}
+
+// slowSlot waits for a slot on the slow path; call the result to give it back.
+func slowSlot() func() {
+	p := slowSlots.Load()
+	if p == nil {
+		setSlowDecodes(1)
+		p = slowSlots.Load()
+	}
+	ch := *p
+	ch <- struct{}{}
+	return func() { <-ch }
+}
+
+// SlowHEIF tells whether HEIC/AVIF photos decode slowly here (no
+// WebAssembly compiler for this CPU): then heif-dec and media.slow_decodes
+// matter.
+func SlowHEIF() bool { return !wasmCompiled }
+
+// FindHEIFTool returns the native HEIF decoder used on such machines, or "".
+func FindHEIFTool() string {
 	for _, c := range []string{"heif-dec", "heif-convert"} {
 		if p, err := exec.LookPath(c); err == nil {
 			return p
 		}
 	}
 	return ""
-})
+}
+
+// decodeSlot waits for a free decode slot; call the result to give it back.
+func decodeSlot() func() {
+	decodeSlots <- struct{}{}
+	return func() { <-decodeSlots }
+}
+
+// rewind goes back to the start of f.
+func rewind(f io.Seeker) bool {
+	_, err := f.Seek(0, io.SeekStart)
+	return err == nil
+}
 
 // isHEIF tells by its content whether f is a HEIC/HEIF or AVIF image (also
 // one with a .jpeg name) and rewinds it.
@@ -49,8 +98,9 @@ func isHEIF(f io.ReadSeeker) bool {
 }
 
 // decodeHEIFTool decodes with the native tool, or says why it could not.
-func decodeHEIFTool(p string) (image.Image, error) {
-	tool := heifTool()
+func decodeHEIFTool(p string) (image.Image, error) { return decodeHEIFToolWith(heifTool(), p) }
+
+func decodeHEIFToolWith(tool, p string) (image.Image, error) {
 	if tool == "" {
 		return nil, errors.New("no heif tool")
 	}
