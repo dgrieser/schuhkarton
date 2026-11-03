@@ -66,6 +66,16 @@ Optionen:
 func main() {
 	log.SetFlags(log.Ltime)
 	defaultMemoryLimit()
+	// "schuhkarton convert": the child that decodes and scales one photo for
+	// the gallery (gallery/convert.go); not a command for people
+	if len(os.Args) == 2 && os.Args[1] == "convert" {
+		if err := gallery.RunConvert(os.Stdin, os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+	gallery.ConvertCommand = gallery.ConvertSelfCommand()
 	args := takeHome(os.Args[1:])
 	cmd := "serve"
 	if len(args) > 0 {

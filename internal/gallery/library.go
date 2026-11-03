@@ -320,6 +320,9 @@ type indexFile struct {
 	Version int
 	Items   []*Item
 	Formats bool // the formats of all items were checked (Item.Format)
+	// VideoSidecars: the metadata of videos goes beside them (xmpInPlace).
+	// An older index has it in some videos: written again, into a sidecar.
+	VideoSidecars bool
 }
 
 // Open loads a cached index (if any) and prepares the library. Call Scan
@@ -648,13 +651,22 @@ func (l *Library) loadIndex() {
 		byName[r.Name] = i
 	}
 	var items []*Item
+	moved := 0
 	for _, it := range idx.Items {
 		i, ok := byName[it.RootName]
 		if !ok {
 			continue
 		}
 		it.Root = i
+		if !idx.VideoSidecars && it.Kind == Video && it.MetaSig != "" {
+			it.MetaSig = "" // written into the file before; a sidecar now
+			moved++
+		}
 		items = append(items, it)
+	}
+	if moved > 0 {
+		l.logf("index: metadata of %d videos goes into sidecars now", moved)
+		l.markDirty()
 	}
 	l.setItems(items)
 	l.formatsKnown.Store(idx.Formats)
@@ -694,7 +706,7 @@ func (l *Library) saveIndex() {
 	}
 	zw := gzip.NewWriter(f)
 	l.mu.RLock()
-	err = gob.NewEncoder(zw).Encode(indexFile{Version: indexVersion, Items: l.items, Formats: l.formatsKnown.Load()})
+	err = gob.NewEncoder(zw).Encode(indexFile{Version: indexVersion, Items: l.items, Formats: l.formatsKnown.Load(), VideoSidecars: true})
 	l.mu.RUnlock()
 	if err == nil {
 		err = zw.Close()

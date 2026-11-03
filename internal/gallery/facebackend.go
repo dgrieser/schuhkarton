@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"image"
-	"image/jpeg"
 	"io"
 	"net"
 	"net/http"
@@ -145,7 +144,7 @@ type WorkerFace struct {
 // detect sends a 1600 px JPEG (or the original, when Go cannot decode it)
 // and stores the returned crops next to the other face crops.
 func (f *remoteFaces) detect(ctx context.Context, l *Library, it *Item, prefix string) ([]Face, error) {
-	body, name, err := l.faceImage(it)
+	body, name, err := l.faceImage(ctx, it)
 	if err != nil {
 		return nil, err
 	}
@@ -198,20 +197,12 @@ func (f *remoteFaces) detect(ctx context.Context, l *Library, it *Item, prefix s
 
 // faceImage returns what is sent to the face container: an oriented JPEG
 // of at most 1600 px, made here when Go can decode the file.
-func (l *Library) faceImage(it *Item) ([]byte, string, error) {
+func (l *Library) faceImage(ctx context.Context, it *Item) ([]byte, string, error) {
 	src := l.Path(it)
 	if !rawExt[it.Ext()] {
-		release := decodeSlot()
-		img, err := decodeHeld(src)
-		if err == nil {
-			img = orient(resizeFit(img, 1600, 1600), l.displayOrient(it))
-			var buf bytes.Buffer
-			if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: 90}); err == nil {
-				release()
-				return buf.Bytes(), "face.jpg", nil
-			}
+		if b, err := l.originalJPEG(ctx, it, 1600, 90, true); err == nil {
+			return b, "face.jpg", nil
 		}
-		release()
 	}
 	// large preview from the cache (RAW, odd formats)
 	if p, err := l.Ensure(context.Background(), it, VarLarge); err == nil {

@@ -475,9 +475,10 @@ stay; a failed write puts the old content back).
 
 Keywords, names and face regions from other programs stay; Schuhkarton
 only replaces what it wrote itself (remembered in `XMP-schuhkarton:Tags`,
-`People` and `Regions`). `XMP-dc:Description` is left to people. RAW files and
-formats exiftool cannot write (AVI, BMP, …) get a sidecar beside them
-(`IMG_1.ARW.xmp`), which moves with the file. The file times stay (photos
+`People` and `Regions`). `XMP-dc:Description` is left to people. RAW files,
+formats exiftool cannot write (BMP, …) and all videos get a sidecar beside
+them (`IMG_1.ARW.xmp`, `IMG_2.MOV.xmp`), which moves with the file: writing
+into a video would rewrite all of it, gigabytes over a network share. The file times stay (photos
 without a date in their metadata are dated by them); the backup still sees
 the change by the inode change time and copies the file again.
 
@@ -524,6 +525,13 @@ models come from `schuhkarton models download`). In the gallery,
 The setup page writes `config.yaml` to `$XDG_CONFIG_HOME/schuhkarton/` (macOS:
 `~/Library/Application Support/schuhkarton/`, Windows: `%AppData%\schuhkarton\`).
 `-config FILE` or `SCHUHKARTON_CONFIG` names another file.
+
+**Separate process for the heavy work:** decoding a photo (HEIC and RAW
+previews included), scaling it and writing the JPEGs runs in a short-lived
+child process (`schuhkarton convert`), one per photo, as many at once as
+there are CPUs. Its memory goes back to the system when it ends, a photo that
+needs too much memory only takes the child down, and background work runs
+with a lower CPU priority (nice 10) than what somebody looks at.
 
 **Cache on a small disk:** `cache.max_size` (e.g. `4GB`) with
 `cache.overflow_dir` (e.g. a folder on the NAS) keeps the cache folder below
