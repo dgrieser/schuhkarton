@@ -39,8 +39,10 @@ func TestJobFirst(t *testing.T) {
 			mu.Unlock()
 			return nil
 		},
-		save:  func() {},
-		first: func(it *Item) bool { return it.Rel == "p01.jpg" || it.Rel == "p04.jpg" },
+		save: func() {},
+		first: func() func(*Item) bool {
+			return func(it *Item) bool { return it.Rel == "p01.jpg" || it.Rel == "p04.jpg" }
+		},
 	}
 	l.jobPass(context.Background(), &remoteJob{name: "test"}, task)
 	if len(order) != 6 || !(order[0] == "p04.jpg" || order[0] == "p01.jpg") || !(order[1] == "p04.jpg" || order[1] == "p01.jpg") {

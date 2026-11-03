@@ -207,7 +207,7 @@ func (l *Library) aiTask() jobTask {
 		// photos with a large preview here first: their picture for the
 		// model comes from it in a moment, not from the original on a
 		// network share (only this cache folder is looked at: cheap)
-		first: func(it *Item) bool { return it.Kind == Photo && exists(l.CachePath(it, VarLarge)) },
+		first: l.havePreview,
 	}
 }
 

@@ -64,6 +64,34 @@ func (l *Library) CachedPath(it *Item, variant string) string { return l.cached(
 
 func (l *Library) hasCached(it *Item, variant string) bool { return l.cached(it, variant) != "" }
 
+// havePreview returns a test for photos whose large preview exists, here or
+// in tier 2. Tier 2 (a network share) is listed once, folder by folder, not
+// asked file by file.
+func (l *Library) havePreview() func(*Item) bool {
+	moved := map[string]bool{}
+	if l.opt.OverflowDir != "" {
+		root := filepath.Join(l.opt.OverflowDir, "thumbs")
+		dirs, _ := os.ReadDir(root)
+		for _, d := range dirs {
+			files, _ := os.ReadDir(filepath.Join(root, d.Name()))
+			for _, f := range files {
+				if variantOf(f.Name()) == VarLarge {
+					moved[f.Name()] = true
+				}
+			}
+		}
+	}
+	return func(it *Item) bool {
+		if it.Kind != Photo {
+			return false
+		}
+		if exists(l.CachePath(it, VarLarge)) {
+			return true
+		}
+		return moved[filepath.Base(l.CachePath(it, VarLarge))]
+	}
+}
+
 // kickSpill asks the spill job to look at the cache size.
 func (l *Library) kickSpill() {
 	if l.tiers.wake == nil {
