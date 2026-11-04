@@ -372,6 +372,11 @@ func (s *Setup) save(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, r, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
+	// without a folder the gallery (and with it this page) would not start
+	if len(next.Library.Folders) == 0 {
+		writeJSON(w, r, map[string]any{"ok": false, "error": "Mindestens einen Fotoordner hinzufügen."})
+		return
+	}
 	if s.prog.get().Running {
 		writeJSON(w, r, map[string]any{"ok": false, "error": "Speichern läuft schon"})
 		return
