@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"math"
 	"os"
 	"path/filepath"
@@ -17,6 +18,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/dgrieser/schuhkarton/internal/nasretry"
 )
 
 // Schuhkarton writes what it finds out about a file into the file's XMP
@@ -519,32 +522,40 @@ func (l *Library) writeXMPOne(ctx context.Context, it *Item) error {
 		return &aiError{msg: "exiftool: " + err.Error(), fatal: true}
 	}
 	defer l.putXMPTool(et)
-	cur := map[string]any{}
-	if !side || exists(target) {
-		if cur, err = et.readOne(target, append([]string{"-XMP-dc:Subject", "-XMP-iptcExt:PersonInImage"}, xmpReadTags...)); err != nil {
-			l.xmpFailed(it, sig, err)
-			return nil
-		}
-	}
-	args := xmpArgs(&p, sig, cur, it.Kind == Video)
-	if side && !exists(target) {
-		// an empty XMP packet to write into (newer exiftool would create
-		// the file itself, older ones may not)
-		if err := os.WriteFile(target, []byte(emptyXMP), 0o644); err != nil {
-			l.xmpFailed(it, sig, err)
-			return nil
-		}
-	}
-	write := func(p string) error { return et.write(p, args) }
-	if !side {
-		write = func(p string) error { return l.withRealName(it, p, func(p string) error { return et.write(p, args) }) }
-	}
-	if err := write(target); err != nil {
+	// the share may go away for minutes (NAS under load): wait for it
+	dir := filepath.Dir(target)
+	retry := func(fn func() error) error { return nasretry.Do(ctx, "metadata "+it.Rel, fn, dir) }
+	fail := func(err error) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
 		l.xmpFailed(it, sig, err)
 		return nil
+	}
+	if side {
+		// an empty XMP packet to write into when there is no sidecar (newer
+		// exiftool would create the file itself, older ones may not); one
+		// that is there but out of reach is never replaced
+		if err = retry(func() error { return createEmptyXMP(target) }); err != nil {
+			return fail(err)
+		}
+	}
+	// read what is there now (also a sidecar someone else just made) and
+	// write the merge; a new try reads again, so edits made by others
+	// while the share was away stay
+	err = retry(func() error {
+		cur, err := et.readOne(target, append([]string{"-XMP-dc:Subject", "-XMP-iptcExt:PersonInImage"}, xmpReadTags...))
+		if err != nil {
+			return err
+		}
+		args := xmpArgs(&p, sig, cur, it.Kind == Video)
+		if side {
+			return et.write(target, args)
+		}
+		return l.withRealName(it, target, func(p string) error { return et.write(p, args) })
+	})
+	if err != nil {
+		return fail(err)
 	}
 	l.mu.Lock()
 	it.MetaSig = sig
@@ -554,6 +565,29 @@ func (l *Library) writeXMPOne(ctx context.Context, it *Item) error {
 	}
 	l.markDirty()
 	j.handled(false, 0)
+	return nil
+}
+
+// createEmptyXMP creates a sidecar holding an empty XMP packet. A sidecar
+// that is there already (also one that appeared meanwhile) is never
+// touched.
+func createEmptyXMP(target string) error {
+	f, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if errors.Is(err, fs.ErrExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if _, err := f.WriteString(emptyXMP); err != nil {
+		f.Close()
+		os.Remove(target) // ours and incomplete: made again next time
+		return err
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(target)
+		return err
+	}
 	return nil
 }
 

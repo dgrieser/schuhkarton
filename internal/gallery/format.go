@@ -7,6 +7,8 @@ import (
 	"os"
 	"path"
 	"strings"
+
+	"github.com/dgrieser/schuhkarton/internal/nasretry"
 )
 
 // Files whose content does not fit their name, like a HEIC photo saved as
@@ -157,7 +159,8 @@ func (l *Library) withRealName(it *Item, p string, write func(string) error) err
 	if err := overwrite(p, local); err != nil {
 		if rerr := overwrite(p, backup); rerr != nil {
 			keep = true
-			return fmt.Errorf("%v; restoring failed too: %v (old content in %s)", err, rerr, backup)
+			// the file may be damaged now: no new try on top of it
+			return nasretry.Final(fmt.Errorf("%v; restoring failed too: %v (old content in %s)", err, rerr, backup))
 		}
 		return err
 	}

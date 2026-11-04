@@ -25,6 +25,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/dgrieser/schuhkarton/internal/nasretry"
+
 	"github.com/dgrieser/schuhkarton/internal/schedule"
 )
 
@@ -319,8 +321,14 @@ const mtimeWindow = 2 * time.Second
 // copyIfChanged copies when the target is missing or differs in size or
 // modification time.
 func (r *Runner) copyIfChanged(ctx context.Context, src, dst string) {
-	si, err := os.Stat(src)
+	// both sides may be on a share that goes away for minutes: wait for it
+	dirs := []string{filepath.Dir(src), r.opt.Dir}
+	var si os.FileInfo
+	err := nasretry.Do(ctx, "Sicherung "+src, func() (err error) { si, err = os.Stat(src); return err }, dirs...)
 	if err != nil {
+		if ctx.Err() != nil {
+			return
+		}
 		r.set(func(s *Status) { s.Failed++ })
 		return
 	}
@@ -342,7 +350,15 @@ func (r *Runner) copyIfChanged(ctx context.Context, src, dst string) {
 			return
 		}
 	}
-	if err := copyFile(ctx, src, dst, si); err != nil {
+	if err := nasretry.Do(ctx, "Sicherung "+src, func() error {
+		// the source as it is now (it may have changed while the share was away)
+		cur, err := os.Stat(src)
+		if err != nil {
+			return err
+		}
+		si = cur
+		return copyFile(ctx, src, dst, si)
+	}, dirs...); err != nil {
 		if ctx.Err() != nil {
 			return // cut short (stopped, or the time window closed): copied next time
 		}
