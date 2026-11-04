@@ -2,6 +2,7 @@ package schedule
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 )
@@ -100,6 +101,12 @@ func TestWeekRules(t *testing.T) {
 	}
 	if got := w.String(); got != "Mo–Fr 23:00–08:00, Sa, So 00:00–07:00, einmalig 03.11. 09:00–13:00" {
 		t.Errorf("text %q", got)
+	}
+	if got := w.TextAt(h(1, 13, 0)); got != "Mo–Fr 23:00–08:00, Sa, So 00:00–07:00" {
+		t.Errorf("text after the one-time window %q", got)
+	}
+	if got := w.TextAt(h(1, 12, 0)); !strings.HasSuffix(got, "einmalig 03.11. 09:00–13:00") {
+		t.Errorf("text during the one-time window %q", got)
 	}
 	if len(w.Expired(h(1, 12, 0))) != 0 || len(w.Expired(h(1, 13, 0))) != 1 {
 		t.Error("expired")

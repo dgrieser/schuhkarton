@@ -12,6 +12,7 @@ import (
 	"image/draw"
 	"image/jpeg"
 	"io"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -293,6 +294,7 @@ type aiError struct {
 	status           int
 	msg              string
 	fatal, transient bool
+	badAnswer        bool // the answer was no usable JSON: asking again may help
 }
 
 func (e *aiError) Error() string {
@@ -533,16 +535,42 @@ func (c *aiClient) ask(ctx context.Context, prompt string, media ...any) (*AIInf
 		return nil, &aiError{msg: "leere Antwort"}
 	}
 	content := resp.Choices[0].Message.Content
+	tokens := resp.Usage.Total
 	info, err := parseAIAnswer(content)
+	for try := 0; try < aiAnswerRetries && errors.As(err, &ae) && ae.badAnswer; try++ {
+		// ask again with the broken answer and what is wrong with it
+		debugAI("answer is no JSON (%v), asking again: %.400s", err, content)
+		msgs := append(req["messages"].([]any)[:2:2],
+			map[string]any{"role": "assistant", "content": content},
+			map[string]any{"role": "user", "content": "Your answer is not valid JSON (" + ae.msg +
+				"). Send the same answer again as one valid JSON object only: no text around it, " +
+				"double quotes inside values escaped as \\\"."})
+		retry := maps.Clone(req)
+		retry["messages"] = msgs
+		resp.Choices, resp.Usage.Total = nil, 0
+		if err := c.do(ctx, http.MethodPost, "/chat/completions", retry, &resp); err != nil {
+			return nil, err
+		}
+		if len(resp.Choices) == 0 {
+			return nil, &aiError{msg: "leere Antwort"}
+		}
+		content = resp.Choices[0].Message.Content
+		tokens += resp.Usage.Total
+		info, err = parseAIAnswer(content)
+	}
 	if err != nil {
 		return nil, err
 	}
 	if len(info.TagsDe)+len(info.TagsEn) == 0 {
 		debugAI("answer without tags (finish %s): %.400s", resp.Choices[0].FinishReason, content)
 	}
-	info.Model, info.Tokens, info.At = c.opt.Model, resp.Usage.Total, time.Now().Unix()
+	info.Model, info.Tokens, info.At = c.opt.Model, tokens, time.Now().Unix()
 	return info, nil
 }
+
+// aiAnswerRetries is how often a model is asked again for an answer that
+// is no usable JSON.
+const aiAnswerRetries = 2
 
 // debugAI logs odd answers when SCHUHKARTON_AI_DEBUG is set.
 func debugAI(format string, args ...any) {
@@ -564,13 +592,12 @@ func parseAIAnswer(s string) (*AIInfo, error) {
 		s = s[i+len("</think>"):]
 	}
 	s = reFence.ReplaceAllString(s, "")
-	i, j := strings.Index(s, "{"), strings.LastIndex(s, "}")
-	if i < 0 || j <= i {
-		return nil, &aiError{msg: "Antwort ohne JSON"}
+	if !strings.Contains(s, "{") {
+		return nil, &aiError{msg: "Antwort ohne JSON", badAnswer: true}
 	}
 	var m map[string]any
-	if err := json.Unmarshal([]byte(s[i:j+1]), &m); err != nil {
-		return nil, &aiError{msg: "Antwort ist kein gültiges JSON: " + err.Error()}
+	if err := lenientUnmarshal(s, &m); err != nil {
+		return nil, &aiError{msg: "Antwort ist kein gültiges JSON: " + err.Error(), badAnswer: true}
 	}
 	get := func(keys ...string) any {
 		for _, k := range keys {

@@ -551,8 +551,9 @@ func (l *Library) Status() Status {
 		Version:     l.Version(),
 	}
 	if w := l.opt.Window; !w.Any() {
-		s.Window = w.String()
-		if now := time.Now(); !w.Open(now) {
+		now := time.Now()
+		s.Window = w.TextAt(now)
+		if !w.Open(now) {
 			s.WindowNext = w.Next(now).Unix()
 		}
 	}

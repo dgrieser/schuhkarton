@@ -296,7 +296,12 @@ func (d Days) String() string {
 
 func hm(m int) string { return fmt.Sprintf("%02d:%02d", m/60, m%60) }
 
-func (w Window) String() string {
+func (w Window) String() string { return w.TextAt(time.Time{}) }
+
+// TextAt is the window as text without the one-time windows that are over
+// at now (zero now: all of them). A running program keeps its window until
+// a restart, while the settings file loses the past ones at once.
+func (w Window) TextAt(now time.Time) string {
 	if w.Any() {
 		return ""
 	}
@@ -311,6 +316,9 @@ func (w Window) String() string {
 	extra := append([]Span(nil), w.Extra...)
 	sort.Slice(extra, func(a, b int) bool { return extra[a].From.Before(extra[b].From) })
 	for _, s := range extra {
+		if !now.IsZero() && !s.To.After(now) {
+			continue
+		}
 		parts = append(parts, "einmalig "+s.From.Format("02.01. 15:04")+"–"+s.To.Format("15:04"))
 	}
 	return strings.Join(parts, ", ")
