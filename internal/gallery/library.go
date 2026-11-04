@@ -47,7 +47,11 @@ type Options struct {
 	Workers  int
 
 	ExifTool string // path to exiftool; empty: dates from names and folders only
-	FFmpeg   string // path to ffmpeg; empty: no video thumbnails
+
+	// RetryFailed is how long a failed description, text or speech
+	// recognition waits before it is tried again (0: DefaultRetryFailed).
+	RetryFailed time.Duration
+	FFmpeg      string // path to ffmpeg; empty: no video thumbnails
 
 	ThumbSize        int  // short edge of grid thumbnails
 	PreviewSize      int  // long edge of lightbox previews

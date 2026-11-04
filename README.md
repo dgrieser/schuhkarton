@@ -625,6 +625,7 @@ ai:                           # image descriptions by a vision model (optional)
   languages: [de, en]
   image_size: 1024            # long edge of the image sent
   thinking: false             # let reasoning models think first (slower)
+  retry_failed: 72h           # failed descriptions, text and speech recognition: tried again after this
 ui:
   title: Schuhkarton
   theme: system               # default for new devices: system, light, dark

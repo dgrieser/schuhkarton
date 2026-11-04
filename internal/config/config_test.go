@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLoadSaveEnv(t *testing.T) {
@@ -53,6 +54,17 @@ func TestValidate(t *testing.T) {
 	c.Library.Rescan = "soon"
 	if c.Validate() == nil {
 		t.Error("bad rescan must fail")
+	}
+	c.Library.Rescan = ""
+	for _, bad := range []string{"3 days", "10m"} {
+		c.AI.RetryFailed = bad
+		if c.Validate() == nil {
+			t.Errorf("ai.retry_failed %q must fail", bad)
+		}
+	}
+	c.AI.RetryFailed = "24h"
+	if err := c.Validate(); err != nil || c.RetryFailed() != 24*time.Hour {
+		t.Errorf("ai.retry_failed 24h: %v %v", err, c.RetryFailed())
 	}
 }
 

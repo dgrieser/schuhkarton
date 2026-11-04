@@ -2072,7 +2072,7 @@
       const left = (s[`${p}Todo`] - s[`${p}Done`]) / rate;
       parts.push(`<span>${rate >= 60 ? t('{n} pro Minute', { n: num(Math.round(rate / 60)) }) : t('{n} pro Stunde', { n: num(Math.round(rate)) })} · ${t('noch etwa {d}', { d: roughly(left) })}</span>`);
     }
-    if (fail) parts.push(`<span class="faint" title="${esc(t('Diese Dateien ließen sich nicht lesen; sie werden nach einer Woche noch einmal versucht.'))}">${pl(fail, '{n} fehlgeschlagen', '{n} fehlgeschlagen')}</span>`);
+    if (fail) parts.push(`<span class="faint" title="${esc(t('Diese Dateien ließen sich nicht lesen; sie werden später noch einmal versucht.'))}">${pl(fail, '{n} fehlgeschlagen', '{n} fehlgeschlagen')}</span>`);
     return parts.join('');
   }
 
@@ -2144,7 +2144,7 @@
       }
       const bk = res.backup;
       if (bk?.running) { busy = true; rows.push(`<div class="row"><span>${t('Sicherung')}: ${esc(t(bk.phase || ''))} · ${t('{n} kopiert', { n: num(bk.copied) })}</span></div>`); }
-      if (!rows.length) rows.push(`<div class="row"><span>${pl(s.photos, '{n} Foto', '{n} Fotos')} · ${pl(s.videos, '{n} Video', '{n} Videos')}${s.people ? ` · ${pl(s.people, '{n} Person', '{n} Personen')}` : ''}</span>${missing ? `<span class="faint" title="${t('Diese Dateien lassen sich nicht lesen')}">${num(missing)} ${t('ohne Vorschau')}</span>` : ''}${noAI ? `<span class="faint" title="${esc(t('Diese Dateien ließen sich nicht lesen; sie werden nach einer Woche noch einmal versucht.'))}">${num(noAI)} ${t('ohne Beschreibung')}</span>` : ''}${noOCR ? `<span class="faint" title="${esc(t('Diese Dateien ließen sich nicht lesen; sie werden nach einer Woche noch einmal versucht.'))}">${num(noOCR)} ${t('ohne Texterkennung')}</span>` : ''}</div>`);
+      if (!rows.length) rows.push(`<div class="row"><span>${pl(s.photos, '{n} Foto', '{n} Fotos')} · ${pl(s.videos, '{n} Video', '{n} Videos')}${s.people ? ` · ${pl(s.people, '{n} Person', '{n} Personen')}` : ''}</span>${missing ? `<span class="faint" title="${t('Diese Dateien lassen sich nicht lesen')}">${num(missing)} ${t('ohne Vorschau')}</span>` : ''}${noAI ? `<span class="faint" title="${esc(t('Diese Dateien ließen sich nicht lesen; sie werden später noch einmal versucht.'))}">${num(noAI)} ${t('ohne Beschreibung')}</span>` : ''}${noOCR ? `<span class="faint" title="${esc(t('Diese Dateien ließen sich nicht lesen; sie werden später noch einmal versucht.'))}">${num(noOCR)} ${t('ohne Texterkennung')}</span>` : ''}</div>`);
       $('#status').innerHTML = rows.join('');
       const mini = $('#statusMini');
       mini.hidden = first === null;

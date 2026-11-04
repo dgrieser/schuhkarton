@@ -935,7 +935,7 @@ window.I18N.en = {
   "{n} Tage": "{n} days",
   "{n} fehlgeschlagen": "{n} failed",
   "ohne Beschreibung": "without description",
-  "Diese Dateien ließen sich nicht lesen; sie werden nach einer Woche noch einmal versucht.": "These files could not be read; they are tried again after a week.",
+  "Diese Dateien ließen sich nicht lesen; sie werden später noch einmal versucht.": "These files could not be read; they are tried again later.",
   // text recognition (OCR)
   "Texterkennung": "Text recognition",
   "Texterkennung angehalten": "Text recognition stopped",

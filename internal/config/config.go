@@ -349,6 +349,9 @@ type AI struct {
 	ImageSize int `yaml:"image_size" json:"image_size"`
 	// Thinking lets reasoning models think first (slower, more tokens).
 	Thinking bool `yaml:"thinking" json:"thinking"`
+	// RetryFailed is how long a file whose description, text or speech
+	// recognition failed waits before it is tried again, e.g. 72h or 24h.
+	RetryFailed string `yaml:"retry_failed" json:"retry_failed"`
 	// OCR recognizes the text in pictures with a model made for it (e.g.
 	// GLM-OCR at mittwald), over the same service and key, also with Mode
 	// off: off, documents (files in documents folders) or all (every
@@ -727,6 +730,11 @@ func (c *Config) Validate() error {
 			errs = append(errs, fmt.Sprintf("Import: Fotoordner %q gibt es nicht", n))
 		}
 	}
+	if c.AI.RetryFailed != "" {
+		if d, err := time.ParseDuration(c.AI.RetryFailed); err != nil || d < time.Hour {
+			errs = append(errs, fmt.Sprintf("ai.retry_failed %q: eine Dauer ab 1h, z. B. 72h", c.AI.RetryFailed))
+		}
+	}
 	if c.Library.TrashDays < 0 {
 		errs = append(errs, "library.trash_days darf nicht negativ sein")
 	}
@@ -796,6 +804,13 @@ func inside(path, dir string) bool {
 // BackupInterval returns the parsed backup interval (0 = on demand).
 func (c *Config) BackupInterval() time.Duration {
 	d, _ := time.ParseDuration(c.Backup.Interval)
+	return d
+}
+
+// RetryFailed returns ai.retry_failed (0: not set or invalid, the default
+// applies).
+func (c *Config) RetryFailed() time.Duration {
+	d, _ := time.ParseDuration(c.AI.RetryFailed)
 	return d
 }
 
