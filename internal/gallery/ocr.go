@@ -43,7 +43,7 @@ type OCRInfo struct {
 	Model  string `json:"model,omitempty"`
 	Tokens int    `json:"tokens,omitempty"`
 	At     int64  `json:"at"`
-	// Err is the last failure for this file; it is tried again after a week.
+	// Err is the last failure for this file; it is tried again after ai.retry_failed.
 	Err string `json:"err,omitempty"`
 }
 
@@ -190,7 +190,7 @@ func (l *Library) ocrTask() jobTask {
 			switch {
 			case o.ok():
 				return true, false
-			case o != nil && now.Sub(time.Unix(o.At, 0)) < aiRetryFailed:
+			case o != nil && now.Sub(time.Unix(o.At, 0)) < l.retryFailed():
 				return true, true
 			}
 			return false, false

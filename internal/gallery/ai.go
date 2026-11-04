@@ -56,7 +56,7 @@ type AIInfo struct {
 	From string `json:"from,omitempty"`
 	// Tried is when the clip failed (From "frame"); tried again after a week.
 	Tried int64 `json:"tried,omitempty"`
-	// Err is the last failure for this file; it is tried again after a week.
+	// Err is the last failure for this file; it is tried again after ai.retry_failed.
 	Err string `json:"err,omitempty"`
 }
 
@@ -65,7 +65,22 @@ func (a *AIInfo) ok() bool {
 	return a != nil && a.Err == "" && (a.De != "" || a.En != "" || len(a.TagsDe)+len(a.TagsEn) > 0)
 }
 
-const aiRetryFailed = 7 * 24 * time.Hour
+// DefaultRetryFailed is how long a failed description, text or speech
+// recognition waits before it is tried again (ai.retry_failed);
+// aiRetryFrame how long a video described from one frame waits before it is
+// described from the video.
+const (
+	DefaultRetryFailed = 72 * time.Hour
+	aiRetryFrame       = 7 * 24 * time.Hour
+)
+
+// retryFailed is Options.RetryFailed, or DefaultRetryFailed when not set.
+func (l *Library) retryFailed() time.Duration {
+	if l.opt.RetryFailed > 0 {
+		return l.opt.RetryFailed
+	}
+	return DefaultRetryFailed
+}
 
 // --- storage ------------------------------------------------------------------
 
@@ -190,12 +205,12 @@ func (l *Library) aiTask() jobTask {
 			l.ai.mu.Unlock()
 			switch {
 			case a.ok() && it.Kind == Video && l.media.ffmpeg != "" &&
-				(a.From == "" || a.From == "frame" && now.Sub(time.Unix(a.Tried, 0)) >= aiRetryFailed):
+				(a.From == "" || a.From == "frame" && now.Sub(time.Unix(a.Tried, 0)) >= aiRetryFrame):
 				return false, false // described from one frame: now from the video
 			case a.ok():
 				return true, false
-			case a != nil && a.Err != "" && now.Sub(time.Unix(a.At, 0)) < aiRetryFailed:
-				return true, true // failed recently: tried again after a week
+			case a != nil && a.Err != "" && now.Sub(time.Unix(a.At, 0)) < l.retryFailed():
+				return true, true // failed recently: tried again later (ai.retry_failed)
 			}
 			return false, false
 		},

@@ -44,7 +44,7 @@ type SpeechInfo struct {
 	Lang  string `json:"lang,omitempty"`
 	Model string `json:"model,omitempty"`
 	At    int64  `json:"at"`
-	// Err is the last failure for this file; it is tried again after a week.
+	// Err is the last failure for this file; it is tried again after ai.retry_failed.
 	Err string `json:"err,omitempty"`
 }
 
@@ -230,7 +230,7 @@ func (l *Library) speechTask() jobTask {
 			switch {
 			case s.ok():
 				return true, false
-			case s != nil && now.Sub(time.Unix(s.At, 0)) < aiRetryFailed:
+			case s != nil && now.Sub(time.Unix(s.At, 0)) < l.retryFailed():
 				return true, true
 			}
 			return false, false
