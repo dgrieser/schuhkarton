@@ -44,6 +44,12 @@
   let backupCheck = null;
   let backupStatus = null;
   const admin = { name: '', pw: '', pw2: '' }; // first admin (install, or no admin yet)
+  // Settings of a running instance are tabs with a save button on each;
+  // the first installation stays a wizard (numbered steps, back, next).
+  const tabs = () => S.mode === 'settings';
+  let saved = '';         // the settings as last loaded or saved (see snapshot)
+  let saving = false;
+  let saveErr = '';       // why the last save failed; stays until the next edit
 
   const locked = (key) => S.locked?.[key];
   // background windows: days as in the settings file ("mon-fri", "sat,sun";
@@ -98,8 +104,9 @@
   // cache.max_size like "4GB" needs cache.overflow_dir (see config.ParseSize)
   const cacheCapOK = () => {
     const m = (C.cache.max_size || '').trim(), o = (C.cache.overflow_dir || '').trim();
-    if (!m) return !o || o.startsWith('/') || /^[A-Za-z]:[\\/]/.test(o);
-    return /^\d+(\.\d+)?\s*([KMGT]i?B?|B)?$/i.test(m) && (o.startsWith('/') || /^[A-Za-z]:[\\/]/.test(o));
+    const abs = (p) => p.startsWith('/') || p.startsWith('\\\\') || /^[A-Za-z]:[\\/]/.test(p); // also \\server\share
+    if (!m) return !o || abs(o);
+    return /^\d+(\.\d+)?\s*([KMGT]i?B?|B)?$/i.test(m) && abs(o);
   };
   const lockNote = (key) => (locked(key) ? `<span class="lock">${t('festgelegt durch {x}', { x: esc(locked(key)) })}</span>` : '');
   const dis = (key) => (locked(key) ? 'disabled' : '');
@@ -108,7 +115,11 @@
   let STEPS = [];
   function buildSteps() {
     STEPS = [
-      { id: 'fotos', title: t('Fotos'), render: renderFolders, ok: () => C.library.folders.length > 0 && C.library.folders.every((f) => { const c = checks.get(f.path); return !c || c.exists; }) },
+      { id: 'fotos', title: t('Fotos'), render: renderFolders, ok: () => C.library.folders.length > 0 && C.library.folders.every((f) => {
+        const c = checks.get(f.path);
+        // a folder that is configured already may be offline for a while
+        return !c || c.exists || (tabs() && (S.config.library.folders || []).some((x) => x.path === f.path));
+      }) },
       { id: 'speicher', title: t('Speicher'), render: renderStorage, ok: () => !!C.cache.dir && windowsOK() && cacheCapOK() },
       { id: 'gesichter', title: t('Gesichter'), render: renderFaces, ok: () => C.faces.mode !== 'remote' || !!C.faces.url },
       { id: 'ki', title: t('KI'), render: renderAI, ok: () => !aiUsed() || (/^https?:\/\//.test(C.ai.url || '') && (C.ai.mode !== 'on' || !!C.ai.model) && (!ocrOn() || !!C.ai.ocr_model) && (!speechOn() || !!C.ai.speech_model)) },
@@ -118,10 +129,47 @@
         : { id: 'benutzer', title: t('Benutzer'), render: renderUsers, ok: () => true },
       { id: 'fertig', title: t('Fertig'), render: renderSummary, ok: () => !S.needAdmin || adminOK() },
     ];
+    if (tabs()) { // the summary is the overview, first
+      STEPS.pop();
+      STEPS.unshift({ id: 'uebersicht', title: t('Übersicht'), render: renderSummary, ok: () => true });
+    }
   }
 
+  // snapshot is what saving would send, without empty values (pages fill
+  // in empty defaults when they are opened), to tell unsaved changes
+  function snapshot() {
+    const clean = (v) => {
+      if (Array.isArray(v)) return v.map(clean);
+      if (v && typeof v === 'object') {
+        const o = {};
+        for (const k of Object.keys(v).sort()) {
+          const c = clean(v[k]);
+          if (c === '' || c == null || (Array.isArray(c) && !c.length) || (typeof c === 'object' && !Array.isArray(c) && !Object.keys(c).length)) continue;
+          o[k] = c;
+        }
+        return o;
+      }
+      return v;
+    };
+    // the same settings written differently (pages rewrite them when opened):
+    // the import target as a folder's name, its path, or empty for the first
+    // folder; the old single background window as from/to
+    const c = clone(C), imp = c.library?.import, fs = c.library?.folders || [];
+    if (imp?.folder) {
+      imp.folder = fs.find((f) => f.name === imp.folder || f.path === imp.folder)?.path || imp.folder;
+      if (imp.folder === fs[0]?.path) imp.folder = '';
+    }
+    const B = c.background;
+    if (B?.from && B?.to) { B.windows = [{ days: '', from: B.from, to: B.to }, ...(B.windows || [])]; B.from = B.to = ''; }
+    return JSON.stringify(clean({ C: c, tokenMode, importPath, admin: S.needAdmin ? admin : null }));
+  }
+  const dirty = () => snapshot() !== saved;
+
   function drawSteps() {
-    $('#steps').innerHTML = STEPS.map((s, i) => `<button data-i="${i}" class="${i === step ? 'on' : ''} ${i < step ? 'done' : ''}"><span>${i + 1}</span>${s.title}</button>`).join('');
+    $('#steps').classList.toggle('tabs', tabs());
+    $('#steps').innerHTML = tabs()
+      ? STEPS.map((s, i) => `<button data-i="${i}" class="${i === step ? 'on' : ''}">${s.title}</button>`).join('')
+      : STEPS.map((s, i) => `<button data-i="${i}" class="${i === step ? 'on' : ''} ${i < step ? 'done' : ''}"><span>${i + 1}</span>${s.title}</button>`).join('');
     for (const b of $$('#steps button')) b.onclick = () => go(+b.dataset.i);
   }
 
@@ -129,17 +177,29 @@
     step = Math.max(0, Math.min(STEPS.length - 1, i));
     drawSteps();
     STEPS[step].render($('#step'));
-    $('#prev').hidden = step === 0;
+    $('#prev').hidden = step === 0 || tabs();
     const last = step === STEPS.length - 1;
-    $('#next').textContent = last ? (S.mode === 'install' ? t('Einrichten und starten') : t('Speichern')) : t('Weiter');
+    $('#next').textContent = tabs() ? t('Speichern') : last ? (S.mode === 'install' ? t('Einrichten und starten') : t('Speichern')) : t('Weiter');
+    if (tabs()) history.replaceState(null, '', `#${STEPS[step].id}`);
     validate();
     scrollTo({ top: 0, behavior: 'smooth' });
   }
 
   function validate() {
-    const ok = STEPS[step].ok();
+    if (saving) return;
+    const cur = STEPS[step].ok();
+    // tabs: the checks of the pages only advise (the server checks the
+    // settings when saving and says what is wrong); saving needs changes
+    const bad = tabs() ? (cur ? STEPS.find((x) => !x.ok()) : STEPS[step]) : null;
+    // except what only this page can check: the first admin's password, and
+    // that a folder is left (the gallery needs one to start)
+    const ok = tabs() ? dirty() && (!S.needAdmin || adminOK()) && C.library.folders.length > 0 : cur;
     $('#next').disabled = !ok;
-    $('#hint').textContent = ok ? '' : ({ fotos: t('Mindestens einen Fotoordner hinzufügen.'), gesichter: t('Adresse des Containers angeben oder Gesichter ausschalten.'),
+    if (tabs() && saveErr) { $('#hint').innerHTML = `<span class="bad">${esc(t(saveErr))}</span>`; return; }
+    if (tabs() && bad && bad !== STEPS[step]) { $('#hint').textContent = t('Bitte „{x}“ prüfen.', { x: bad.title }); return; }
+    if (tabs() && cur && saveErr) { $('#hint').innerHTML = `<span class="bad">${esc(t(saveErr))}</span>`; return; }
+    if (tabs() && cur) { $('#hint').textContent = dirty() ? t('Ungespeicherte Änderungen') : ''; return; }
+    $('#hint').textContent = cur ? '' : ({ fotos: t('Mindestens einen Fotoordner hinzufügen.'), gesichter: t('Adresse des Containers angeben oder Gesichter ausschalten.'),
       zugriff: t('Adresse mit Port angeben, z.B. 0.0.0.0:8088.'), konto: t('Name und Passwort (mindestens 8 Zeichen, zweimal gleich) für das Admin-Konto angeben.'),
       fertig: t('Erst ein Admin-Konto anlegen.'), speicher: !C.cache.dir ? '' : !cacheCapOK() ? t('Obergrenze wie 4GB oder 500MB, dazu einen Auslagerungsordner (absoluter Pfad).') : t('Zeitfenster: mindestens ein Tag, Beginn und Ende (verschieden); einmalige mit Datum.') }[STEPS[step].id] || '');
   }
@@ -209,7 +269,9 @@
     C.library.import ||= { dir: '', folder: '' };
     // the target is held as the folder itself, so renaming it (even through an empty name) keeps it
     let impTarget = C.library.folders.find((f) => C.library.import.folder && (f.name === C.library.import.folder || f.path === C.library.import.folder)) || null;
+    const at = C; // late callbacks after a save (new settings, new page) do nothing
     const drawImport = () => {
+      if (C !== at) return;
       const sel = $('#fimpf', el);
       const fs = C.library.folders;
       if (impTarget && !fs.includes(impTarget)) impTarget = null; // removed: back to the first folder
@@ -218,6 +280,7 @@
       sel.innerHTML = fs.map((f, i) => `<option value="${i}" ${(impTarget || fs[0]) === f ? 'selected' : ''}>${esc(f.name || t('Ohne Namen'))}${i === 0 ? ` (${t('Standard')})` : ''}</option>`).join('');
     };
     const draw = () => {
+      if (C !== at) return;
       list.innerHTML = C.library.folders.length ? C.library.folders.map((f, i) => `
         <div class="folder">
           ${icon('folder')}
@@ -311,7 +374,7 @@
       </section>
       <section class="card">
         <h2>${t('Vorschauen')}</h2>
-        <label class="check"><input type="checkbox" id="prev" ${C.cache.previews ? 'checked' : ''} ${dis('cache.previews')}>
+        <label class="check"><input type="checkbox" id="cprev" ${C.cache.previews ? 'checked' : ''} ${dis('cache.previews')}>
           <span><b>${t('Große Vorschauen vorab erzeugen')}</b><br><span class="muted">${t('Empfohlen, wenn die Fotos auf einem langsamen Netzlaufwerk liegen. Braucht mehr Platz.')}</span></span></label>
         <label class="check"><input type="checkbox" id="vprev" ${C.media.video_previews ? 'checked' : ''} ${dis('media.video_previews')}>
           <span><b>${t('Animierte Video-Vorschauen')}</b><br><span class="muted">${t('Ein paar kurze Ausschnitte je Video, abgespielt beim Darüberfahren.')}</span></span></label>
@@ -364,7 +427,7 @@
     };
     $('#icheck', el).onclick = checkI;
     $('#ibrowse', el).onclick = () => pick(ip.value, (p) => { ip.value = p; checkI(); });
-    $('#prev', el).onchange = (e) => { C.cache.previews = e.target.checked; };
+    $('#cprev', el).onchange = (e) => { C.cache.previews = e.target.checked; };
     $('#vprev', el).onchange = (e) => { C.media.video_previews = e.target.checked; };
     $('#trans', el).onchange = (e) => { C.media.transcode = e.target.checked; };
     $('#rescan', el).onchange = (e) => { C.library.rescan = e.target.value; };
@@ -1027,10 +1090,14 @@
   // --- step 6: summary ------------------------------------------------------------------
   function renderSummary(el) {
     const f = C.library.folders;
-    const row = (k, v) => `<div class="sumrow"><span>${k}</span><b>${v}</b></div>`;
+    const goto = { [t('Fotos')]: 'fotos', [t('Cache')]: 'speicher', [t('Vorschauen')]: 'speicher', [t('Hintergrundarbeit')]: 'speicher', [t('Obergrenze')]: 'speicher',
+      [t('Gesichter')]: 'gesichter', [t('KI')]: 'ki', [t('Sicherung')]: 'sicherung', [t('Adresse')]: 'zugriff', [t('Konten')]: S.needAdmin ? 'konto' : 'benutzer' };
+    const row = (k, v) => tabs() && goto[k]
+      ? `<a class="sumrow link" href="#${goto[k]}"><span>${k}</span><b>${v}</b></a>`
+      : `<div class="sumrow"><span>${k}</span><b>${v}</b></div>`;
     el.innerHTML = `
       <section class="card">
-        <h2>${S.mode === 'install' ? t('Alles bereit') : t('Einstellungen speichern')}</h2>
+        <h2>${S.mode === 'install' ? t('Alles bereit') : tabs() ? t('Übersicht') : t('Einstellungen speichern')}</h2>
         <div class="summary">
           ${row(t('Fotos'), f.map((x) => `${esc(x.name)} <span class="muted">${esc(x.path)}</span>`).join('<br>'))}
           ${row(t('Cache'), esc(C.cache.dir) + (importPath ? `<br><span class="muted">${t('übernimmt {x}', { x: esc(importPath) })}</span>` : ''))}
@@ -1052,6 +1119,7 @@
   }
 
   async function save() {
+    if (tabs()) return saveTabs();
     const btn = $('#next');
     btn.disabled = true;
     const prog = $('#prog');
@@ -1073,6 +1141,53 @@
         return;
       }
       setTimeout(poll, 700);
+    };
+    poll();
+  }
+
+  // saveTabs saves the settings of a running instance and stays on the
+  // page (the gallery restarts with them), unless the address or the key
+  // changed: then it goes where the server says.
+  async function saveTabs() {
+    const btn = $('#next'), hint = $('#hint');
+    // the address as configured (S.listen is the socket, e.g. [::]:8088)
+    const stay = tokenMode === 'keep' && C.server.listen === S.config.server.listen;
+    const lock = (on) => { saving = on; $('#step').inert = on; $('#steps').inert = on; };
+    lock(true);
+    btn.disabled = true;
+    hint.textContent = t('Speichern …');
+    const plan = { config: C, tokenMode, import: importPath };
+    if (S.needAdmin) plan.admin = { name: admin.name.trim(), password: admin.pw };
+    saveErr = '';
+    const fail = (msg) => { lock(false); saveErr = msg || ''; hint.innerHTML = `<span class="bad">${esc(t(msg || ''))}</span>`; btn.disabled = false; };
+    const res = await api('/api/setup/save', plan).catch((e) => ({ ok: false, error: e.message }));
+    if (!res.ok) return fail(res.error);
+    const poll = async () => {
+      let p;
+      try { p = await api('/api/setup/progress'); } catch { setTimeout(poll, 1000); return; }
+      hint.textContent = `${t(p.phase || '')}${p.total ? ` ${num(p.done)} / ${num(p.total)}` : ''}`;
+      if (!p.finished) { setTimeout(poll, 700); return; }
+      if (p.error) return fail(p.error);
+      if (!stay || S.needAdmin) { location.href = p.link || '/'; return; }
+      // the restarted gallery answers again: load what it uses now
+      let fresh = null;
+      for (let i = 0; i < 30 && !fresh; i++) {
+        try { fresh = await api('/api/setup/state'); } catch { await new Promise((r) => setTimeout(r, 1000)); }
+      }
+      // saved, but what the gallery uses now is unknown: keep the edits
+      if (!fresh) return fail('Gespeichert, aber die Galerie antwortet nicht. Bitte die Seite neu laden.');
+      S = fresh;
+      backupStatus = await api('/api/backup').catch(() => null);
+      C = clone(S.config);
+      fill();
+      importPath = '';
+      buildSteps();
+      lock(false);
+      STEPS[step].render($('#step'));
+      saved = snapshot();
+      drawSteps();
+      validate();
+      toast(t('Gespeichert'));
     };
     poll();
   }
@@ -1100,9 +1215,15 @@
   $('#picker').onclick = (e) => { if (e.target.id === 'picker') $('#picker').hidden = true; };
 
   // --- start ----------------------------------------------------------------------------
+  function fill() {
+    C.library.folders ||= [];
+    C.library.exclude ||= [];
+    C.access ||= { anonymous: true, register: true };
+    C.ai ||= { mode: 'off', url: MITTWALD, model: 'Qwen3.8-27B-NVFP4', workers: 2, languages: ['de', 'en'] };
+  }
   window.skTranslate?.();
   $('#prev').onclick = () => go(step - 1);
-  $('#next').onclick = () => (step === STEPS.length - 1 ? save() : go(step + 1));
+  $('#next').onclick = () => (tabs() || step === STEPS.length - 1 ? save() : go(step + 1));
   (async () => {
     try { S = await api('/api/setup/state'); } catch (e) {
       $('#step').innerHTML = `<section class="card"><h2>${t('Kein Zugriff')}</h2><p>${esc(t(e.message))}</p></section>`;
@@ -1110,10 +1231,7 @@
       return;
     }
     C = clone(S.config);
-    C.library.folders ||= [];
-    C.library.exclude ||= [];
-    C.access ||= { anonymous: true, register: true };
-    C.ai ||= { mode: 'off', url: MITTWALD, model: 'Qwen3.8-27B-NVFP4', workers: 2, languages: ['de', 'en'] };
+    fill();
     buildSteps();
     if (S.mode === 'settings') {
       $('#title').textContent = t('Einstellungen');
@@ -1123,9 +1241,20 @@
       backupStatus = await api('/api/backup').catch(() => null);
       if (S.needAdmin) $('#subtitle').textContent = t('Noch kein Admin-Konto: bitte jetzt anlegen.');
     }
-    const want = location.hash.slice(1) || (S.mode === 'settings' && S.needAdmin ? 'konto' : '');
+    let want = location.hash.slice(1) || (S.mode === 'settings' && S.needAdmin ? 'konto' : '');
+    if (tabs() && want === 'fertig') want = 'uebersicht';
     const wi = STEPS.findIndex((x) => x.id === want);
     go(wi >= 0 ? wi : 0);
+    if (tabs()) {
+      saved = snapshot();
+      validate();
+      // any change on a page: the save button and the hint follow
+      for (const ev of ['input', 'change']) $('#step').addEventListener(ev, () => { saveErr = ''; });
+      for (const ev of ['input', 'change', 'click']) $('#step').addEventListener(ev, () => setTimeout(validate, 0));
+      // changes from the folder picker or answers that arrive later
+      setInterval(validate, 1000);
+      addEventListener('beforeunload', (e) => { if (!saving && dirty()) e.preventDefault(); });
+    }
     addEventListener('hashchange', () => { const i = STEPS.findIndex((x) => x.id === location.hash.slice(1)); if (i >= 0 && i !== step) go(i); });
   })();
 })();
