@@ -250,3 +250,17 @@ func TestCancelledRunIncomplete(t *testing.T) {
 		t.Errorf("cancelled run: %+v", st)
 	}
 }
+
+func TestTransientSkipped(t *testing.T) {
+	r := &Runner{}
+	for _, n := range []string{"079.JPG_exiftool_tmp", "a.MOV.xmp_", "b.jpg.sk-tmp"} {
+		if !r.excluded(n) {
+			t.Errorf("%s: should be skipped", n)
+		}
+	}
+	for _, n := range []string{"079.JPG", "a.MOV.xmp", "tmp.jpg"} {
+		if r.excluded(n) {
+			t.Errorf("%s: should be kept", n)
+		}
+	}
+}

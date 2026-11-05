@@ -108,6 +108,7 @@ type dupeStore struct {
 	groups []DupeGroup
 	ver    int64 // -1: group again; else the item list the groups were made for (see listVer)
 	dirty  atomic.Bool
+	saveMu sync.Mutex // one dupes.json write at a time
 
 	grouped time.Time // last grouping
 	pending int       // changes since the last grouping (new hashes, written files)
@@ -141,6 +142,9 @@ func (l *Library) loadDupes() {
 }
 
 func (l *Library) saveDupes() error {
+	// one save at a time: an older state must not land after a newer one
+	l.dupe.saveMu.Lock()
+	defer l.dupe.saveMu.Unlock()
 	if !l.dupe.dirty.Swap(false) {
 		return nil
 	}

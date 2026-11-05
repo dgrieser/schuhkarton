@@ -920,11 +920,25 @@ func (l *Library) RenameKeys(pairs map[string]string) error {
 }
 
 func writeFileAtomic(path string, b []byte) error {
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+	// a temp file of its own: two saves at once must not rename each
+	// other's away ("rename dupes.json.tmp: no such file or directory");
+	// it is made 0600, only for the gallery's own user
+	f, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*.tmp")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	tmp := f.Name()
+	_, err = f.Write(b)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(tmp, path)
+	}
+	if err != nil {
+		os.Remove(tmp)
+	}
+	return err
 }
 
 // --- media type helpers -----------------------------------------------------

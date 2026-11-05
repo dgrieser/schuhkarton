@@ -274,12 +274,22 @@ func (r *Runner) backup(ctx context.Context) error {
 }
 
 func (r *Runner) excluded(name string) bool {
+	if transient(name) {
+		return true
+	}
 	for _, pat := range r.opt.Exclude {
 		if ok, _ := filepath.Match(pat, name); ok {
 			return true
 		}
 	}
 	return false
+}
+
+// transient tells whether name is a file that exists only while one is
+// written: exiftool's temp file next to the photo, a sidecar's temp copy
+// (.xmp_) and the gallery's own copies in progress.
+func transient(name string) bool {
+	return strings.HasSuffix(name, "_exiftool_tmp") || strings.HasSuffix(name, ".xmp_") || strings.HasSuffix(name, ".sk-tmp")
 }
 
 // mirror copies new and changed files from src into dst.

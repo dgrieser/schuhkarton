@@ -144,6 +144,8 @@ window.I18N.en = {
   "{k} bleibt · {r} in den Papierkorb ({s})": "{k} stays · {r} to the trash ({s})",
   "{n} Gruppen bereinigen?": "Clean up {n} groups?",
   "{n} Gruppen bereinigt · {s} frei": "{n} groups cleaned up · {s} freed",
+  "{n} Gruppen bereinigt, dann Fehler: {e}": "{n} groups cleaned up, then an error: {e}",
+  "Wird bereinigt … {d} / {n} Gruppen": "Cleaning up … {d} / {n} groups",
   "{n} Gruppen · bis zu {s} frei": "{n} groups · up to {s} to free",
   "{n} Konten": "{n} accounts",
   "{n} Kopien": "{n} copies",
