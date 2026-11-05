@@ -167,6 +167,9 @@ select.sel { height: 38px; border-radius: 10px; border: 1px solid var(--line); b
 .bgrow .chips { gap: 4px; }
 .bgrow .chip { padding: 4px 9px; }
 .bgrow input[type=time], .bgrow input[type=date] { width: auto; }
+.bgrow .bgjobs { flex-basis: 100%; flex-wrap: wrap; margin-top: -2px; }
+.bgrow .bgjobs .chip { font-size: 12px; padding: 3px 8px; }
+#bgwin .bgrow, #bgonce .bgrow { padding-bottom: 8px; border-bottom: 1px solid var(--line); }
 .chip {
   display: inline-flex; align-items: center; gap: 8px;
   height: 32px; padding: 0 12px; border-radius: 99px;

@@ -170,13 +170,17 @@ type BackgroundWindow struct {
 	Days string `yaml:"days,omitempty" json:"days"`
 	From string `yaml:"from" json:"from"`
 	To   string `yaml:"to" json:"to"`
+	// Jobs are the kinds of work allowed in it (scan, media, ai, ocr,
+	// speech, metadata, dupes, backup, cache, import); empty: all.
+	Jobs []string `yaml:"jobs,omitempty" json:"jobs"`
 }
 
 // BackgroundOnce is a one-time window: from "2026-11-03 09:00", to "13:00"
 // (or a full date and time).
 type BackgroundOnce struct {
-	From string `yaml:"from" json:"from"`
-	To   string `yaml:"to" json:"to"`
+	From string   `yaml:"from" json:"from"`
+	To   string   `yaml:"to" json:"to"`
+	Jobs []string `yaml:"jobs,omitempty" json:"jobs"` // as in BackgroundWindow
 }
 
 // Window returns the time windows (the valid parts; Validate tells about
@@ -199,6 +203,9 @@ func (c *Config) window() (schedule.Window, []string) {
 		if err == nil && r == nil {
 			err = fmt.Errorf("need a start and an end time")
 		}
+		if err == nil {
+			r.Jobs, err = schedule.ParseJobs(b.Jobs)
+		}
 		if err != nil {
 			errs = append(errs, fmt.Sprintf("background.windows %d (%s %s–%s): %v", i+1, b.Days, b.From, b.To, err))
 			continue
@@ -207,6 +214,9 @@ func (c *Config) window() (schedule.Window, []string) {
 	}
 	for i, o := range c.Background.Once {
 		s, err := schedule.ParseSpan(o.From, o.To, time.Local)
+		if err == nil {
+			s.Jobs, err = schedule.ParseJobs(o.Jobs)
+		}
 		if err != nil {
 			errs = append(errs, fmt.Sprintf("background.once %d (%s–%s): %v", i+1, o.From, o.To, err))
 			continue

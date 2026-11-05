@@ -16,6 +16,7 @@ import (
 // the settings are wrong.
 type remoteJob struct {
 	name                     string    // for the log: "descriptions", "text recognition"
+	kind                     string    // its kind of work in the background windows (schedule.JobAI …)
 	client                   *aiClient // nil: off (remote jobs)
 	on                       bool      // a job without a client (metadata) runs
 	wake                     chan struct{}
@@ -90,11 +91,12 @@ func (l *Library) jobLoop(ctx context.Context, j *remoteJob, t jobTask) {
 		case <-j.wake:
 		case <-timer.C:
 		}
-		if !l.opt.Window.Open(time.Now()) {
+		win := l.window(j.kind)
+		if !win.Open(time.Now()) {
 			j.paused.Store(0) // no old pause shown: the window decides now
 			l.jobTodo(j, t)   // the counts for the UI meanwhile
 		}
-		wctx, cancel, ok := l.opt.Window.Wait(ctx)
+		wctx, cancel, ok := win.Wait(ctx)
 		if !ok {
 			t.save()
 			return

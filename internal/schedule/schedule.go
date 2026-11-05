@@ -13,21 +13,137 @@ import (
 )
 
 // Window is when background work may run: weekly rules and one-time spans.
-// Without rules it may run at any time (spans then add nothing).
+// Without rules it may run at any time (spans then add nothing). Each rule
+// and span may allow only some kinds of work (Jobs); For gives the window of
+// one kind.
 type Window struct {
 	Rules []Rule
 	Extra []Span
+	// limited: the window of one kind of work (For); without rules of its
+	// own it runs only in its spans, never at any time
+	limited bool
 }
 
 // Rule is a daily span of local time on some weekdays. A rule may pass
 // midnight (23:00 to 08:00); it belongs to the day it starts on.
 type Rule struct {
 	Days     Days
-	From, To int // minutes after midnight, From != To
+	From, To int      // minutes after midnight, From != To
+	Jobs     []string // the kinds of work allowed (see Jobs); empty: all
 }
 
 // Span is a one-time window.
-type Span struct{ From, To time.Time }
+type Span struct {
+	From, To time.Time
+	Jobs     []string // the kinds of work allowed (see Jobs); empty: all
+}
+
+// The kinds of background work a window can allow.
+const (
+	JobScan     = "scan"     // reading the folders again
+	JobMedia    = "media"    // thumbnails, previews, faces
+	JobAI       = "ai"       // descriptions
+	JobOCR      = "ocr"      // text recognition
+	JobSpeech   = "speech"   // speech recognition
+	JobMetadata = "metadata" // writing into the files
+	JobDupes    = "dupes"    // comparing for duplicates
+	JobBackup   = "backup"   // backups
+	JobCache    = "cache"    // moving large cache files to the overflow folder
+	JobImport   = "import"   // filing the import folder
+)
+
+// Job is one kind of background work with its name in the settings.
+type Job struct{ Key, Label string }
+
+// Jobs lists the kinds of background work in the order shown.
+var Jobs = []Job{
+	{JobScan, "Einlesen"},
+	{JobMedia, "Vorschaubilder und Gesichter"},
+	{JobAI, "Beschreibungen"},
+	{JobOCR, "Texterkennung"},
+	{JobSpeech, "Spracherkennung"},
+	{JobMetadata, "Metadaten schreiben"},
+	{JobDupes, "Duplikate"},
+	{JobBackup, "Sicherung"},
+	{JobCache, "Cache auslagern"},
+	{JobImport, "Import"},
+}
+
+// ParseJobs checks names of kinds of work; empty means all.
+func ParseJobs(names []string) ([]string, error) {
+	var out []string
+	seen := map[string]bool{}
+	for _, n := range names {
+		n = strings.ToLower(strings.TrimSpace(n))
+		if n == "" || seen[n] {
+			continue
+		}
+		known := false
+		for _, j := range Jobs {
+			known = known || j.Key == n
+		}
+		if !known {
+			keys := make([]string, len(Jobs))
+			for i, j := range Jobs {
+				keys[i] = j.Key
+			}
+			return nil, fmt.Errorf("%q: unknown kind of work (%s)", n, strings.Join(keys, ", "))
+		}
+		seen[n] = true
+		out = append(out, n)
+	}
+	if len(out) == len(Jobs) {
+		return nil, nil // all
+	}
+	return out, nil
+}
+
+func allows(jobs []string, job string) bool {
+	if len(jobs) == 0 {
+		return true
+	}
+	for _, j := range jobs {
+		if j == job {
+			return true
+		}
+	}
+	return false
+}
+
+// For returns the window of one kind of work: the rules and spans that
+// allow it. Without any rules (any time) it is w itself.
+func (w Window) For(job string) Window {
+	if w.Any() {
+		return w
+	}
+	out := Window{limited: true}
+	for _, r := range w.Rules {
+		if allows(r.Jobs, job) {
+			out.Rules = append(out.Rules, r)
+		}
+	}
+	for _, s := range w.Extra {
+		if allows(s.Jobs, job) {
+			out.Extra = append(out.Extra, s)
+		}
+	}
+	return out
+}
+
+// jobsText is " (nur Sicherung, Duplikate)" for a window that allows only
+// some kinds of work.
+func jobsText(jobs []string) string {
+	if len(jobs) == 0 {
+		return ""
+	}
+	var names []string
+	for _, j := range Jobs {
+		if allows(jobs, j.Key) {
+			names = append(names, j.Label)
+		}
+	}
+	return " (nur " + strings.Join(names, ", ") + ")"
+}
 
 // Days is a set of weekdays (bit time.Sunday ... time.Saturday).
 type Days uint8
@@ -170,7 +286,7 @@ func parseWhen(s string, loc *time.Location) (time.Time, error) {
 }
 
 // Any tells whether work may run at any time.
-func (w Window) Any() bool { return len(w.Rules) == 0 }
+func (w Window) Any() bool { return len(w.Rules) == 0 && !w.limited }
 
 // at returns the day of t at minute m.
 func at(t time.Time, m int) time.Time {
@@ -311,7 +427,7 @@ func (w Window) TextAt(now time.Time) string {
 		if r.Days != AllDays {
 			s = r.Days.String() + " " + s
 		}
-		parts = append(parts, s)
+		parts = append(parts, s+jobsText(r.Jobs))
 	}
 	extra := append([]Span(nil), w.Extra...)
 	sort.Slice(extra, func(a, b int) bool { return extra[a].From.Before(extra[b].From) })
@@ -319,7 +435,7 @@ func (w Window) TextAt(now time.Time) string {
 		if !now.IsZero() && !s.To.After(now) {
 			continue
 		}
-		parts = append(parts, "einmalig "+s.From.Format("02.01. 15:04")+"–"+s.To.Format("15:04"))
+		parts = append(parts, "einmalig "+s.From.Format("02.01. 15:04")+"–"+s.To.Format("15:04")+jobsText(s.Jobs))
 	}
 	return strings.Join(parts, ", ")
 }

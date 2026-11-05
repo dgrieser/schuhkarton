@@ -175,13 +175,17 @@ type Status struct {
 	// time); while it is closed, WindowNext is the unix time it opens.
 	Window     string `json:"window,omitempty"`
 	WindowNext int64  `json:"windowNext,omitempty"`
-	Photos     int    `json:"photos"`
-	Videos     int    `json:"videos"`
-	Meta       int64  `json:"meta"`
-	MetaTodo   int64  `json:"metaTodo"`
-	Thumbs     int64  `json:"thumbs"`
-	Posters    int64  `json:"posters"`
-	Previews   int64  `json:"previews"`
+	// WindowWait: the kinds of work (schedule.Job…) whose window is closed
+	// now while others may run, with the unix time it opens (0: no window
+	// ahead allows it)
+	WindowWait map[string]int64 `json:"windowWait,omitempty"`
+	Photos     int              `json:"photos"`
+	Videos     int              `json:"videos"`
+	Meta       int64            `json:"meta"`
+	MetaTodo   int64            `json:"metaTodo"`
+	Thumbs     int64            `json:"thumbs"`
+	Posters    int64            `json:"posters"`
+	Previews   int64            `json:"previews"`
 	// ThumbFail and PreviewFail count files whose thumbnail or video preview
 	// could not be made (broken files); the UI counts them as done.
 	ThumbFail   int64  `json:"thumbFail"`
@@ -365,19 +369,19 @@ func Open(opt Options) (*Library, error) {
 	if opt.AI.Model != "" && opt.AI.URL != "" {
 		l.aiJob.client = newAIClient(opt.AI)
 		l.aiJob.wake = make(chan struct{}, 1)
-		l.aiJob.name = "descriptions"
+		l.aiJob.name, l.aiJob.kind = "descriptions", schedule.JobAI
 	}
 	l.loadOCR()
 	if o := opt.OCR; o.Model != "" && o.URL != "" && (o.Scope == "documents" || o.Scope == "all") {
 		l.ocrJob.client = newAIClient(AIOptions{URL: o.URL, Key: o.Key, Model: o.Model, Workers: o.Workers})
 		l.ocrJob.wake = make(chan struct{}, 1)
-		l.ocrJob.name = "text recognition"
+		l.ocrJob.name, l.ocrJob.kind = "text recognition", schedule.JobOCR
 	}
 	l.loadSpeech()
 	if o := opt.Speech; o.Model != "" && o.URL != "" {
 		l.speechJob.client = newAIClient(AIOptions{URL: o.URL, Key: o.Key, Model: o.Model, Workers: o.Workers})
 		l.speechJob.wake = make(chan struct{}, 1)
-		l.speechJob.name = "speech recognition"
+		l.speechJob.name, l.speechJob.kind = "speech recognition", schedule.JobSpeech
 	}
 	l.xmpFails = map[string]xmpFailure{}
 	if opt.ExifTool != "" {
@@ -386,7 +390,7 @@ func Open(opt Options) (*Library, error) {
 	if opt.WriteMetadata && opt.ExifTool != "" && l.exifCfg != "" {
 		l.xmpJob.on = true
 		l.xmpJob.wake = make(chan struct{}, 1)
-		l.xmpJob.name = "metadata"
+		l.xmpJob.name, l.xmpJob.kind = "metadata", schedule.JobMetadata
 	}
 	l.people = newPeopleStore(filepath.Join(opt.CacheDir, "people.json"), opt.Faces.ClusterThreshold, opt.Faces.NamedThreshold)
 	l.importJob.wake = make(chan struct{}, 1)
@@ -529,6 +533,9 @@ func (l *Library) Get(id string) *Item {
 	return l.byID[id]
 }
 
+// window is the background window of one kind of work (schedule.Job…).
+func (l *Library) window(job string) schedule.Window { return l.opt.Window.For(job) }
+
 // Path returns the absolute file path of an item.
 func (l *Library) Path(it *Item) string {
 	return filepath.Join(l.opt.Roots[it.Root].Path, filepath.FromSlash(it.Rel))
@@ -559,6 +566,19 @@ func (l *Library) Status() Status {
 		s.Window = w.TextAt(now)
 		if !w.Open(now) {
 			s.WindowNext = w.Next(now).Unix()
+		} else {
+			for _, j := range schedule.Jobs {
+				if jw := w.For(j.Key); !jw.Open(now) {
+					if s.WindowWait == nil {
+						s.WindowWait = map[string]int64{}
+					}
+					var at int64
+					if n := jw.Next(now); !n.IsZero() {
+						at = n.Unix()
+					}
+					s.WindowWait[j.Key] = at
+				}
+			}
 		}
 	}
 	s.DupeMode = "on"

@@ -23,10 +23,11 @@ func (l *Library) Start(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-l.media.wake:
-				if !l.opt.Window.Open(time.Now()) {
+				win := l.window(schedule.JobMedia)
+				if !win.Open(time.Now()) {
 					l.mediaTodo() // the counts for the UI meanwhile
 				}
-				wctx, cancel, ok := l.opt.Window.Wait(ctx)
+				wctx, cancel, ok := win.Wait(ctx)
 				if !ok {
 					return
 				}

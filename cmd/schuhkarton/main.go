@@ -534,7 +534,7 @@ func (r *runner) start(cfg *config.Config) error {
 	}
 	ctx, cancel := context.WithCancel(r.base)
 	lib.Start(ctx)
-	lib.Go(func() { scanLoop(ctx, lib, cfg.RescanInterval(), cfg.Window()) })
+	lib.Go(func() { scanLoop(ctx, lib, cfg.RescanInterval(), cfg.Window().For(schedule.JobScan)) })
 	var br *backup.Runner
 	if cfg.Backup.Dir != "" {
 		var srcs []backup.Source
@@ -543,7 +543,7 @@ func (r *runner) start(cfg *config.Config) error {
 		}
 		br = backup.New(backup.Options{Dir: cfg.Backup.Dir, Sources: srcs, Exclude: cfg.Library.Exclude,
 			CacheDir: cfg.Cache.Dir, ConfigPath: cfg.Path(), Originals: cfg.Backup.Originals,
-			Cache: cfg.Backup.Cache, Config: cfg.Backup.Config, Every: cfg.BackupInterval(), Window: cfg.Window()})
+			Cache: cfg.Backup.Cache, Config: cfg.Backup.Config, Every: cfg.BackupInterval(), Window: cfg.Window().For(schedule.JobBackup)})
 		lib.Go(func() { br.Loop(ctx) })
 	}
 	token := appToken(cfg, r.addr())
