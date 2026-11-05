@@ -523,8 +523,8 @@ func (l *Library) writeXMPOne(ctx context.Context, it *Item) error {
 	}
 	defer l.putXMPTool(et)
 	// the share may go away for minutes (NAS under load): wait for it
-	dir := filepath.Dir(target)
-	retry := func(fn func() error) error { return nasretry.Do(ctx, "metadata "+it.Rel, fn, dir) }
+	place := nasretry.In(filepath.Dir(target), l.opt.Roots[it.Root].Path)
+	retry := func(fn func() error) error { return nasretry.Do(ctx, "metadata "+it.Rel, fn, place) }
 	fail := func(err error) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
