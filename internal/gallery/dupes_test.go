@@ -11,7 +11,9 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -476,5 +478,37 @@ func TestDupeGroupsKeptOverRestart(t *testing.T) {
 	l2.findDupes(ctx)
 	if l2.dupe.grouped.IsZero() {
 		t.Error("a rescan asked for did not group again")
+	}
+}
+
+func TestDupesGroupAgainAfterReadFailure(t *testing.T) {
+	if os.Geteuid() == 0 || runtime.GOOS == "windows" {
+		t.Skip("needs file permissions that stop reading (not root, not Windows)")
+	}
+	l, _ := dupeLib(t)
+	g, _ := l.Dupes()
+	if len(g) == 0 {
+		t.Fatal("no groups")
+	}
+	member := l.Get(g[0].Items[0])
+	l.dupe.dims = sync.Map{} // read the headers again
+	os.Chmod(l.Path(member), 0)
+	defer os.Chmod(l.Path(member), 0o644)
+	ctx := context.Background()
+	l.RescanDupes()
+	l.findDupes(ctx)
+	if !l.dupe.incomplete || l.dupe.fp != "" {
+		t.Fatalf("an unreadable file: incomplete %v, fingerprint %q", l.dupe.incomplete, l.dupe.fp)
+	}
+	os.Chmod(l.Path(member), 0o644)
+	l.findDupes(ctx)
+	if !l.dupe.incomplete {
+		t.Error("grouped again before dupeRegroup")
+	}
+	l.dupe.grouped = time.Now().Add(-dupeRegroup - time.Second)
+	l.dupe.dims = sync.Map{}
+	l.findDupes(ctx)
+	if l.dupe.incomplete || l.dupe.fp == "" {
+		t.Errorf("readable again: incomplete %v, fingerprint %q", l.dupe.incomplete, l.dupe.fp)
 	}
 }
