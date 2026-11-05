@@ -115,9 +115,12 @@ type dupeStore struct {
 	// are not reused after a scan or start, the next grouping reads again
 	readFail atomic.Bool
 	readErr  atomic.Value // string: the first such failure, for the log
-	ver      int64        // -1: not checked since the start; else the item list the groups are right for (see listVer)
-	dirty    atomic.Bool
-	saveMu   sync.Mutex // one dupes.json write at a time
+	// incomplete: the last grouping could not read some files; it is
+	// grouped again after dupeRegroup (no scan may come for days)
+	incomplete bool
+	ver        int64 // -1: not checked since the start; else the item list the groups are right for (see listVer)
+	dirty      atomic.Bool
+	saveMu     sync.Mutex // one dupes.json write at a time
 
 	grouped time.Time // last grouping
 	pending int       // changes since the last grouping (new hashes, written files)
@@ -635,7 +638,7 @@ func (l *Library) findDupes(ctx context.Context) {
 	if hashed.Load() > 0 {
 		l.dupe.pending++
 	}
-	due := listChanged || l.dupe.pending > 0 && time.Since(l.dupe.grouped) >= dupeRegroup
+	due := listChanged || (l.dupe.pending > 0 || l.dupe.incomplete) && time.Since(l.dupe.grouped) >= dupeRegroup
 	seen := l.dupe.pending
 	l.dupe.mu.Unlock()
 	if due && ctx.Err() == nil {
@@ -960,7 +963,7 @@ func (l *Library) groupDupes() {
 	if l.dupe.readFail.Load() {
 		fp = "" // made from incomplete reads: not reused after a scan or start
 		msg, _ := l.dupe.readErr.Load().(string)
-		l.logf("duplicates: grouped while files could not be read (%s); grouped again after the next scan", msg)
+		l.logf("duplicates: grouped while files could not be read (%s); grouped again in %s", msg, dupeRegroup)
 	}
 	keys := map[string]string{}
 	for _, g := range groups {
@@ -972,6 +975,7 @@ func (l *Library) groupDupes() {
 	}
 	l.dupe.mu.Lock()
 	l.dupe.groups, l.dupe.ver, l.dupe.fp, l.dupe.keys = groups, ver, fp, keys
+	l.dupe.incomplete = l.dupe.readFail.Load()
 	l.dupe.mu.Unlock()
 	l.dupe.nGrp.Store(int64(len(groups)))
 	l.markDupesDirty() // kept for the next start
