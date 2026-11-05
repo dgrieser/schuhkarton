@@ -78,17 +78,56 @@
   // ---------------------------------------------------------------------------
   // deciding
   // ---------------------------------------------------------------------------
+  // a few groups per request: moving hundreds of files on a share takes
+  // minutes, longer than a proxy keeps a request open, and the page shows
+  // how far it got
+  const BATCH = 25;
+  let busy = false;
   async function apply(groups, { bulk = false } = {}) {
-    const rs = groups.map((g) => ({ keep: [...keepOf(g)], remove: removeOf(g) })).filter((r) => r.keep.length && r.remove.length);
-    if (!rs.length) { toast(t('Nichts zu löschen')); return false; }
-    const r = await ui.call('/api/admin/dupes/resolve', { groups: rs });
-    if (!r) return false;
-    const done = new Set(groups.map((g) => g.id));
+    const todo = groups.map((g) => ({ g, r: { keep: [...keepOf(g)], remove: removeOf(g) } })).filter((x) => x.r.keep.length && x.r.remove.length);
+    if (!todo.length) { toast(t('Nichts zu löschen')); return false; }
+    if (busy) return false;
+    busy = true;
+    if (bulk) clearTimeout(pollT); // the list must not be drawn anew meanwhile (draw arms it again)
+    const r = { changed: 0, freed: 0, entries: [], warnings: [] };
+    const done = new Set();
+    let err = '';
+    try {
+      for (let i = 0; i < todo.length && !err; i += BATCH) {
+        if (todo.length > BATCH) {
+          ui.snack(t('Wird bereinigt … {d} / {n} Gruppen', { d: num(i), n: num(todo.length) }), '', null, 10 * 60000);
+        }
+        const part = todo.slice(i, i + BATCH);
+        let a = null;
+        try {
+          a = await api('/api/admin/dupes/resolve', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ groups: part.map((x) => x.r) }) });
+          if (!a.ok) err = a.error || t('Fehler');
+        } catch (e) {
+          err = String(e.message || e).replace(/^\d{3} /, '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 160) || t('Fehler');
+        }
+        if (!a) break;
+        // also after an error: what went to the trash stays undoable
+        if (a.ok || a.entries?.length) for (const x of part) done.add(x.g.id);
+        r.changed += a.changed || 0;
+        r.freed += a.freed || 0;
+        r.entries.push(...(a.entries || []));
+        r.warnings.push(...(a.warnings || []));
+      }
+    } finally {
+      busy = false;
+    }
+    if (!done.size) {
+      ui.snack(t('Fehler: {e}', { e: t(err) }), '', null, 8000);
+      return false;
+    }
     D.groups = D.groups.filter((g) => !done.has(g.id));
-    const entries = r.entries || [];
-    ui.snack(bulk || groups.length > 1
-      ? t('{n} Gruppen bereinigt · {s} frei', { n: num(groups.length), s: size(r.freed) })
-      : t('{n} in den Papierkorb · {s} frei', { n: num(r.changed), s: size(r.freed) }),
+    groups = groups.filter((g) => done.has(g.id));
+    const entries = r.entries;
+    const hints = r.warnings.length ? ` · ${t('{n} Hinweise, z. B. {w}', { n: r.warnings.length, w: t(r.warnings[0]) })}` : '';
+    ui.snack(err ? t('{n} Gruppen bereinigt, dann Fehler: {e}', { n: num(groups.length), e: t(err) }) + hints
+      : bulk || groups.length > 1
+        ? t('{n} Gruppen bereinigt · {s} frei', { n: num(groups.length), s: size(r.freed) })
+        : t('{n} in den Papierkorb · {s} frei', { n: num(r.changed), s: size(r.freed) }),
     t('Rückgängig'), async () => {
       const u = await ui.call('/api/admin/trash/restore', { ids: entries });
       if (!u) return;
@@ -100,8 +139,8 @@
       await load();
       if (SK.route().view === 'duplikate') SK.render();
       ui.trashCount();
-    }, 9000);
-    if (r.warnings?.length) ui.report(r, t('Mit Hinweisen'));
+    }, err ? 20000 : 9000);
+    if (r.warnings.length && !err) ui.report(r, t('Mit Hinweisen'));
     SK.loadItems();
     ui.trashCount();
     recount();
@@ -163,7 +202,11 @@
       const ok = await ui.confirmDlg(t('{n} Gruppen bereinigen?', { n: num(sure.length) }),
         t('{f} Kopien kommen in den Papierkorb ({s}); pro Gruppe bleibt die vorgeschlagene beste Kopie. Favoriten, Namen, Ort und Notizen gehen auf sie über. Rückgängig im Papierkorb.', { f: num(sureFiles), s: size(sureFreed) }),
         t('Bereinigen'), true);
-      if (ok && await apply(sure, { bulk: true })) draw(view);
+      if (!ok) return;
+      const b = $('[data-bulk]', view);
+      if (b) b.disabled = true;
+      await apply(sure, { bulk: true });
+      draw(view);
     });
     $('.dp-list', view)?.addEventListener('click', (e) => {
       const c = e.target.closest('[data-g]');
