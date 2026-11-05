@@ -238,18 +238,18 @@ func (r *Runner) backup(ctx context.Context) error {
 	if r.opt.Config && r.opt.ConfigPath != "" {
 		r.set(func(s *Status) { s.Phase = "Einstellungen" })
 		if _, err := os.Stat(r.opt.ConfigPath); err == nil {
-			r.copyIfChanged(ctx, r.opt.ConfigPath, filepath.Join(r.opt.Dir, "config", "config.yaml"))
+			r.copyIfChanged(ctx, filepath.Dir(r.opt.ConfigPath), r.opt.ConfigPath, filepath.Join(r.opt.Dir, "config", "config.yaml"))
 		}
 		// accounts (password hashes) live next to the settings
 		if users := filepath.Join(filepath.Dir(r.opt.ConfigPath), "users.json"); fileExists(users) {
-			r.copyIfChanged(ctx, users, filepath.Join(r.opt.Dir, "config", "users.json"))
+			r.copyIfChanged(ctx, filepath.Dir(users), users, filepath.Join(r.opt.Dir, "config", "users.json"))
 		}
 	}
 	if r.opt.Cache && r.opt.CacheDir != "" {
 		r.set(func(s *Status) { s.Phase = "Cache" })
 		for _, f := range []string{"index.gob.gz", "people.json", "favorites.json", "edits.json", "trash.json", "ai.json", "ocr.json", "speech.json", "marks.json", "notes.json", "dupes.json", "import.json", "roots.json"} {
 			if _, err := os.Stat(filepath.Join(r.opt.CacheDir, f)); err == nil {
-				r.copyIfChanged(ctx, filepath.Join(r.opt.CacheDir, f), filepath.Join(r.opt.Dir, "cache", f))
+				r.copyIfChanged(ctx, r.opt.CacheDir, filepath.Join(r.opt.CacheDir, f), filepath.Join(r.opt.Dir, "cache", f))
 			}
 		}
 		for _, sub := range []string{"thumbs", "faces"} {
@@ -308,7 +308,7 @@ func (r *Runner) mirror(ctx context.Context, src, dst string, skip func(string) 
 			return nil
 		}
 		rel, _ := filepath.Rel(src, p)
-		r.copyIfChanged(ctx, p, filepath.Join(dst, rel))
+		r.copyIfChanged(ctx, src, p, filepath.Join(dst, rel))
 		return nil
 	})
 }
@@ -319,10 +319,13 @@ func (r *Runner) mirror(ctx context.Context, src, dst string, skip func(string) 
 const mtimeWindow = 2 * time.Second
 
 // copyIfChanged copies when the target is missing or differs in size or
-// modification time.
-func (r *Runner) copyIfChanged(ctx context.Context, src, dst string) {
+// modification time. root is the folder src is in or below (the folder
+// backed up).
+func (r *Runner) copyIfChanged(ctx context.Context, root, src, dst string) {
 	// both sides may be on a share that goes away for minutes: wait for it
-	dirs := []string{filepath.Dir(src), r.opt.Dir}
+	// (the target's folders may not be there yet, or half made: ask the
+	// backup folder itself)
+	dirs := []nasretry.Place{nasretry.In(filepath.Dir(src), root), nasretry.In(r.opt.Dir, r.opt.Dir)}
 	var si os.FileInfo
 	err := nasretry.Do(ctx, "Sicherung "+src, func() (err error) { si, err = os.Stat(src); return err }, dirs...)
 	if err != nil {
