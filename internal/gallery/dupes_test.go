@@ -412,3 +412,69 @@ func TestDupesAfterWriteAndRegroup(t *testing.T) {
 		t.Errorf("groups %d, want %d", l.dupe.nGrp.Load(), groups)
 	}
 }
+
+func TestDupeGroupsKeptOverRestart(t *testing.T) {
+	l, root := dupeLib(t)
+	want := l.dupe.nGrp.Load()
+	if want == 0 {
+		t.Fatal("no groups to keep")
+	}
+	opt := l.opt
+	l.Close()
+
+	l2, err := Open(Options{Roots: []Root{{Name: "B", Path: root}}, CacheDir: opt.CacheDir, Workers: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(l2.Close)
+	// shown at once, before any scan or grouping
+	if g, _ := l2.Dupes(); int64(len(g)) != want {
+		t.Fatalf("after the start: %d groups, want %d", len(g), want)
+	}
+	l2.dupeCount()
+	if _, st := l2.Dupes(); st.Todo == 0 || st.Done != st.Todo {
+		t.Errorf("counts before the window: %d / %d", st.Done, st.Todo)
+	}
+	ctx := context.Background()
+	if err := l2.Scan(ctx); err != nil {
+		t.Fatal(err)
+	}
+	l2.findDupes(ctx)
+	if !l2.dupe.grouped.IsZero() {
+		t.Error("the same photos were grouped again after the start")
+	}
+	if g, _ := l2.Dupes(); int64(len(g)) != want {
+		t.Errorf("after the scan: %d groups, want %d", len(g), want)
+	}
+	// a member replaced while stopped: not offered until grouped again
+	g, _ := l2.Dupes()
+	var victim *Item
+	for _, id := range g[0].Items {
+		if id != g[0].Keep[0] {
+			victim = l2.Get(id)
+		}
+	}
+	saveJPEG(t, l2.Path(victim), picture(999, 640, 480, 0), 80)
+	os.Chtimes(l2.Path(victim), time.Now(), time.Now().Add(time.Hour))
+	if err := l2.Scan(ctx); err != nil {
+		t.Fatal(err)
+	}
+	g2, _ := l2.Dupes()
+	for _, gr := range g2 {
+		for _, id := range gr.Items {
+			if id == victim.ID {
+				t.Errorf("a replaced file still offered in group %s", gr.ID)
+			}
+		}
+	}
+	if res, _, _ := l2.ResolveDupes([]DupeResolution{{Keep: g[0].Keep, Remove: []string{victim.ID}}}, "t"); res.Changed != 0 {
+		t.Error("a replaced file was trashed as a duplicate")
+	}
+
+	// asked for: grouped again although nothing changed
+	l2.RescanDupes()
+	l2.findDupes(ctx)
+	if l2.dupe.grouped.IsZero() {
+		t.Error("a rescan asked for did not group again")
+	}
+}
