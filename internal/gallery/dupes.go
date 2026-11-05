@@ -114,7 +114,8 @@ type dupeStore struct {
 	// a file could not be read while grouping (a share away): the groups
 	// are not reused after a scan or start, the next grouping reads again
 	readFail atomic.Bool
-	ver      int64 // -1: not checked since the start; else the item list the groups are right for (see listVer)
+	readErr  atomic.Value // string: the first such failure, for the log
+	ver      int64        // -1: not checked since the start; else the item list the groups are right for (see listVer)
 	dirty    atomic.Bool
 	saveMu   sync.Mutex // one dupes.json write at a time
 
@@ -958,6 +959,8 @@ func (l *Library) groupDupes() {
 	})
 	if l.dupe.readFail.Load() {
 		fp = "" // made from incomplete reads: not reused after a scan or start
+		msg, _ := l.dupe.readErr.Load().(string)
+		l.logf("duplicates: grouped while files could not be read (%s); grouped again after the next scan", msg)
 	}
 	keys := map[string]string{}
 	for _, g := range groups {
@@ -996,7 +999,7 @@ func (l *Library) shaOf(n dupNode) string {
 	l.dupe.mu.Unlock()
 	h, err := fileSHA(l.Path(n.it))
 	if err != nil {
-		l.dupe.readFail.Store(true)
+		l.dupeReadFailed(n.it, err)
 		return ""
 	}
 	l.dupe.mu.Lock()
@@ -1188,12 +1191,14 @@ func (l *Library) dims(it *Item) (int, int) {
 		}
 		f, err := os.Open(l.Path(it))
 		if err != nil {
-			l.dupe.readFail.Store(true)
+			l.dupeReadFailed(it, err)
 		} else {
-			cfg, _, err := image.DecodeConfig(f)
+			// read errors are taken from the file itself: decoders may flatten them into text
+			er := &errReader{r: f}
+			cfg, _, err := image.DecodeConfig(er)
 			f.Close()
-			if err != nil && !errors.Is(err, image.ErrFormat) {
-				l.dupe.readFail.Store(true) // broke off reading, not a format without a header reader
+			if er.err != nil {
+				l.dupeReadFailed(it, er.err)
 			}
 			if err == nil && cfg.Width > 0 {
 				w, h := cfg.Width, cfg.Height
@@ -1290,6 +1295,32 @@ func (l *Library) sameDupeFile(keys map[string]string, id string) bool {
 	}
 	k, ok := keys[id]
 	return !ok || k == it.key
+}
+
+// dupeReadFailed notes a file that could not be read while grouping (a
+// share away or unmounted, no file handles left, a file deleted meanwhile,
+// which leaves the index with the next scan anyway): the groups are made
+// again after the next scan. Callers pass only errors of the file system,
+// not of decoding: a file that reads fine but is broken or of a format
+// without a header reader is what it is.
+func (l *Library) dupeReadFailed(it *Item, err error) {
+	if l.dupe.readFail.CompareAndSwap(false, true) {
+		l.dupe.readErr.Store(it.Rel + ": " + err.Error())
+	}
+}
+
+// errReader remembers the first error of reading (not the end of the file).
+type errReader struct {
+	r   io.Reader
+	err error
+}
+
+func (e *errReader) Read(p []byte) (int, error) {
+	n, err := e.r.Read(p)
+	if err != nil && err != io.EOF && e.err == nil {
+		e.err = err
+	}
+	return n, err
 }
 
 // fileUnchanged tells whether the file on disk is still the one indexed
