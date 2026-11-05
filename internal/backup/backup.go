@@ -147,8 +147,14 @@ func (r *Runner) Loop(ctx context.Context) {
 		r.mu.Lock()
 		r.st.Next = at
 		r.mu.Unlock()
-		// the wall clock decides: a long timer oversleeps a suspended laptop
-		t := time.NewTimer(min(time.Until(at), time.Minute))
+		// the wall clock decides: a long timer oversleeps a suspended laptop;
+		// no window ahead that allows backups (at is zero): look again in a
+		// minute, a backup by hand still runs at once
+		d := time.Minute
+		if !at.IsZero() {
+			d = min(time.Until(at), d)
+		}
+		t := time.NewTimer(d)
 		manual := false
 		select {
 		case <-ctx.Done():

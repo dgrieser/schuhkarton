@@ -2092,13 +2092,25 @@
       // steady: a slow job (descriptions) that is never taken for unreadable files; note: a line below the bar
       // outside the background window nothing moves: no bar counts as stuck
       const waiting = !!s.windowNext;
-      const bar = (label, a, b, fail = 0, { steady = false, note = '' } = {}) => {
+      // a kind of work whose window is closed while others run (a window for some work only)
+      const loc0 = LANG === 'en' ? 'en-GB' : 'de-DE';
+      const jobWait = (job) => {
+        if (!job || !s.windowWait || !(job in s.windowWait)) return '';
+        const at = s.windowWait[job];
+        if (!at) return t('wartet, kein Zeitfenster dafür');
+        const when = new Date(at * 1000);
+        return t('wartet bis {t}', { t: (when.toDateString() === new Date().toDateString() ? '' : when.toLocaleDateString(loc0, { weekday: 'short' }) + ' ') +
+          when.toLocaleTimeString(loc0, { hour: '2-digit', minute: '2-digit' }) });
+      };
+      const bar = (label, a, b, fail = 0, { steady = false, note = '', job = '' } = {}) => {
         if (!(b > 0)) return;
         if (a + fail >= b) { missing = Math.max(missing, fail); return; }
         const st = stalled[label], now = Date.now();
-        if (!st || st.a !== a || st.b !== b || waiting) stalled[label] = { a, b, t: now };
+        const jw = jobWait(job);
+        if (jw) note = note ? `${note} · ${jw}` : jw;
+        if (!st || st.a !== a || st.b !== b || waiting || jw) stalled[label] = { a, b, t: now };
         else if (!steady && !scanning && now - st.t > 90000) { missing = Math.max(missing, b - a); return; }
-        busy = true;
+        if (!jw) busy = true; // a kind of work waiting for its window: nothing to watch closely
         first ??= a / b;
         rows.push(`<div class="row"><span>${label} ${num(a)} / ${num(b)}</span><span class="bar"><i style="width:${(a / b) * 100}%"></i></span></div>`);
         if (note) rows.push(`<div class="row sub">${note}</div>`);
@@ -2109,9 +2121,9 @@
         else rows.push(`<div class="row"><span>${esc(t(s.phase || ''))} · ${num(s.scanned)}</span></div>`);
       }
       const liveVideos = Math.max(0, S.items.filter((it) => it.lv).length);
-      bar(t('Vorschaubilder'), s.thumbs + s.posters, s.photos + s.videos + liveVideos, s.thumbFail || 0);
-      bar(t('Video-Vorschauen'), s.previews, s.videos + liveVideos, s.previewFail || 0);
-      if (s.faceDetection && s.faceTodo) bar(t('Gesichter'), s.faces, s.faceTodo);
+      bar(t('Vorschaubilder'), s.thumbs + s.posters, s.photos + s.videos + liveVideos, s.thumbFail || 0, { job: 'media' });
+      bar(t('Video-Vorschauen'), s.previews, s.videos + liveVideos, s.previewFail || 0, { job: 'media' });
+      if (s.faceDetection && s.faceTodo) bar(t('Gesichter'), s.faces, s.faceTodo, 0, { job: 'media' });
       // remote jobs: descriptions and text recognition; failures go into the summary once all is tried
       const remote = (p, label, stopped) => {
         if (s[`${p}Error`] && !s[`${p}PausedUntil`]) {
@@ -2119,7 +2131,7 @@
           return 0;
         }
         const wasBusy = busy;
-        bar(label, s[`${p}Done`], s[`${p}Todo`], 0, { steady: true, note: jobNote(s, p) });
+        bar(label, s[`${p}Done`], s[`${p}Todo`], 0, { steady: true, note: jobNote(s, p), job: p === 'xmp' ? 'metadata' : p });
         if (s[`${p}PausedUntil`]) busy = wasBusy; // nothing moves until the pause ends
         return s[`${p}Done`] >= s[`${p}Todo`] && Account.can('admin') ? s[`${p}Fail`] || 0 : 0;
       };
@@ -2127,7 +2139,7 @@
       if (s.ocrMode && s.ocrMode !== 'off') noOCR = remote('ocr', t('Texterkennung'), t('Texterkennung angehalten'));
       if (s.speechOn) remote('speech', t('Spracherkennung'), t('Spracherkennung angehalten'));
       if (s.xmpOn && Account.can('admin')) remote('xmp', t('In Dateien schreiben'), t('Schreiben in Dateien angehalten'));
-      if (s.dupeMode === 'on' && Account.can('admin')) bar(t('Duplikate prüfen'), s.dupeDone, s.dupeTodo);
+      if (s.dupeMode === 'on' && Account.can('admin')) bar(t('Duplikate prüfen'), s.dupeDone, s.dupeTodo, 0, { job: 'dupes' });
       if (s.rulesRunning && Account.can('admin')) { busy = true; bar(t('Einsortieren'), s.rulesDone, s.rulesTodo, s.rulesFail || 0); }
       if (s.offline?.length) rows.push(`<div class="row"><span class="bad" title="${esc(t('Der bisherige Stand bleibt, bis der Ordner wieder da ist.'))}">${t('Nicht erreichbar')}: ${esc(s.offline.join(', '))}</span></div>`);
       if (s.import && Account.can('admin')) {

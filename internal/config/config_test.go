@@ -363,7 +363,7 @@ background:
     - {days: "sat,sun", from: "00:00", to: "07:00"}
   once:
     - {from: "2000-01-01 09:00", to: "13:00"}
-    - {from: "2999-01-01 09:00", to: "13:00"}
+    - {from: "2999-01-01 09:00", to: "13:00", jobs: [dupes, backup]}
 `), 0o600)
 	c, err := Load(p)
 	if err != nil {
@@ -373,9 +373,14 @@ background:
 		t.Errorf("once %+v", c.Background.Once)
 	}
 	w := c.Window()
-	if len(w.Rules) != 2 || len(w.Extra) != 1 || w.Rules[0].From != 23*60 {
+	if len(w.Rules) != 2 || len(w.Extra) != 1 || w.Rules[0].From != 23*60 || len(w.Extra[0].Jobs) != 2 {
 		t.Errorf("window %+v", w)
 	}
+	c.Background.Once[0].Jobs = []string{"thumbnails"}
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "unknown kind of work") {
+		t.Errorf("unknown kind: %v", err)
+	}
+	c.Background.Once[0].Jobs = []string{"dupes"}
 	c.Background.Windows = append(c.Background.Windows, BackgroundWindow{Days: "feiertags", From: "10:00", To: "11:00"})
 	c.Background.Once = append(c.Background.Once, BackgroundOnce{From: "morgen", To: "13:00"})
 	err = c.Validate()

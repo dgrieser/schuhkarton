@@ -21,6 +21,8 @@ import (
 	"sync/atomic"
 	"time"
 	"unsafe"
+
+	"github.com/dgrieser/schuhkarton/internal/schedule"
 )
 
 // Duplicates are found from the small thumbnails, so it is cheap enough to
@@ -548,10 +550,11 @@ func (l *Library) dupeLoop(ctx context.Context) {
 		case <-l.dupe.wake:
 		case <-tick.C:
 		}
-		if !l.opt.Window.Open(time.Now()) {
+		win := l.window(schedule.JobDupes)
+		if !win.Open(time.Now()) {
 			l.dupeCount() // the counts for the UI meanwhile
 		}
-		wctx, cancel, ok := l.opt.Window.Wait(ctx)
+		wctx, cancel, ok := win.Wait(ctx)
 		if !ok {
 			l.saveDupes()
 			return

@@ -648,6 +648,7 @@ background:                   # time windows for background work; none: any time
     - {days: "sat,sun", from: "00:00", to: "07:00"}   # days empty: every day
   once:                       # one-time, dropped when over
     - {from: "2026-11-03 09:00", to: "13:00"}
+    - {from: "2026-11-05 15:00", to: "15:10", jobs: [dupes]}   # only some work
   from: ""                    # older form: one window for every day
   to: ""
 worker:                       # for "schuhkarton worker"
@@ -666,7 +667,10 @@ windows, e.g. Monday to Friday 23:00 to 08:00 and at the weekend 00:00 to
 drop out of the settings when they are over. Days are written like
 `mon-fri`, `sat,sun` or `mo,mi,fr`. The windows cover thumbnails and previews,
 faces, descriptions, text and speech recognition, writing metadata into
-files, duplicates, the import folder, regular rescans and backups. Work that
+files, duplicates, the import folder, regular rescans and backups. Each
+window may allow only some of it with `jobs` (`scan`, `media`, `ai`, `ocr`,
+`speech`, `metadata`, `dupes`, `backup`, `cache`, `import`; none: all), e.g.
+a short window today for the duplicates only; work no window allows waits. Work that
 is still running when the window closes stops and goes on in the next one;
 a scan or an import that has begun finishes. The status shows when the work
 starts again. The scan at start, what somebody opens (a thumbnail, a video)

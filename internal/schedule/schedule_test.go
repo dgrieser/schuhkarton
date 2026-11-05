@@ -176,3 +176,52 @@ func TestWait(t *testing.T) {
 		cancel()
 	}
 }
+
+func TestWindowFor(t *testing.T) {
+	loc := time.Local
+	night := Rule{Days: AllDays, From: 23 * 60, To: 6 * 60}
+	backupOnly := Rule{Days: AllDays, From: 12 * 60, To: 13 * 60, Jobs: []string{JobBackup}}
+	once := Span{From: time.Date(2026, 11, 5, 15, 0, 0, 0, loc), To: time.Date(2026, 11, 5, 15, 5, 0, 0, loc), Jobs: []string{JobDupes}}
+	w := Window{Rules: []Rule{night, backupOnly}, Extra: []Span{once}}
+	noon := time.Date(2026, 11, 5, 12, 30, 0, 0, loc)
+	if !w.For(JobBackup).Open(noon) || w.For(JobMedia).Open(noon) {
+		t.Error("noon: only the backup may run")
+	}
+	at15 := time.Date(2026, 11, 5, 15, 1, 0, 0, loc)
+	if !w.For(JobDupes).Open(at15) || w.For(JobBackup).Open(at15) {
+		t.Error("15:01: only the duplicates may run")
+	}
+	midnight := time.Date(2026, 11, 6, 0, 30, 0, 0, loc)
+	for _, j := range Jobs {
+		if !w.For(j.Key).Open(midnight) {
+			t.Errorf("night: %s may run", j.Key)
+		}
+	}
+	// a kind no window allows never runs, unlike a window without rules
+	only := Window{Rules: []Rule{backupOnly}}
+	if m := only.For(JobMedia); m.Any() || m.Open(noon) || !m.Next(noon).IsZero() {
+		t.Error("media without a window of its own runs")
+	}
+	if !(Window{}).For(JobMedia).Any() {
+		t.Error("no windows at all: any time")
+	}
+	if got := w.TextAt(noon); !strings.Contains(got, "12:00–13:00 (nur Sicherung)") || !strings.Contains(got, "(nur Duplikate)") {
+		t.Errorf("text: %s", got)
+	}
+}
+
+func TestParseJobs(t *testing.T) {
+	if j, err := ParseJobs([]string{"Backup", " dupes ", "backup"}); err != nil || len(j) != 2 {
+		t.Errorf("%v %v", j, err)
+	}
+	if _, err := ParseJobs([]string{"thumbnails"}); err == nil {
+		t.Error("an unknown kind is an error")
+	}
+	all := make([]string, len(Jobs))
+	for i, j := range Jobs {
+		all[i] = j.Key
+	}
+	if j, err := ParseJobs(all); err != nil || j != nil {
+		t.Errorf("all kinds: %v %v", j, err)
+	}
+}

@@ -85,13 +85,23 @@
     }
     return out.join(',');
   };
+  // the kinds of background work a window can allow (schedule.Jobs)
+  const JOBS = [['scan', 'Einlesen'], ['media', 'Vorschaubilder und Gesichter'], ['ai', 'Beschreibungen'], ['ocr', 'Texterkennung'],
+    ['speech', 'Spracherkennung'], ['metadata', 'Metadaten schreiben'], ['dupes', 'Duplikate'], ['backup', 'Sicherung'],
+    ['cache', 'Cache auslagern'], ['import', 'Import']];
+  // as the server reads them: any case, spaces around, each once
+  const normJobs = (jobs) => [...new Set((jobs || []).map((j) => String(j).trim().toLowerCase()))].filter((k) => JOBS.some(([x]) => x === k));
+  const jobsText = (jobs) => {
+    const j = normJobs(jobs);
+    return j.length && j.length < JOBS.length ? ` (${t('nur')} ${JOBS.filter(([k]) => j.includes(k)).map(([, l]) => t(l)).join(', ')})` : '';
+  };
   // the background windows in a line, for the summary
   const bgSummary = () => {
     const B = C.background || {}, short = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'];
     const days = (m) => m === 127 ? t('täglich') : [1, 2, 3, 4, 5, 6, 0].filter((d) => m & (1 << d)).map((d) => t(short[d])).join(', ');
-    const parts = (B.windows || []).map((w) => `${days(parseDays(w.days))} ${w.from}–${w.to}`);
+    const parts = (B.windows || []).map((w) => `${days(parseDays(w.days))} ${w.from}–${w.to}${jobsText(w.jobs)}`);
     if (B.from && B.to) parts.unshift(`${t('täglich')} ${B.from}–${B.to}`);
-    for (const o of B.once || []) parts.push(`${t('einmalig')} ${(o.from || '').replace('T', ' ')}–${o.to}`);
+    for (const o of B.once || []) parts.push(`${t('einmalig')} ${(o.from || '').replace('T', ' ')}–${o.to}${jobsText(o.jobs)}`);
     return parts.length ? esc(parts.join(' · ')) : t('jederzeit');
   };
   const windowsOK = () => {
@@ -390,6 +400,7 @@
           <span class="muted small">${t('Auf diesem Prozessor braucht der eingebaute HEIC/AVIF-Decoder Minuten und einige hundert MB pro Foto. Er springt nur ein, wo heif-dec fehlt oder ein Foto nicht lesen kann. Weitere Fotos warten, statt den Speicher zu füllen.')}</span></label>` : ''}
         <h3>${t('Hintergrundarbeit')}</h3>
         <p class="muted">${t('Vorschaubilder, Gesichter, Beschreibungen, Text- und Spracherkennung, Schreiben in Dateien, Duplikate, Import, regelmäßiges Einlesen und Sicherung laufen nur in diesen Zeitfenstern, z.B. Mo–Fr 23:00–08:00 und Sa–So 00:00–07:00. Ein Fenster über Mitternacht gehört zum Tag, an dem es beginnt. Keine Fenster: jederzeit. Was jemand anschaut oder von Hand startet, läuft sofort.')}</p>
+        <p class="muted">${t('Pro Fenster lässt sich wählen, welche Arbeit darin laufen darf, z.B. tagsüber nur Duplikate oder nur die Sicherung. Arbeit, die kein Fenster erlaubt, wartet.')}</p>
         <div id="bgwin"></div>
         <div class="btns"><button class="btn" id="bgadd" ${dis('background.windows')}>${icon('plus')}<span>${t('Zeitfenster')}</span></button></div>
         <h3>${t('Einmalig')}</h3>
@@ -445,12 +456,27 @@
     const order = [1, 2, 3, 4, 5, 6, 0];
     const short = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'];
     const wdis = dis('background.windows'), odis = dis('background.once');
+    // which kinds of work a window allows: none chosen means all
+    const jobChips = (o, d) => {
+      const j = normJobs(o.jobs);
+      return `<div class="chips bgjobs">${JOBS.map(([k, label]) =>
+        `<button type="button" class="chip ${!j.length || j.includes(k) ? 'on' : ''}" data-j="${k}" ${d}>${esc(t(label))}</button>`).join('')}</div>`;
+    };
+    const bindJobs = (row, o, redraw) => row.querySelectorAll('[data-j]').forEach((b) => b.onclick = () => {
+      const all = JOBS.map(([k]) => k);
+      const j = normJobs(o.jobs);
+      const cur = new Set(j.length ? j : all);
+      if (cur.has(b.dataset.j)) cur.delete(b.dataset.j); else cur.add(b.dataset.j);
+      if (!cur.size) return; // at least one; remove the window to allow nothing
+      o.jobs = cur.size === all.length ? [] : all.filter((k) => cur.has(k));
+      redraw(); validate();
+    });
     const drawWin = () => {
       $('#bgwin', el).innerHTML = B.windows.map((w, i) => {
         const m = parseDays(w.days);
         return `<div class="bgrow" data-i="${i}"><div class="chips">${order.map((d) => `<button type="button" class="chip ${m & (1 << d) ? 'on' : ''}" data-d="${d}" ${wdis}>${t(short[d])}</button>`).join('')}</div>
           <input type="time" class="bgf" value="${esc(w.from || '')}" ${wdis}><span>–</span><input type="time" class="bgt" value="${esc(w.to || '')}" ${wdis}>
-          <button class="btn" data-del="${i}" title="${t('Entfernen')}" ${wdis}>${icon('x')}</button></div>`;
+          <button class="btn" data-del="${i}" title="${t('Entfernen')}" ${wdis}>${icon('x')}</button>${jobChips(w, wdis)}</div>`;
       }).join('') || `<p class="muted small">${t('Keine Zeitfenster: Hintergrundarbeit läuft jederzeit.')}</p>`;
       $('#bgwin', el).querySelectorAll('.bgrow').forEach((row) => {
         const w = B.windows[+row.dataset.i];
@@ -460,6 +486,7 @@
         $('.bgf', row).oninput = (e) => { w.from = e.target.value; validate(); };
         $('.bgt', row).oninput = (e) => { w.to = e.target.value; validate(); };
         $('[data-del]', row).onclick = () => { B.windows.splice(+row.dataset.i, 1); drawWin(); validate(); };
+        bindJobs(row, w, drawWin);
       });
     };
     const drawOnce = () => {
@@ -467,7 +494,7 @@
         const [date, from] = (o.from || '').replace('T', ' ').split(' ');
         return `<div class="bgrow" data-i="${i}"><input type="date" class="bgd" value="${esc(date || '')}" ${odis}>
           <input type="time" class="bgf" value="${esc((from || '').slice(0, 5))}" ${odis}><span>–</span><input type="time" class="bgt" value="${esc((o.to || '').slice(-5))}" ${odis}>
-          <button class="btn" data-del="${i}" title="${t('Entfernen')}" ${odis}>${icon('x')}</button></div>`;
+          <button class="btn" data-del="${i}" title="${t('Entfernen')}" ${odis}>${icon('x')}</button>${jobChips(o, odis)}</div>`;
       }).join('');
       $('#bgonce', el).querySelectorAll('.bgrow').forEach((row) => {
         const o = B.once[+row.dataset.i];
@@ -482,6 +509,7 @@
         $('.bgf', row).oninput = set;
         $('.bgt', row).oninput = set;
         $('[data-del]', row).onclick = () => { B.once.splice(+row.dataset.i, 1); drawOnce(); validate(); };
+        bindJobs(row, o, drawOnce);
       });
     };
     $('#bgadd', el).onclick = () => { B.windows.push({ days: 'mon-fri', from: '23:00', to: '06:00' }); drawWin(); validate(); };

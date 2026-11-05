@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/dgrieser/schuhkarton/internal/schedule"
 )
 
 // Two cache tiers (cache.max_size, cache.overflow_dir): everything is made
@@ -133,7 +135,7 @@ func (l *Library) spillLoop(ctx context.Context) {
 	tick := time.NewTicker(spillEvery)
 	defer tick.Stop()
 	for {
-		wctx, cancel, ok := l.opt.Window.Wait(ctx)
+		wctx, cancel, ok := l.window(schedule.JobCache).Wait(ctx)
 		if !ok {
 			return
 		}

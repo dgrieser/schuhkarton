@@ -21,6 +21,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/dgrieser/schuhkarton/internal/schedule"
 )
 
 // ImportOptions configure the import folder.
@@ -158,7 +160,7 @@ func (l *Library) importLoop(ctx context.Context) {
 	defer t.Stop()
 	for {
 		// only inside the background window; a started import is not cut short
-		if l.opt.Window.Open(time.Now()) {
+		if l.window(schedule.JobImport).Open(time.Now()) {
 			if err := l.importOnce(ctx); err != nil && ctx.Err() == nil {
 				l.importJob.lastErr.Store(err.Error())
 				l.logf("import: %v", err)
