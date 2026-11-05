@@ -177,8 +177,9 @@ func (l *Library) mediaTodo() (thumbs, previews, faces []*Item) {
 	var nThumb, nPoster, nPrev, nFace int64
 	fs := l.FaceStatus()
 	faceOK, recog := fs.Detection, fs.Recognition
+	has := l.haveCached() // tier 2 listed once, not asked per file
 	for _, it := range items {
-		if !exists(l.CachePath(it, VarSmall)) || (l.opt.Previews && it.Kind == Photo && !l.hasCached(it, VarLarge)) {
+		if !has(it, VarSmall) || (l.opt.Previews && it.Kind == Photo && !has(it, VarLarge)) {
 			thumbs = append(thumbs, it)
 		} else if it.Kind == Photo {
 			nThumb++
@@ -186,7 +187,7 @@ func (l *Library) mediaTodo() (thumbs, previews, faces []*Item) {
 			nPoster++
 		}
 		if it.Kind == Video && l.opt.VideoPreviews {
-			if l.hasCached(it, VarPreview) {
+			if has(it, VarPreview) {
 				nPrev++
 			} else {
 				previews = append(previews, it)

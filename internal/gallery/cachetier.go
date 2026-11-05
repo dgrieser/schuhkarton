@@ -2,6 +2,7 @@ package gallery
 
 import (
 	"context"
+	"errors"
 	"io"
 	"io/fs"
 	"os"
@@ -68,27 +69,49 @@ func (l *Library) hasCached(it *Item, variant string) bool { return l.cached(it,
 // in tier 2. Tier 2 (a network share) is listed once, folder by folder, not
 // asked file by file.
 func (l *Library) havePreview() func(*Item) bool {
+	has := l.haveCached()
+	return func(it *Item) bool { return it.Kind == Photo && has(it, VarLarge) }
+}
+
+// haveCached returns a test for derivatives that exist here or in tier 2,
+// for checking many items at once: tier 2 (a network share) is listed once,
+// folder by folder, instead of asked file by file (thousands of round
+// trips). When tier 2 cannot be listed, what may be there counts as there:
+// making it looks again.
+func (l *Library) haveCached() func(*Item, string) bool {
 	moved := map[string]bool{}
+	unreadable := map[string]bool{} // shards (key prefixes) that could not be listed; "" all
 	if l.opt.OverflowDir != "" {
 		root := filepath.Join(l.opt.OverflowDir, "thumbs")
-		dirs, _ := os.ReadDir(root)
+		dirs, err := os.ReadDir(root)
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			unreadable[""] = true
+		}
 		for _, d := range dirs {
-			files, _ := os.ReadDir(filepath.Join(root, d.Name()))
+			if !d.IsDir() {
+				continue // .DS_Store and the like
+			}
+			files, err := os.ReadDir(filepath.Join(root, d.Name()))
+			if err != nil {
+				unreadable[d.Name()] = true
+			}
 			for _, f := range files {
-				if variantOf(f.Name()) == VarLarge {
-					moved[f.Name()] = true
-				}
+				moved[f.Name()] = true
 			}
 		}
 	}
-	return func(it *Item) bool {
-		if it.Kind != Photo {
-			return false
-		}
-		if exists(l.CachePath(it, VarLarge)) {
+	return func(it *Item, variant string) bool {
+		p := l.CachePath(it, variant)
+		if exists(p) {
 			return true
 		}
-		return moved[filepath.Base(l.CachePath(it, VarLarge))]
+		if l.opt.OverflowDir == "" || !spillable(variant) {
+			return false
+		}
+		if unreadable[""] || len(it.key) >= 2 && unreadable[it.key[:2]] {
+			return true
+		}
+		return moved[filepath.Base(p)]
 	}
 }
 

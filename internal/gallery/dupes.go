@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"image"
 	"io"
 	"math"
@@ -106,9 +107,14 @@ type dupeStore struct {
 	sigs   map[string]*dupeSig // root name + "/" + rel
 	ignore [][]string          // sets of keys that are not duplicates of each other
 	groups []DupeGroup
-	ver    int64 // -1: group again; else the item list the groups were made for (see listVer)
-	dirty  atomic.Bool
-	saveMu sync.Mutex // one dupes.json write at a time
+	fp     string            // what the groups were made from (see dupeFingerprint), kept in dupes.json; "" groups again
+	keys   map[string]string // item id -> file key of each group member when grouped
+	// a file could not be read while grouping (a share away): the groups
+	// are not reused after a scan or start, the next grouping reads again
+	readFail atomic.Bool
+	ver      int64 // -1: not checked since the start; else the item list the groups are right for (see listVer)
+	dirty    atomic.Bool
+	saveMu   sync.Mutex // one dupes.json write at a time
 
 	grouped time.Time // last grouping
 	pending int       // changes since the last grouping (new hashes, written files)
@@ -132,12 +138,19 @@ func (l *Library) loadDupes() {
 	var f struct {
 		Sigs   map[string]*dupeSig `json:"sigs"`
 		Ignore [][]string          `json:"ignore"`
+		Groups []DupeGroup         `json:"groups"`
+		FP     string              `json:"fp"`
+		Keys   map[string]string   `json:"keys"`
 	}
 	if json.Unmarshal(b, &f) == nil {
 		if f.Sigs != nil {
 			l.dupe.sigs = f.Sigs
 		}
 		l.dupe.ignore = f.Ignore
+		// the groups of the last run: shown at once after a start, made
+		// again only when the photos changed since (see findDupes)
+		l.dupe.groups, l.dupe.fp, l.dupe.keys = f.Groups, f.FP, f.Keys
+		l.dupe.nGrp.Store(int64(len(f.Groups)))
 	}
 }
 
@@ -149,7 +162,8 @@ func (l *Library) saveDupes() error {
 		return nil
 	}
 	l.dupe.mu.Lock()
-	b, err := json.Marshal(map[string]any{"version": 1, "sigs": l.dupe.sigs, "ignore": l.dupe.ignore})
+	b, err := json.Marshal(map[string]any{"version": 1, "sigs": l.dupe.sigs, "ignore": l.dupe.ignore,
+		"groups": l.dupe.groups, "fp": l.dupe.fp, "keys": l.dupe.keys})
 	l.dupe.mu.Unlock()
 	if err != nil {
 		return err
@@ -534,6 +548,9 @@ func (l *Library) dupeLoop(ctx context.Context) {
 		case <-l.dupe.wake:
 		case <-tick.C:
 		}
+		if !l.opt.Window.Open(time.Now()) {
+			l.dupeCount() // the counts for the UI meanwhile
+		}
 		wctx, cancel, ok := l.opt.Window.Wait(ctx)
 		if !ok {
 			l.saveDupes()
@@ -551,24 +568,7 @@ func (l *Library) findDupes(ctx context.Context) {
 		return
 	}
 	defer l.dupe.running.Store(false)
-	items := l.Items()
-	var todo []*Item
-	var total, have int64
-	l.dupe.mu.Lock()
-	for _, it := range items {
-		if !dupeEligible(it) {
-			continue
-		}
-		total++
-		if s := l.dupe.sigs[l.favKey(it)]; s != nil && s.Key == it.key {
-			have++
-			continue
-		}
-		todo = append(todo, it)
-	}
-	l.dupe.mu.Unlock()
-	l.dupe.todo.Store(total)
-	l.dupe.done.Store(have)
+	todo := l.dupeCount()
 	var hashed atomic.Int64
 	start := time.Now()
 	if len(todo) > 0 {
@@ -616,8 +616,18 @@ func (l *Library) findDupes(ctx context.Context) {
 	// Grouping compares the whole library (seconds on a small machine): a
 	// changed item list groups at once, new hashes (photos coming in one by
 	// one) at most every dupeRegroup; the first time at once.
+	lv := l.listVer()
 	l.dupe.mu.Lock()
-	listChanged := l.dupe.ver != l.listVer()
+	listChanged, fp := l.dupe.ver != lv, l.dupe.fp
+	l.dupe.mu.Unlock()
+	if listChanged && fp != "" && fp == l.dupeFingerprint(l.Items()) {
+		// a new item list with the same photos (a scan, a start): the
+		// groups are still right
+		l.dupe.mu.Lock()
+		l.dupe.ver, listChanged = lv, false
+		l.dupe.mu.Unlock()
+	}
+	l.dupe.mu.Lock()
 	if hashed.Load() > 0 {
 		l.dupe.pending++
 	}
@@ -636,6 +646,83 @@ func (l *Library) findDupes(ctx context.Context) {
 				time.Since(g0).Round(time.Millisecond), l.dupe.nGrp.Load())
 		}
 	}
+}
+
+// dupeCount stores how many photos have hashes (for the UI) and returns
+// those still without.
+func (l *Library) dupeCount() []*Item {
+	items := l.Items()
+	var todo []*Item
+	var total, have int64
+	l.dupe.mu.Lock()
+	for _, it := range items {
+		if !dupeEligible(it) {
+			continue
+		}
+		total++
+		if s := l.dupe.sigs[l.favKey(it)]; s != nil && s.Key == it.key {
+			have++
+			continue
+		}
+		todo = append(todo, it)
+	}
+	l.dupe.mu.Unlock()
+	l.dupe.todo.Store(total)
+	l.dupe.done.Store(have)
+	return todo
+}
+
+// dupeFingerprint sums up what the groups are made from: the settings, the
+// pairs marked as no duplicates, and every photo with its file, hash,
+// capture time and what rankCopies weighs (place, camera, edits, favorites,
+// names, description, live video). Equal fingerprints give equal groups and
+// suggestions. Call without l.dupe.mu held.
+func (l *Library) dupeFingerprint(items []*Item) string {
+	type row struct {
+		it *Item
+		k  string
+		ok bool
+	}
+	rows := make([]row, 0, len(items))
+	l.dupe.mu.Lock()
+	for _, it := range items {
+		if !dupeEligible(it) {
+			continue
+		}
+		k := l.favKey(it)
+		s := l.dupe.sigs[k]
+		rows = append(rows, row{it, k, s != nil && s.Key == it.key && s.Err == ""})
+	}
+	ignore := make([]string, len(l.dupe.ignore))
+	for i, set := range l.dupe.ignore {
+		ignore[i] = strings.Join(set, "|")
+	}
+	l.dupe.mu.Unlock()
+	keys := make([]string, 0, len(rows))
+	for _, r := range rows {
+		it := r.it
+		l.mu.RLock()
+		meta := fmt.Sprintf("%d|%s|%t|%s|%s|%s|%s|%s|%d|%d|%g|%g", it.Taken, it.TakenSrc, it.GPS, it.Make, it.Model,
+			it.LiveVideo, l.AlbumOf(it), it.Ext(), it.W, it.H, it.Aspect, it.Duration)
+		l.mu.RUnlock()
+		live := ""
+		if lv := l.liveOf(it); lv != nil {
+			live = lv.key // its size counts in what a group frees
+		}
+		keys = append(keys, fmt.Sprintf("%s|%s|%s|%t|%s|%s|%d|%d|%t|%t", it.ID, r.k, it.key, r.ok, meta, live,
+			min(3, l.favCount(it)), min(4, l.namedFaces(it)), l.override(it) != nil, l.AIOf(it) != nil))
+	}
+	sort.Strings(keys)
+	h := sha256.New()
+	fmt.Fprintf(h, "v1|%+v|%s\n", l.opt.Dupes.limits(), l.opt.Dupes.SimilarWindow)
+	for _, set := range ignore {
+		fmt.Fprintf(h, "ignore|%s\n", set)
+	}
+	for _, k := range keys {
+		h.Write([]byte(k))
+		h.Write([]byte{'\n'})
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // dupeRegroup is the least time between two groupings for new hashes.
@@ -688,8 +775,11 @@ func (l *Library) groupDupes() {
 	ver := l.listVer()
 	lim := l.opt.Dupes.limits()
 	var nodes []dupNode
+	all := l.Items()
+	fp := l.dupeFingerprint(all) // before the grouping: a change meanwhile groups again
+	l.dupe.readFail.Store(false)
 	l.dupe.mu.Lock()
-	for _, it := range l.Items() {
+	for _, it := range all {
 		if !dupeEligible(it) {
 			continue
 		}
@@ -863,10 +953,22 @@ func (l *Library) groupDupes() {
 		}
 		return groups[a].ID < groups[b].ID
 	})
+	if l.dupe.readFail.Load() {
+		fp = "" // made from incomplete reads: not reused after a scan or start
+	}
+	keys := map[string]string{}
+	for _, g := range groups {
+		for _, id := range g.Items {
+			if it := l.Get(id); it != nil {
+				keys[id] = it.key
+			}
+		}
+	}
 	l.dupe.mu.Lock()
-	l.dupe.groups, l.dupe.ver = groups, ver
+	l.dupe.groups, l.dupe.ver, l.dupe.fp, l.dupe.keys = groups, ver, fp, keys
 	l.dupe.mu.Unlock()
 	l.dupe.nGrp.Store(int64(len(groups)))
+	l.markDupesDirty() // kept for the next start
 }
 
 // listVer changes whenever the item list is replaced (scans, deletes,
@@ -891,6 +993,7 @@ func (l *Library) shaOf(n dupNode) string {
 	l.dupe.mu.Unlock()
 	h, err := fileSHA(l.Path(n.it))
 	if err != nil {
+		l.dupe.readFail.Store(true)
 		return ""
 	}
 	l.dupe.mu.Lock()
@@ -1080,9 +1183,15 @@ func (l *Library) dims(it *Item) (int, int) {
 			d := v.([2]int)
 			return d[0], d[1]
 		}
-		if f, err := os.Open(l.Path(it)); err == nil {
+		f, err := os.Open(l.Path(it))
+		if err != nil {
+			l.dupe.readFail.Store(true)
+		} else {
 			cfg, _, err := image.DecodeConfig(f)
 			f.Close()
+			if err != nil && !errors.Is(err, image.ErrFormat) {
+				l.dupe.readFail.Store(true) // broke off reading, not a format without a header reader
+			}
 			if err == nil && cfg.Width > 0 {
 				w, h := cfg.Width, cfg.Height
 				if it.Aspect > 0 && (it.Aspect < 1) != (w < h) {
@@ -1140,13 +1249,16 @@ func (l *Library) Dupes() ([]DupeGroup, DupeStatus) {
 	}
 	l.dupe.mu.Lock()
 	groups := append([]DupeGroup(nil), l.dupe.groups...)
+	keys := l.dupe.keys
 	l.dupe.mu.Unlock()
-	// drop members that are gone since (deleted, moved)
+	// drop members that are gone since (deleted, moved) or another file now
+	// (replaced while Schuhkarton was stopped: the groups of the last run
+	// are shown until grouped again)
 	out := groups[:0]
 	for _, g := range groups {
 		var ids []string
 		for _, id := range g.Items {
-			if l.Get(id) != nil {
+			if l.sameDupeFile(keys, id) {
 				ids = append(ids, id)
 			}
 		}
@@ -1154,7 +1266,7 @@ func (l *Library) Dupes() ([]DupeGroup, DupeStatus) {
 			continue
 		}
 		g.Items = ids
-		if l.Get(g.Keep[0]) == nil {
+		if !l.sameDupeFile(keys, g.Keep[0]) {
 			g.Keep = []string{ids[0]}
 		}
 		out = append(out, g)
@@ -1164,6 +1276,25 @@ func (l *Library) Dupes() ([]DupeGroup, DupeStatus) {
 		}
 	}
 	return out, st
+}
+
+// sameDupeFile tells whether item id is there and still the file it was
+// when grouped.
+func (l *Library) sameDupeFile(keys map[string]string, id string) bool {
+	it := l.Get(id)
+	if it == nil {
+		return false
+	}
+	k, ok := keys[id]
+	return !ok || k == it.key
+}
+
+// fileUnchanged tells whether the file on disk is still the one indexed
+// (size and time): before a scan after the start, the index may not know
+// yet that a file was replaced while Schuhkarton was stopped.
+func (l *Library) fileUnchanged(it *Item) bool {
+	fi, err := os.Lstat(l.Path(it)) // as the scan reads it (a link itself)
+	return err == nil && fi.Size() == it.Size && fi.ModTime().Unix() == it.MTime
 }
 
 // DupeMember describes one copy for the comparison.
@@ -1271,8 +1402,11 @@ func (l *Library) ResolveDupes(rs []DupeResolution, by string) (EditResult, int6
 		if len(r.Keep) == 0 || len(r.Remove) == 0 {
 			continue
 		}
+		l.dupe.mu.Lock()
+		keys := l.dupe.keys
+		l.dupe.mu.Unlock()
 		keep := l.Get(r.Keep[0])
-		if keep == nil {
+		if keep == nil || !l.sameDupeFile(keys, keep.ID) || !l.fileUnchanged(keep) {
 			res.warn("Element nicht gefunden")
 			continue
 		}
@@ -1285,8 +1419,10 @@ func (l *Library) ResolveDupes(rs []DupeResolution, by string) (EditResult, int6
 			if kept[id] {
 				continue
 			}
-			if it := l.Get(id); it != nil {
+			if it := l.Get(id); it != nil && l.sameDupeFile(keys, id) && l.fileUnchanged(it) {
 				rem = append(rem, it)
+			} else if it != nil {
+				res.warn("%s: geändert seit dem Vergleich, bleibt", path.Base(it.Rel))
 			}
 		}
 		if len(rem) == 0 {
@@ -1442,7 +1578,7 @@ func iou(a, b Face) float64 {
 // RescanDupes groups everything again soon.
 func (l *Library) RescanDupes() {
 	l.dupe.mu.Lock()
-	l.dupe.ver = -1
+	l.dupe.ver, l.dupe.fp = -1, "" // asked for: group again even when nothing changed
 	l.dupe.mu.Unlock()
 	l.kickDupes()
 }
