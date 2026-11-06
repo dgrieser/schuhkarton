@@ -117,8 +117,8 @@ func (l *Library) ensureBG(ctx context.Context, it *Item, variant string) (strin
 // making runs in.
 func (l *Library) ensure(ctx, work context.Context, it *Item, variant string, background bool) (string, error) {
 	p := l.CachePath(it, variant)
-	if q := l.cached(it, variant); q != "" {
-		return q, nil
+	if q, err := l.cached(it, variant, background); q != "" || err != nil {
+		return q, err // tier 2 does not answer: at once, not after a long wait
 	}
 	fk := it.key + variant
 	c := &call{done: make(chan struct{})}
@@ -183,7 +183,7 @@ func (l *Library) makePhotoThumbs(ctx context.Context, it *Item, want string, ba
 	src := l.Path(it)
 	ext := it.Ext()
 	sp, lp := l.CachePath(it, VarSmall), l.CachePath(it, VarLarge)
-	both := want == VarLarge || l.opt.Previews && !l.hasCached(it, VarLarge)
+	both := want == VarLarge || l.opt.Previews && !l.hasCached(it, VarLarge, background)
 	q := l.opt.Quality
 	// Go decodes the common formats itself, HEIC and AVIF included, in the
 	// convert child (convert.go); scaling first and turning the small
@@ -617,7 +617,7 @@ func (l *Library) decodeExternal(ctx context.Context, it *Item) (image.Image, er
 // when a large preview exists; files Go cannot decode fall back to the
 // preview.
 func (l *Library) renderJPEG(ctx context.Context, it *Item, n int, original bool, quality int, background bool) ([]byte, error) {
-	if it.Kind == Photo && (original || !l.hasCached(it, VarLarge)) {
+	if it.Kind == Photo && (original || !l.hasCached(it, VarLarge, background)) {
 		if b, err := l.originalJPEG(ctx, it, n, quality, background); err == nil {
 			return b, nil
 		}

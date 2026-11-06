@@ -7,9 +7,11 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/dgrieser/schuhkarton/internal/schedule"
@@ -37,9 +39,67 @@ func variantOf(name string) string {
 }
 
 type cacheTiers struct {
-	mu      sync.Mutex // one file at a time moves (rekey, spill, removal)
-	wake    chan struct{}
-	spilled int64 // files moved in this run, for the log
+	mu        sync.Mutex // one file at a time moves (rekey, spill, removal)
+	wake      chan struct{}
+	spilled   int64         // files moved in this run, for the log
+	awayUntil atomic.Int64  // tier 2 did not answer: not asked before this time (unix ns)
+	lookups   chan struct{} // viewers' lookups under way, those left hanging included
+}
+
+// Tier 2 is a share, and a share can hang. A viewer's lookup there waits at
+// most tier2Wait; when the share did not answer, tier 2 counts as away for
+// tier2Pause and is not asked at all, so requests fail at once instead of
+// piling up (over HTTP/2 a few hanging requests stall the whole page). The
+// lookups under way are bounded too (a hanging one counts until it ends);
+// a lookup waits for its turn within the same tier2Wait.
+// Background work waits for the share instead: it must not take a hang
+// for a failure of the file.
+var (
+	tier2Wait       = 4 * time.Second
+	tier2Pause      = 30 * time.Second
+	maxTier2Lookups = 16
+	tier2Exists     = exists
+)
+
+// ErrTier2Away: the file may be in tier 2, but the share does not answer.
+var ErrTier2Away = errors.New("the cache on the network share does not answer")
+
+// inTier2 tells whether a file is in tier 2, waiting at most tier2Wait.
+func (l *Library) inTier2(p string) (bool, error) {
+	if time.Now().UnixNano() < l.tiers.awayUntil.Load() {
+		return false, ErrTier2Away
+	}
+	t := time.NewTimer(tier2Wait)
+	defer t.Stop()
+	away := func() (bool, error) {
+		now := time.Now()
+		if l.tiers.awayUntil.Swap(now.Add(tier2Pause).UnixNano()) < now.UnixNano() {
+			l.logf("cache tier 2 (%s): no answer within %v, not asked for %v", l.opt.OverflowDir, tier2Wait, tier2Pause)
+		}
+		return false, ErrTier2Away
+	}
+	slots := l.tiers.lookups
+	if slots != nil {
+		select {
+		case slots <- struct{}{}:
+		case <-t.C:
+			return away() // every lookup hangs
+		}
+	}
+	res, look := make(chan bool, 1), tier2Exists
+	go func() {
+		ok := look(p)
+		if slots != nil {
+			<-slots
+		}
+		res <- ok
+	}()
+	select {
+	case ok := <-res:
+		return ok, nil
+	case <-t.C:
+		return away()
+	}
 }
 
 // overflowFile is where a variant of a key lives in tier 2 ("" without one).
@@ -51,21 +111,40 @@ func (l *Library) overflowFile(key, variant string) string {
 }
 
 // cached returns the path of a derivative in tier 1 or tier 2 ("" when it
-// does not exist yet).
-func (l *Library) cached(it *Item, variant string) string {
+// does not exist yet). For a viewer (not background) it fails with
+// ErrTier2Away when the derivative may be in tier 2 but the share does not
+// answer; background work waits for the share.
+func (l *Library) cached(it *Item, variant string, background bool) (string, error) {
 	if p := l.CachePath(it, variant); exists(p) {
-		return p
+		return p, nil
 	}
-	if p := l.overflowFile(it.key, variant); p != "" && exists(p) {
-		return p
+	p := l.overflowFile(it.key, variant)
+	if p == "" {
+		return "", nil
 	}
-	return ""
+	if background {
+		if exists(p) {
+			return p, nil
+		}
+		return "", nil
+	}
+	if ok, err := l.inTier2(p); !ok {
+		return "", err
+	}
+	return p, nil
 }
 
-// CachedPath is cached for the server.
-func (l *Library) CachedPath(it *Item, variant string) string { return l.cached(it, variant) }
+// CachedPath is cached for the server (a viewer).
+func (l *Library) CachedPath(it *Item, variant string) (string, error) {
+	return l.cached(it, variant, false)
+}
 
-func (l *Library) hasCached(it *Item, variant string) bool { return l.cached(it, variant) != "" }
+// hasCached tells whether a derivative exists; when tier 2 does not answer,
+// what may be there counts as there (it is not made again meanwhile).
+func (l *Library) hasCached(it *Item, variant string, background bool) bool {
+	p, err := l.cached(it, variant, background)
+	return p != "" || err != nil
+}
 
 // havePreview returns a test for photos whose large preview exists, here or
 // in tier 2. Tier 2 (a network share) is listed once, folder by folder, not
@@ -212,6 +291,10 @@ func (l *Library) spill(ctx context.Context) bool {
 		}
 		dst := filepath.Join(l.opt.OverflowDir, "thumbs", filepath.Base(filepath.Dir(f.path)), filepath.Base(f.path))
 		if err := l.moveToTier2(ctx, f.path, dst); err != nil {
+			if errors.Is(err, errSpillGone) {
+				done = false // renamed meanwhile: look again (under its new name) next time
+				continue
+			}
 			if ctx.Err() != nil { // the time window closed mid-copy
 				done = false
 				break
@@ -230,20 +313,46 @@ func (l *Library) spill(ctx context.Context) bool {
 	return done
 }
 
+// errSpillGone: the file to move was renamed, removed or made again.
+var errSpillGone = errors.New("cache file changed meanwhile")
+
 // moveToTier2 copies a file over (another file system: no rename) and
 // removes it here a little later: a request that has just picked the path
-// here can still open it.
+// here can still open it. The copy runs without the lock (the share may be
+// slow, a rotation must not wait for it); a rename or removal of the file
+// meanwhile shows when the copy takes its name (errSpillGone). Windows
+// cannot rename or remove a file that is open: there the lock is held
+// throughout.
 func (l *Library) moveToTier2(ctx context.Context, src, dst string) error {
-	l.tiers.mu.Lock()
-	defer l.tiers.mu.Unlock()
+	whole := runtime.GOOS == "windows"
+	if whole {
+		l.tiers.mu.Lock()
+		defer l.tiers.mu.Unlock()
+	}
 	st, err := os.Stat(src)
-	if err != nil { // renamed or removed meanwhile
-		return nil
+	if err != nil {
+		return errSpillGone
 	}
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
 	}
-	if err := copyFileAtomic(ctx, src, dst); err != nil {
+	tmp, err := copyToTemp(ctx, src, dst)
+	if err != nil {
+		if _, serr := os.Stat(src); errors.Is(serr, fs.ErrNotExist) {
+			return errSpillGone // removed or renamed while it was copied
+		}
+		return err
+	}
+	if !whole {
+		l.tiers.mu.Lock()
+		defer l.tiers.mu.Unlock()
+	}
+	if now, err := os.Stat(src); err != nil || !now.ModTime().Equal(st.ModTime()) || now.Size() != st.Size() {
+		os.Remove(tmp)
+		return errSpillGone
+	}
+	if err := os.Rename(tmp, dst); err != nil {
+		os.Remove(tmp)
 		return err
 	}
 	remove := func() {
@@ -265,30 +374,31 @@ func (l *Library) moveToTier2(ctx context.Context, src, dst string) error {
 // have its path.
 var spillGrace = time.Minute
 
-func copyFileAtomic(ctx context.Context, src, dst string) error {
+// copyToTemp copies src next to dst under a temporary name and returns it.
+func copyToTemp(ctx context.Context, src, dst string) (string, error) {
 	in, err := os.Open(src)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer in.Close()
 	tmp := dst + ".tmp"
 	out, err := os.Create(tmp)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if _, err := io.Copy(out, ctxReader{ctx, in}); err != nil {
 		out.Close()
 		os.Remove(tmp)
-		return err
+		return "", err
 	}
 	if err := out.Close(); err != nil {
 		os.Remove(tmp)
-		return err
+		return "", err
 	}
 	if st, err := in.Stat(); err == nil {
 		os.Chtimes(tmp, st.ModTime(), st.ModTime())
 	}
-	return os.Rename(tmp, dst)
+	return tmp, nil
 }
 
 // ctxReader stops a copy when ctx ends.

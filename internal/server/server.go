@@ -8,6 +8,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -573,6 +574,11 @@ func (s *Server) thumb(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
 	defer cancel()
 	p, err := s.lib.Ensure(ctx, it, variant)
+	if errors.Is(err, gallery.ErrTier2Away) {
+		w.Header().Set("Retry-After", "30")
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
@@ -686,7 +692,14 @@ func (s *Server) video(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Umwandeln ist ausgeschaltet", http.StatusNotFound)
 		return
 	}
-	if cached := s.lib.CachedPath(it, gallery.VarH264); cached != "" {
+	cached, err := s.lib.CachedPath(it, gallery.VarH264)
+	if errors.Is(err, gallery.ErrTier2Away) {
+		// it may be converted already: not again while the share hangs
+		w.Header().Set("Retry-After", "30")
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	if cached != "" {
 		w.Header().Set("Content-Type", "video/mp4")
 		http.ServeFile(w, r, cached)
 		return

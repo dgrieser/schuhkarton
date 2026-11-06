@@ -252,7 +252,7 @@ func (l *Library) faceImage(ctx context.Context, it *Item) ([]byte, string, erro
 		}
 	}
 	// large preview from the cache (RAW, odd formats)
-	if p, err := l.Ensure(context.Background(), it, VarLarge); err == nil {
+	if p, err := l.ensureBG(ctx, it, VarLarge); err == nil {
 		b, err := os.ReadFile(p)
 		return b, "face.jpg", err
 	}

@@ -3,6 +3,7 @@
 package gallery
 
 import (
+	"bytes"
 	"compress/gzip"
 	"context"
 	"crypto/sha1"
@@ -400,6 +401,7 @@ func Open(opt Options) (*Library, error) {
 	l.people = newPeopleStore(filepath.Join(opt.CacheDir, "people.json"), opt.Faces.ClusterThreshold, opt.Faces.NamedThreshold)
 	l.importJob.wake = make(chan struct{}, 1)
 	l.tiers.wake = make(chan struct{}, 1)
+	l.tiers.lookups = make(chan struct{}, maxTier2Lookups)
 	l.loadEdits()
 	if err := l.SetRules(opt.Rules); err != nil {
 		l.logf("Regeln ausgeschaltet: %v", err)
@@ -727,6 +729,18 @@ func (l *Library) saveIndex() {
 	l.saveMu.Lock()
 	defer l.saveMu.Unlock()
 	l.dirty.Store(false)
+	start := time.Now()
+	// only the encoding holds the lock (a writer waiting for it holds up
+	// every reader, the viewer too); compressing and writing come after
+	var buf bytes.Buffer
+	l.mu.RLock()
+	err := gob.NewEncoder(&buf).Encode(indexFile{Version: indexVersion, Items: l.items, Formats: l.formatsKnown.Load(), VideoSidecars: true})
+	l.mu.RUnlock()
+	locked := time.Since(start)
+	if err != nil {
+		l.logf("save index: %v", err)
+		return
+	}
 	path := filepath.Join(l.opt.CacheDir, "index.gob.gz")
 	tmp := path + ".tmp"
 	f, err := os.Create(tmp)
@@ -735,9 +749,7 @@ func (l *Library) saveIndex() {
 		return
 	}
 	zw := gzip.NewWriter(f)
-	l.mu.RLock()
-	err = gob.NewEncoder(zw).Encode(indexFile{Version: indexVersion, Items: l.items, Formats: l.formatsKnown.Load(), VideoSidecars: true})
-	l.mu.RUnlock()
+	_, err = buf.WriteTo(zw)
 	if err == nil {
 		err = zw.Close()
 	}
@@ -749,6 +761,9 @@ func (l *Library) saveIndex() {
 	}
 	if err != nil {
 		l.logf("save index: %v", err)
+	}
+	if d := time.Since(start); d > 3*time.Second {
+		l.logf("save index: %v (%v of it holding the library lock)", d.Round(100*time.Millisecond), locked.Round(100*time.Millisecond))
 	}
 }
 
