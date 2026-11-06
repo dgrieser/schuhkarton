@@ -2,9 +2,12 @@ package gallery
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -66,9 +69,11 @@ func TestCacheTiers(t *testing.T) {
 	// written during the grace time: no copy stays here under the new key
 	it2 := l.Items()[1]
 	// as just after a move: in tier 2, and still here until spillGrace ends
-	if err := copyFileAtomic(ctx, l.overflowFile(it2.key, VarLarge), l.CachePath(it2, VarLarge)); err != nil {
+	tmp, err := copyToTemp(ctx, l.overflowFile(it2.key, VarLarge), l.CachePath(it2, VarLarge))
+	if err != nil {
 		t.Fatal(err)
 	}
+	os.Rename(tmp, l.CachePath(it2, VarLarge))
 	old2 := it2.key
 	f, _ = os.OpenFile(l.Path(it2), os.O_APPEND|os.O_WRONLY, 0)
 	f.Write([]byte{0})
@@ -181,5 +186,98 @@ func TestHavePreview(t *testing.T) {
 	have := l.havePreview()
 	if !have(items[0]) || !have(items[1]) || have(items[2]) {
 		t.Errorf("here %v, tier 2 %v, none %v", have(items[0]), have(items[1]), have(items[2]))
+	}
+}
+
+// A share that hangs: the lookup in tier 2 gives up after tier2Wait, then
+// tier 2 is not asked at all for a while; viewers get an error at once.
+func TestTier2Hangs(t *testing.T) {
+	defer func(g time.Duration) { spillGrace = g }(spillGrace)
+	defer func(w, p time.Duration, f func(string) bool) { tier2Wait, tier2Pause, tier2Exists = w, p, f }(tier2Wait, tier2Pause, tier2Exists)
+	spillGrace = 0
+	overflowSameDiskOK = true
+	defer func() { overflowSameDiskOK = false }()
+	root, over := t.TempDir(), t.TempDir()
+	saveJPEG(t, filepath.Join(root, "2020", "IMG_20200101_120000.jpg"), picture(7, 1600, 1200, 0), 90)
+	l, err := Open(Options{Roots: []Root{{Name: "B", Path: root}}, CacheDir: t.TempDir(), Workers: 1, Previews: true, OverflowDir: over})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	ctx := context.Background()
+	if err := l.Scan(ctx); err != nil {
+		t.Fatal(err)
+	}
+	l.GenerateAll(ctx)
+	l.spill(ctx)
+	it := l.Items()[0]
+	if !exists(l.overflowFile(it.key, VarLarge)) {
+		t.Fatal("large preview not in tier 2")
+	}
+
+	hang := make(chan struct{})
+	var asked atomic.Int32
+	tier2Wait, tier2Pause = 50*time.Millisecond, time.Hour
+	tier2Exists = func(string) bool { asked.Add(1); <-hang; return true }
+	start := time.Now()
+	if _, err := l.Ensure(ctx, it, VarLarge); !errors.Is(err, ErrTier2Away) || time.Since(start) > 2*time.Second {
+		t.Fatalf("first lookup: %v after %v", err, time.Since(start))
+	}
+	start = time.Now()
+	if _, err := l.Ensure(ctx, it, VarLarge); !errors.Is(err, ErrTier2Away) || time.Since(start) > 20*time.Millisecond || asked.Load() != 1 {
+		t.Errorf("while away: %v after %v, asked %d times", err, time.Since(start), asked.Load())
+	}
+	if !l.hasCached(it, VarLarge, false) || exists(l.CachePath(it, VarLarge)) {
+		t.Error("made again in tier 1 while tier 2 is away")
+	}
+	// after the pause the share still hangs: many viewers at once start
+	// only as many lookups as allowed, the hanging one included
+	l.tiers.lookups = make(chan struct{}, 3)
+	l.tiers.awayUntil.Store(0)
+	var wg sync.WaitGroup
+	for range 10 {
+		wg.Add(1)
+		go func() { defer wg.Done(); l.Ensure(ctx, it, VarLarge) }()
+	}
+	wg.Wait()
+	if n := asked.Load(); n > 4 || len(l.tiers.lookups) > 3 { // the first one holds no place here
+		t.Errorf("hanging lookups: asked %d times, %d under way", n, len(l.tiers.lookups))
+	}
+	// back again: the hanging lookups end
+	tier2Exists = exists
+	close(hang)
+	for i := 0; len(l.tiers.lookups) > 0 && i < 100; i++ {
+		time.Sleep(10 * time.Millisecond)
+	}
+	l.tiers.awayUntil.Store(0)
+	if p, err := l.Ensure(ctx, it, VarLarge); err != nil || !strings.HasPrefix(p, over) {
+		t.Errorf("after the pause: %q %v", p, err)
+	}
+	// many viewers at once on a share that answers: they wait their turn
+	l.tiers.lookups = make(chan struct{}, 1)
+	tier2Wait = 2 * time.Second
+	tier2Exists = func(p string) bool { time.Sleep(5 * time.Millisecond); return exists(p) }
+	var failed atomic.Int32
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := l.Ensure(ctx, it, VarLarge); err != nil {
+				failed.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+	if failed.Load() != 0 {
+		t.Errorf("%d of 8 viewers failed on a share that answers", failed.Load())
+	}
+}
+
+// A file renamed or removed before it moved frees nothing here: spill
+// goes on with the next one instead of counting it.
+func TestSpillGoneFile(t *testing.T) {
+	var l Library
+	if err := l.moveToTier2(context.Background(), filepath.Join(t.TempDir(), "gone-l.jpg"), filepath.Join(t.TempDir(), "x-l.jpg")); !errors.Is(err, errSpillGone) {
+		t.Errorf("got %v", err)
 	}
 }
