@@ -35,8 +35,11 @@ var heifTool = sync.OnceValue(func() string {
 // copies), a HEIC in interpreted WebAssembly some hundred MB for minutes.
 // A browser asks for many previews at once, so the decodes queue: as many
 // at a time as there are CPUs, and one at a time on the slow path.
+// Background work takes one of fewer slots first, so a slot is always left
+// for what somebody is looking at.
 var (
 	decodeSlots = make(chan struct{}, max(2, runtime.NumCPU()))
+	bgSlots     = make(chan struct{}, max(1, runtime.NumCPU()-1))
 	slowSlots   atomic.Pointer[chan struct{}] // media.slow_decodes, 1 when not set
 )
 
@@ -72,10 +75,74 @@ func FindHEIFTool() string {
 	return ""
 }
 
-// decodeSlot waits for a free decode slot; call the result to give it back.
-func decodeSlot() func() {
-	decodeSlots <- struct{}{}
-	return func() { <-decodeSlots }
+// decodeSlot waits for a free decode slot; call the result to give it
+// back. Background work keeps one slot free for people looking at photos.
+// It gives up (nil, the error) when the wait ends: ctx, or the request
+// that asked for the picture (see waitFor) is gone.
+func decodeSlot(ctx context.Context, background bool) (func(), error) {
+	done, stop := waitDone(ctx)
+	defer stop()
+	if background {
+		select {
+		case bgSlots <- struct{}{}:
+		case <-done:
+			return nil, context.Cause(waitCtx(ctx))
+		}
+	}
+	select {
+	case decodeSlots <- struct{}{}:
+	case <-done:
+		if background {
+			<-bgSlots
+		}
+		return nil, context.Cause(waitCtx(ctx))
+	}
+	return func() {
+		<-decodeSlots
+		if background {
+			<-bgSlots
+		}
+	}, nil
+}
+
+type waitKey struct{}
+
+// waitFor marks work (that goes on after a request ends) with the request:
+// while it waits for a decode slot, it gives up when the request is gone,
+// so a viewer leafing quickly through photos does not queue up decodes
+// nobody looks at any more. Once a slot is taken, the work runs to the end.
+func waitFor(work, request context.Context) context.Context {
+	return context.WithValue(work, waitKey{}, request)
+}
+
+func waitCtx(ctx context.Context) context.Context {
+	if r, ok := ctx.Value(waitKey{}).(context.Context); ok && r.Err() != nil {
+		return r
+	}
+	return ctx
+}
+
+// waitDone ends when ctx or the request of waitFor ends; call stop when
+// done waiting.
+func waitDone(ctx context.Context) (<-chan struct{}, func()) {
+	r, ok := ctx.Value(waitKey{}).(context.Context)
+	switch {
+	case !ok || r.Done() == nil:
+		return ctx.Done(), func() {}
+	case ctx.Done() == nil:
+		return r.Done(), func() {}
+	}
+	done, quit := make(chan struct{}), make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			close(done)
+		case <-r.Done():
+			close(done)
+		case <-quit:
+		}
+	}()
+	return done, func() { close(quit) }
 }
 
 // rewind goes back to the start of f.

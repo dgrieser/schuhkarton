@@ -126,3 +126,29 @@ func TestShowOldHiddenGroup(t *testing.T) {
 		t.Fatalf("not shown again: people %d labels %v", len(s.people), s.labels)
 	}
 }
+
+func TestNoFaceLeavesPeopleAndHiddenList(t *testing.T) {
+	a := normalize([]float32{1, 0, 0, 0})
+	b := normalize([]float32{0, 1, 0, 0})
+	face := func(e []float32) Face { return Face{Emb: e, Score: 0.9, W: .2, H: .2} }
+	var snap []faceSnap
+	for i := range 4 {
+		snap = append(snap, faceSnap{id: "i" + string(rune('1'+i)), taken: int64(i), faces: []Face{face(a), face(b)}})
+	}
+	s := newPeopleStore(filepath.Join(t.TempDir(), "people.json"), 0.48, 0.42)
+	s.cluster(snap)
+	toy := s.byFace["i1:1"]
+	if toy == "" {
+		t.Fatal("setup: no group for the second face")
+	}
+	for _, it := range snap {
+		s.labels[it.id+":1"] = labelNoFace // what NoFacePerson does
+	}
+	s.cluster(snap)
+	if s.byID[toy] != nil || s.byFace["i1:1"] != "" || s.byFace["i1:0"] == "" {
+		t.Fatalf("no-face group still a person, or the real face lost: %v", s.byFace)
+	}
+	if h := s.hiddenGroups(snap); len(h) != 0 {
+		t.Fatalf("no faces listed as hidden: %+v", h)
+	}
+}

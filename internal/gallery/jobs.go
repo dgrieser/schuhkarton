@@ -2,6 +2,7 @@ package gallery
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -195,7 +196,7 @@ func (l *Library) mediaTodo() (thumbs, previews, faces []*Item) {
 			}
 		}
 		if it.Kind == Photo && faceOK {
-			done := it.FacesDone && (!recog || len(it.Faces) == 0 || it.Faces[0].Emb != nil)
+			done := it.FacesDone && (!recog || !needsEmbedding(it.Faces))
 			if done {
 				nFace++
 			} else {
@@ -221,7 +222,10 @@ func (l *Library) scanFaces(ctx context.Context, it *Item) bool {
 	}
 	prefix := filepath.Join(l.opt.CacheDir, "faces", it.key[:2], it.key)
 	os.MkdirAll(filepath.Dir(prefix), 0o755)
-	faces, err := l.faces.detect(ctx, l, it, prefix)
+	// crops first under a name of their own: faces marked by hand keep
+	// their index and crop, found ones move to where they end up
+	tmp := prefix + "-new"
+	faces, err := l.faces.detect(ctx, l, it, tmp)
 	if err != nil {
 		if ctx.Err() != nil {
 			return false
@@ -233,8 +237,17 @@ func (l *Library) scanFaces(ctx context.Context, it *Item) bool {
 		faces = nil
 	}
 	l.mu.Lock()
-	it.Faces, it.FacesDone = faces, true
+	merged, place := mergeFaces(it.Faces, faces)
+	it.Faces, it.FacesDone = merged, true
 	l.mu.Unlock()
+	for i, to := range place {
+		from := fmt.Sprintf("%s_%d.jpg", tmp, i)
+		if to < 0 {
+			os.Remove(from)
+		} else {
+			os.Rename(from, fmt.Sprintf("%s_%d.jpg", prefix, to))
+		}
+	}
 	l.applyMetaFaces(it) // names from the file's metadata (a new cache)
 	l.markDirty()
 	return true

@@ -325,7 +325,17 @@
       $('[data-next]', el).onclick = () => next(1);
       $('[data-skip]', el).onclick = () => (i >= list.length - 1 ? close() : next(1));
       $('[data-ignore]', el).onclick = async () => { if (await ignore(g)) render(); };
-      $('[data-apply]', el).onclick = async () => { if (await apply([g])) render(); };
+      $('[data-apply]', el).onclick = async () => {
+        // at once something to see: moving files on a share takes a moment
+        const b = $('[data-apply]', el);
+        el.classList.add('dp-busy');
+        for (const x of $$('.dp-foot button, [data-keep], [data-prev], [data-next]', el)) x.disabled = true;
+        b.innerHTML = `<span class="dp-spin"></span><span>${esc(t('Wird gelöscht …'))}</span>`;
+        const ok = await apply([g]);
+        el.classList.remove('dp-busy');
+        render(); // the next group, or this one again after an error
+        return ok;
+      };
       for (const c of $$('.dp-card', el)) {
         const id = c.dataset.id;
         $('[data-keep]', c).onclick = () => toggleKeep(g, id);

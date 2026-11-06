@@ -225,6 +225,7 @@ func (l *Library) Scan(ctx context.Context) error {
 		old[it.ID] = it
 	}
 	var items, todo []*Item
+	var keptFaces [][2]*Item // items rebuilt with their faces: crops follow once the key is final
 	for _, f := range files {
 		rname := l.opt.Roots[f.root].Name
 		id := itemID(rname, f.rel)
@@ -235,6 +236,13 @@ func (l *Library) Scan(ctx context.Context) error {
 		}
 		it := &Item{ID: id, Root: f.root, RootName: rname, Rel: f.rel, Kind: KindOf(f.rel), Size: f.size, MTime: f.mtime}
 		it.key = itemKey(rname, f.rel, f.size, f.mtime)
+		if o := old[id]; o != nil && hasManualFace(o.Faces) {
+			// faces marked by hand cannot be found again: they stay at their
+			// index with their crops (detection runs again and fills in
+			// around them)
+			it.Faces = o.Faces
+			keptFaces = append(keptFaces, [2]*Item{o, it})
+		}
 		items = append(items, it)
 		todo = append(todo, it)
 	}
@@ -282,6 +290,9 @@ func (l *Library) Scan(ctx context.Context) error {
 	}
 	for _, it := range items {
 		l.finishItem(it)
+	}
+	for _, p := range keptFaces {
+		l.copyFaceCrops(p[0], p[1]) // after finishItem (a rotation changes the key)
 	}
 	pairLive(items)
 	l.setItems(items)

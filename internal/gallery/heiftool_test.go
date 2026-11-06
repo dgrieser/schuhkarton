@@ -114,9 +114,16 @@ func TestSlowDecodeLendsSlot(t *testing.T) {
 	os.WriteFile(heic, append([]byte("\x00\x00\x00\x18ftypheic\x00\x00\x00\x00mif1heic"), make([]byte, 64)...), 0o644)
 	l := &Library{opt: Options{CacheDir: dir}}
 	busy := slowSlot() // somebody else on the slow path
+	slot := func() func() {
+		r, err := decodeSlot(context.Background(), false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
 	var mine []func()
 	for range cap(decodeSlots) - 1 {
-		mine = append(mine, decodeSlot())
+		mine = append(mine, slot())
 	}
 	done := make(chan struct{})
 	go func() {
@@ -124,7 +131,7 @@ func TestSlowDecodeLendsSlot(t *testing.T) {
 		close(done)
 	}()
 	got := make(chan func())
-	go func() { got <- decodeSlot() }()
+	go func() { got <- slot() }()
 	select {
 	case r := <-got: // the waiting HEIC holds no slot
 		busy()
@@ -148,4 +155,47 @@ func TestHEIFLast(t *testing.T) {
 	if strings.Join(got, " ") != "b.jpg d.png a.HEIC c.jpeg e.avif" {
 		t.Errorf("order %v", got)
 	}
+}
+
+// Background work leaves a slot for viewers; a viewer that left stops waiting.
+func TestDecodeSlotsReserveAndGiveUp(t *testing.T) {
+	ctx := context.Background()
+	var bg []func()
+	for range cap(bgSlots) {
+		r, err := decodeSlot(ctx, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		bg = append(bg, r)
+	}
+	defer func() {
+		for _, r := range bg {
+			r()
+		}
+	}()
+	// one more background decode waits, a viewer's does not
+	c, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
+	defer cancel()
+	if _, err := decodeSlot(c, true); err == nil {
+		t.Fatal("background took the viewers' slot")
+	}
+	r, err := decodeSlot(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// all taken: a viewer that left gives up waiting, its work context goes on
+	req, leave := context.WithCancel(ctx)
+	work := waitFor(context.WithoutCancel(req), req)
+	errc := make(chan error, 1)
+	go func() { _, err := decodeSlot(work, false); errc <- err }()
+	leave()
+	select {
+	case err := <-errc:
+		if err == nil {
+			t.Error("got a slot although all are taken")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("still waiting after the viewer left")
+	}
+	r()
 }

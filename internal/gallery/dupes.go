@@ -1521,7 +1521,7 @@ func (l *Library) mergeInto(keep *Item, rem []*Item, by string, res *EditResult)
 				if q := l.Person(l.PersonOf(keep.ID, j)); q != nil && q.Name != "" {
 					break
 				}
-				if err := l.LabelFace(keep.ID, j, p.Name); err != nil {
+				if _, err := l.LabelFace(keep.ID, j, p.Name); err != nil {
 					res.warn("Namen: %v", err)
 				}
 				break

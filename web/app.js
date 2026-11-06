@@ -54,7 +54,7 @@
     el.classList.toggle('act', !!action);
     el.classList.add('on');
     clearTimeout(toastT);
-    toastT = setTimeout(() => el.classList.remove('on'), action ? 7000 : 2400);
+    toastT = setTimeout(() => el.classList.remove('on'), action ? 10000 : 2400);
     if (action) $('button', el).onclick = () => { el.classList.remove('on'); onAction(); };
   }
 
@@ -874,7 +874,7 @@
           <div class="kv">${icon('pin')}<div>${d.place ? `<a class="link" href="#/ort/${encodeURIComponent(d.place)}">${esc(d.place)}</a>` : t('Ohne Ortsname')}
           ${d.gps ? `<div class="muted">${d.lat.toFixed(5)}, ${d.lon.toFixed(5)}${d.alt ? ` · ${Math.round(d.alt)} m` : ''}</div>` : ''}</div></div>
           ${d.gps ? '<div class="minimap" id="vMap"></div>' : ''}` : ''}
-        ${faces ? `<h3>${t('Personen')}</h3><div class="faces">${faces}</div>` : ''}
+        ${faces || Account.can('user') ? `<h3>${t('Personen')}${Account.can('user') ? ` <button class="link ai-redo mark-face" data-markface title="${t('Ein Gesicht selbst einrahmen, z.B. wenn es nicht erkannt wurde')}">${icon('face-plus')}<span>${t('Gesicht markieren')}</span></button>` : ''}</h3>${faces ? `<div class="faces">${faces}</div>` : ''}` : ''}
         ${ai ? `<h3>${t('Beschreibung')} <span class="ai-badge" title="${t('Von einem KI-Modell geschrieben')}">${t('KI')}</span></h3>
           ${aiText ? `<div class="ai-desc">${aiText}</div>` : ''}
           ${aiTags.length ? `<div class="chips">${aiTags.map((k) => `<a class="chip" href="#/suche/${encodeURIComponent(k)}">${esc(k)}</a>`).join('')}</div>` : ''}
@@ -897,13 +897,14 @@
         tileLayer().addTo(mm);
         L.circleMarker([d.lat, d.lon], { radius: 7, color: '#fff', weight: 2, fillColor: '#f3b549', fillOpacity: 1 }).addTo(mm);
       }
+      $('[data-markface]', p)?.addEventListener('click', () => this.markFace());
       $('[data-redesc]', p)?.addEventListener('click', () => window.SK?.redescribe?.([it.id]));
       $('[data-reocr]', p)?.addEventListener('click', () => window.SK?.rerecognize?.([it.id]));
       $('[data-respeech]', p)?.addEventListener('click', () => window.SK?.retranscribe?.([it.id]));
       $('[data-print]', p)?.addEventListener('click', (e) => { e.preventDefault(); printItem(it, d); });
       for (const a of $$('[data-face]', p)) {
         a.onclick = (e) => {
-          const f = d.faces[+a.dataset.face];
+          const f = d.faces.find((x) => x.idx === +a.dataset.face);
           if (!f.person || e.altKey) { e.preventDefault(); this.namePop(a, f); }
           else this.close(true);
         };
@@ -919,10 +920,67 @@
       ov.className = 'v-faces';
       ov.innerHTML = d.faces.map((f) => `<div class="v-face ${f.name ? '' : 'unknown'}" data-idx="${f.idx}" style="left:${f.X * 100}%;top:${f.Y * 100}%;width:${f.W * 100}%;height:${f.H * 100}%"><span>${esc(f.name || (f.person ? t('Unbenannt') : '?'))}</span></div>`).join('');
       this.media.appendChild(ov);
-      for (const b of $$('.v-face', ov)) b.onclick = (e) => { e.stopPropagation(); this.namePop(b, d.faces[+b.dataset.idx]); };
+      for (const b of $$('.v-face', ov)) b.onclick = (e) => { e.stopPropagation(); this.namePop(b, d.faces.find((x) => x.idx === +b.dataset.idx)); };
     },
 
-    namePop(anchor, face) {
+    // draws a box around a face by hand (a paused video: on its frame), then asks for the name
+    markFace() {
+      if (!Account.need('user')) return;
+      const it = this.it, m = this.media;
+      const v = it.k === 2 ? $('video', m) : null;
+      const at = v ? (v.pause(), v.currentTime) : 0;
+      const lv = $('.live-v', m); // a Live Photo: the box is drawn on the still photo
+      if (lv) { lv.pause(); lv.classList.remove('on'); }
+      this.resetZoom();
+      if (this.sheetMode.matches) this.setSheet(Math.min(this.sheetH(), innerHeight * 0.3)); // room for the picture
+      $('.v-mark', m)?.remove();
+      $('#pop')?.remove();
+      const ov = document.createElement('div');
+      ov.className = 'v-mark';
+      ov.innerHTML = `<div class="v-mark-hint"><span>${t('Rahmen um das Gesicht ziehen oder auf das Gesicht tippen')}</span><button type="button" data-cancel>${t('Abbrechen')}</button></div>`;
+      m.appendChild(ov);
+      this.el.classList.add('marking'); // bars out of the way
+      const done = () => { ov.remove(); $('#pop')?.remove(); this.el.classList.remove('marking'); };
+      $('[data-cancel]', ov).onclick = (e) => { e.stopPropagation(); done(); };
+      let start = null;
+      const box = document.createElement('div');
+      box.className = 'v-face mark';
+      const pos = (e) => {
+        const r = ov.getBoundingClientRect();
+        return { x: clamp((e.clientX - r.left) / r.width, 0, 1), y: clamp((e.clientY - r.top) / r.height, 0, 1) };
+      };
+      const draw = (a, b) => {
+        const x = Math.min(a.x, b.x), y = Math.min(a.y, b.y), w = Math.abs(a.x - b.x), h = Math.abs(a.y - b.y);
+        Object.assign(box.style, { left: `${x * 100}%`, top: `${y * 100}%`, width: `${w * 100}%`, height: `${h * 100}%` });
+        return { x, y, w, h };
+      };
+      ov.onpointerdown = (e) => {
+        if (e.target.closest('.v-mark-hint')) return;
+        e.preventDefault(); e.stopPropagation();
+        $('#pop')?.remove();
+        ov.setPointerCapture(e.pointerId);
+        start = pos(e);
+        ov.appendChild(box);
+        draw(start, start);
+      };
+      ov.onpointermove = (e) => { if (start) { e.stopPropagation(); draw(start, pos(e)); } };
+      ov.onpointerup = (e) => {
+        if (!start) return;
+        e.stopPropagation();
+        let b = draw(start, pos(e));
+        start = null;
+        if (b.w < 0.02 || b.h < 0.02) { // a tap: a box around that point
+          const r = ov.getBoundingClientRect(), side = Math.min(r.width, r.height) * 0.2;
+          const w = side / r.width, h = side / r.height;
+          const x = clamp(b.x - w / 2, 0, 1 - w), y = clamp(b.y - h / 2, 0, 1 - h);
+          b = draw({ x, y }, { x: x + w, y: y + h });
+        }
+        this.namePop(box, { add: true, box: b, t: at }, done);
+      };
+      for (const ev of ['click', 'dblclick', 'touchstart']) ov.addEventListener(ev, (e) => e.stopPropagation());
+    },
+
+    namePop(anchor, face, onClose) {
       if (!Account.need('user')) return;
       $('#pop')?.remove();
       const r = anchor.getBoundingClientRect();
@@ -933,28 +991,53 @@
       pop.innerHTML = `<b>${t('Wer ist das?')}</b>
         <input list="pnames" value="${esc(face.name || '')}" placeholder="${t('Name eingeben')}">
         <datalist id="pnames">${names.map((n) => `<option value="${esc(n)}">`).join('')}</datalist>
-        <div class="row"><button class="primary" data-a="save">${t('Speichern')}</button><button data-a="not">${face.person ? t('Nicht diese Person') : t('Ausblenden')}</button></div>`;
+        ${face.add ? `<div class="row"><button class="primary" data-a="save">${t('Speichern')}</button><button data-a="cancel">${t('Abbrechen')}</button></div>`
+          : `<div class="row"><button class="primary" data-a="save">${t('Speichern')}</button><button data-a="not">${face.person ? t('Nicht diese Person') : t('Ausblenden')}</button></div>
+        <button class="ghost" data-a="noface" title="${t('Falsch erkannt: kein Gesicht. Wird nicht mehr gezeigt, andere Gesichter bleiben.')}">${icon('face-x')}<span>${t('Kein Gesicht')}</span></button>`}`;
       document.body.appendChild(pop);
-      pop.style.left = `${clamp(r.left, 8, innerWidth - 250)}px`;
-      pop.style.top = `${clamp(r.bottom + 8, 8, innerHeight - 160)}px`;
+      pop.style.left = `${clamp(r.left, 8, innerWidth - pop.offsetWidth - 8)}px`;
+      pop.style.top = `${clamp(r.bottom + 8, 8, innerHeight - pop.offsetHeight - 8)}px`;
       const inp = $('input', pop);
       inp.focus();
-      const save = async (name) => {
-        pop.remove();
-        await post(`/api/face/${this.it.id}/${face.idx}`, { name });
-        toast(name ? t('Als {name} gespeichert', { name }) : t('Entfernt'));
+      const it = this.it;
+      const refresh = async () => {
         await loadPeople();
-        const d = await api(`/api/item/${this.it.id}`);
+        const d = await api(`/api/item/${it.id}`);
+        if (this.it !== it) return;
         this.detail = d;
         this.renderInfo();
         this.drawFaces();
         scheduleReload();
       };
-      inp.onkeydown = (e) => { if (e.key === 'Enter') save(inp.value.trim()); if (e.key === 'Escape') pop.remove(); e.stopPropagation(); };
+      const close = () => { pop.remove(); onClose?.(); };
+      const save = async (name) => {
+        close();
+        if (face.add) {
+          const b = face.box;
+          toast(t('Wird gespeichert …'));
+          const res = await post(`/api/face/${it.id}/add`, { X: b.x, Y: b.y, W: b.w, H: b.h, t: face.t || 0, name }).catch((e) => ({ error: e.message }));
+          if (res.error) { toast(t('Fehler: {e}', { e: String(res.error).replace(/^\d{3} /, '') })); return; }
+          toast(name ? t('Als {name} gespeichert', { name }) : t('Gesicht markiert'));
+          await refresh();
+          return;
+        }
+        const res = await post(`/api/face/${it.id}/${face.idx}`, { name });
+        if (name === '-') {
+          toast(t('Kein Gesicht'), t('Rückgängig'), async () => { await post('/api/faces/labels', { labels: res.undo }); await refresh(); });
+        } else toast(name ? t('Als {name} gespeichert', { name }) : t('Entfernt'));
+        await refresh();
+      };
+      inp.onkeydown = (e) => {
+        if (e.key === 'Enter' && (inp.value.trim() || face.add)) save(inp.value.trim());
+        if (e.key === 'Escape') close();
+        e.stopPropagation();
+      };
       pop.onclick = (e) => {
         const a = e.target.closest('[data-a]')?.dataset.a;
-        if (a === 'save' && inp.value.trim()) save(inp.value.trim());
+        if (a === 'save' && (inp.value.trim() || face.add)) save(inp.value.trim());
+        if (a === 'cancel') close();
         if (a === 'not') save('');
+        if (a === 'noface') save('-');
       };
     },
 
@@ -1892,7 +1975,8 @@
       head.firstElementChild.outerHTML = `<div class="person-head"><span class="face"><img src="${faceURL(p.cover.item, p.cover.idx)}" alt=""></span><div>
         <input class="name-in" id="pname" value="${esc(p.name)}" placeholder="${Account.can('user') ? t('Name hinzufügen') : t('Unbenannt')}" list="pn2" ${Account.can('user') ? '' : 'readonly'}><datalist id="pn2">${names.map((n) => `<option value="${esc(n)}">`).join('')}</datalist>
         <div class="sub">${pl(items.length, '{n} Foto', '{n} Fotos')} · ${pl(p.faces, '{n} Gesicht', '{n} Gesichter')} · ${t('gleicher Name führt Personen zusammen')}</div></div></div>`;
-      $('.head .tools', view).insertAdjacentHTML('afterbegin', `<button class="btn" id="phide" data-need="user" title="${t('Diese Gruppe nicht mehr zeigen')}">${icon('eye-off')}<span>${t('Ausblenden')}</span></button>`);
+      $('.head .tools', view).insertAdjacentHTML('afterbegin', `<button class="btn" id="phide" data-need="user" title="${t('Diese Gruppe nicht mehr zeigen')}">${icon('eye-off')}<span>${t('Ausblenden')}</span></button>
+        <button class="btn" id="pnoface" data-need="user" title="${t('Falsch erkannt: das sind keine Gesichter. Sie werden nicht mehr gezeigt und nicht wieder gesucht.')}">${icon('face-x')}<span>${t('Kein Gesicht')}</span></button>`);
       const inp = $('#pname', view);
       const save = async () => {
         const name = inp.value.trim();
@@ -1907,6 +1991,18 @@
       };
       inp.onkeydown = (e) => { if (e.key === 'Enter') inp.blur(); };
       inp.onchange = save;
+      $('#pnoface', view).onclick = async () => {
+        const res = await post(`/api/people/${encodeURIComponent(id)}`, { name: '-' });
+        await loadPeople();
+        await loadItems();
+        location.replace('#/personen');
+        toast(pl(Object.keys(res.undo || {}).length, '{n} Gesicht entfernt', '{n} Gesichter entfernt'), t('Rückgängig'), async () => {
+          await post('/api/faces/labels', { labels: res.undo });
+          await loadPeople();
+          await loadItems();
+          toast(t('Wiederhergestellt'));
+        });
+      };
       $('#phide', view).onclick = async () => {
         const res = await post(`/api/people/${encodeURIComponent(id)}`, { name: '~' });
         await loadPeople();

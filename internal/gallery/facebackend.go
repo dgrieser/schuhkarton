@@ -35,6 +35,8 @@ type faceBackend interface {
 	probe() FaceInfo
 	// detect stops when ctx ends (the local helper finishes the photo it has).
 	detect(ctx context.Context, l *Library, it *Item, cropPrefix string) ([]Face, error)
+	// detectData finds faces in a JPEG (no crops kept).
+	detectData(ctx context.Context, l *Library, data []byte) ([]Face, error)
 }
 
 // errTransient marks failures worth retrying later (container down).
@@ -53,6 +55,30 @@ func (f *localFaces) probe() FaceInfo {
 
 func (f *localFaces) detect(ctx context.Context, l *Library, it *Item, prefix string) ([]Face, error) {
 	hf, err := f.pool.Faces(l.Path(it), prefix)
+	if err != nil {
+		return nil, err
+	}
+	return fromHelper(hf), nil
+}
+
+func (f *localFaces) detectData(ctx context.Context, l *Library, data []byte) ([]Face, error) {
+	tmp, err := os.CreateTemp(l.opt.CacheDir, "face-*.jpg")
+	if err != nil {
+		return nil, err
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return nil, err
+	}
+	tmp.Close()
+	prefix := strings.TrimSuffix(tmp.Name(), ".jpg") + "-crop"
+	hf, err := f.pool.Faces(tmp.Name(), prefix)
+	if matches, _ := filepath.Glob(prefix + "_*.jpg"); len(matches) > 0 {
+		for _, m := range matches {
+			os.Remove(m)
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -148,6 +174,34 @@ func (f *remoteFaces) detect(ctx context.Context, l *Library, it *Item, prefix s
 	if err != nil {
 		return nil, err
 	}
+	found, err := f.post(ctx, body, name)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Face, 0, len(found))
+	for i, wf := range found {
+		if b, err := base64.StdEncoding.DecodeString(wf.Crop); err == nil && len(b) > 0 {
+			os.WriteFile(fmt.Sprintf("%s_%d.jpg", prefix, i), b, 0o644)
+		}
+		out = append(out, Face{X: wf.X, Y: wf.Y, W: wf.W, H: wf.H, Score: wf.Score, Emb: helper.DecodeEmbedding(wf.Emb)})
+	}
+	return out, nil
+}
+
+func (f *remoteFaces) detectData(ctx context.Context, l *Library, data []byte) ([]Face, error) {
+	found, err := f.post(ctx, data, "face.jpg")
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Face, 0, len(found))
+	for _, wf := range found {
+		out = append(out, Face{X: wf.X, Y: wf.Y, W: wf.W, H: wf.H, Score: wf.Score, Emb: helper.DecodeEmbedding(wf.Emb)})
+	}
+	return out, nil
+}
+
+// post sends a picture to the face container and returns what it found.
+func (f *remoteFaces) post(ctx context.Context, body []byte, name string) ([]WorkerFace, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, f.url+"/v1/faces", bytes.NewReader(body))
 	if err != nil {
 		return nil, err
@@ -185,14 +239,7 @@ func (f *remoteFaces) detect(ctx context.Context, l *Library, it *Item, prefix s
 	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
 		return nil, err
 	}
-	out := make([]Face, 0, len(res.Faces))
-	for i, wf := range res.Faces {
-		if b, err := base64.StdEncoding.DecodeString(wf.Crop); err == nil && len(b) > 0 {
-			os.WriteFile(fmt.Sprintf("%s_%d.jpg", prefix, i), b, 0o644)
-		}
-		out = append(out, Face{X: wf.X, Y: wf.Y, W: wf.W, H: wf.H, Score: wf.Score, Emb: helper.DecodeEmbedding(wf.Emb)})
-	}
-	return out, nil
+	return res.Faces, nil
 }
 
 // faceImage returns what is sent to the face container: an oriented JPEG

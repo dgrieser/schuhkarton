@@ -152,7 +152,11 @@ func (l *Library) convert(ctx context.Context, req ConvertRequest, background bo
 		req.ExifTool = l.opt.ExifTool
 	}
 	run := func(r ConvertRequest) (ConvertResult, error) {
-		defer decodeSlot()()
+		release, err := decodeSlot(ctx, background)
+		if err != nil {
+			return ConvertResult{}, err
+		}
+		defer release()
 		return l.runConvert(ctx, r)
 	}
 	res, err := run(req)

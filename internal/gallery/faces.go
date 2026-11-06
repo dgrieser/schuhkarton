@@ -7,6 +7,7 @@ import (
 	"os"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -34,6 +35,9 @@ func (r FaceRef) key() string { return fmt.Sprintf("%s:%d", r.Item, r.Idx) }
 
 const (
 	labelHidden = "~"
+	// labelNoFace: not a face at all (a pattern, a toy, a sticker the
+	// detector took for one): left out everywhere, never shown again
+	labelNoFace = "-"
 	minCluster  = 3
 )
 
@@ -44,7 +48,7 @@ type peopleStore struct {
 	threshNew, threshNamed float32
 
 	mu     sync.RWMutex
-	labels map[string]string // face key -> name, "!name" (not this person) or "~" (hidden)
+	labels map[string]string // face key -> name, "!name" (not this person), "~" (hidden) or "-" (no face)
 	people []*Person
 	byID   map[string]*Person
 	byFace map[string]string // face key -> person id
@@ -153,13 +157,17 @@ func (l *Library) NamePerson(id, name string) error {
 }
 
 // LabelFace sets the name of one face. "" removes it from its person
-// (remembered as "not this person"), "~" hides the face.
-func (l *Library) LabelFace(item string, idx int, name string) error {
+// (remembered as "not this person"), "~" hides the face, "-" marks it as
+// no face at all. It returns the label the face had before (for undo).
+func (l *Library) LabelFace(item string, idx int, name string) (string, error) {
 	s := l.people
 	k := FaceRef{item, idx}.key()
 	s.mu.Lock()
+	prev := s.labels[k]
 	name = strings.TrimSpace(name)
 	switch {
+	case name == labelNoFace:
+		s.labels[k] = labelNoFace
 	case name == "":
 		cur := s.labels[k]
 		pid := s.byFace[k]
@@ -178,11 +186,74 @@ func (l *Library) LabelFace(item string, idx int, name string) error {
 	}
 	s.mu.Unlock()
 	if err := s.save(); err != nil {
+		return prev, err
+	}
+	l.recluster()
+	l.bump()
+	return prev, nil
+}
+
+// NoFacePerson marks every face of a person as no face (a group of
+// misdetections). It returns the labels the faces had before, for
+// RestoreFaceLabels.
+func (l *Library) NoFacePerson(id string) (map[string]string, error) {
+	s := l.people
+	s.mu.Lock()
+	p := s.byID[id]
+	if p == nil {
+		s.mu.Unlock()
+		return nil, fmt.Errorf("unknown person %q", id)
+	}
+	prev := map[string]string{}
+	for _, r := range p.refs {
+		k := r.key()
+		prev[k] = s.labels[k]
+		s.labels[k] = labelNoFace
+	}
+	s.mu.Unlock()
+	if err := s.save(); err != nil {
+		return prev, err
+	}
+	l.recluster()
+	l.bump()
+	return prev, nil
+}
+
+// RestoreFaceLabels sets the labels of faces back (undo of NoFacePerson
+// and LabelFace): "" removes a label. Keys are "item:index" of faces that
+// exist.
+func (l *Library) RestoreFaceLabels(labels map[string]string) error {
+	for k := range labels {
+		item, idx, ok := strings.Cut(k, ":")
+		n, err := strconv.Atoi(idx)
+		it := l.Get(item)
+		if !ok || err != nil || it == nil || n < 0 || n >= len(l.ItemFaces(it)) {
+			return fmt.Errorf("unknown face %q", k)
+		}
+	}
+	s := l.people
+	s.mu.Lock()
+	for k, v := range labels {
+		if v = strings.TrimSpace(v); v == "" {
+			delete(s.labels, k)
+		} else {
+			s.labels[k] = v
+		}
+	}
+	s.mu.Unlock()
+	if err := s.save(); err != nil {
 		return err
 	}
 	l.recluster()
 	l.bump()
 	return nil
+}
+
+// IsNoFace tells whether a face was marked as no face.
+func (l *Library) IsNoFace(item string, idx int) bool {
+	l.people.mu.RLock()
+	defer l.people.mu.RUnlock()
+	return l.people.labels[FaceRef{item, idx}.key()] == labelNoFace
 }
 
 func dot(a, b []float32) float32 {
@@ -233,14 +304,19 @@ type cluster struct {
 }
 
 func (c *cluster) add(f *faceRec) {
-	if c.sum == nil {
+	c.refs = append(c.refs, f)
+	if len(f.emb) == 0 {
+		return // named by hand without an embedding: a member, no say in the centroid
+	}
+	if len(c.sum) == 0 {
 		c.sum = make([]float32, len(f.emb))
 	}
 	for i, x := range f.emb {
-		c.sum[i] += x
+		if i < len(c.sum) {
+			c.sum[i] += x
+		}
 	}
 	c.cent = normalize(c.sum)
-	c.refs = append(c.refs, f)
 }
 
 type faceSnap struct {
@@ -250,6 +326,21 @@ type faceSnap struct {
 }
 
 // recluster rebuilds the people from a consistent snapshot of the faces.
+// reclusterSoon groups the faces again in the background; calls while
+// one runs make one more run after it.
+func (l *Library) reclusterSoon() {
+	if l.reclusterQueued.Swap(true) {
+		return
+	}
+	go func() {
+		l.reclusterRun.Lock()
+		defer l.reclusterRun.Unlock()
+		l.reclusterQueued.Store(false)
+		l.recluster()
+		l.bump()
+	}()
+}
+
 func (l *Library) recluster() {
 	l.people.cluster(l.faceSnapshot())
 	l.kickXMP() // names go into the files
@@ -261,7 +352,7 @@ func (l *Library) faceSnapshot() []faceSnap {
 	snap := make([]faceSnap, 0, len(items))
 	l.mu.RLock()
 	for _, it := range items {
-		if it.Kind == Photo && len(it.Faces) > 0 {
+		if len(it.Faces) > 0 { // photos, and videos with faces marked by hand
 			snap = append(snap, faceSnap{it.ID, it.Taken, it.Faces})
 		}
 	}
@@ -302,11 +393,17 @@ func faceRecs(items []faceSnap, labels map[string]string) (map[string]int64, []*
 	for _, it := range items {
 		taken[it.id] = it.taken
 		for i, f := range it.faces {
-			if f.Emb == nil {
+			label := labels[FaceRef{it.id, i}.key()]
+			// without an embedding only a face named by hand counts (it
+			// belongs to its person, but cannot be compared)
+			// (hidden too, so it can be shown again with its group); a face
+			// marked by hand always takes part (it cannot join anybody by
+			// likeness, but can be listed and shown again)
+			if f.Emb == nil && !f.Manual && (label == "" || label == labelNoFace || strings.HasPrefix(label, "!")) {
 				continue
 			}
 			r := &faceRec{ref: FaceRef{it.id, i}, emb: f.Emb, quality: f.Score * float32(math.Sqrt(float64(f.W*f.H))), taken: it.taken}
-			r.label = labels[r.ref.key()]
+			r.label = label
 			all = append(all, r)
 		}
 	}
@@ -348,7 +445,7 @@ func buildPeople(items []faceSnap, labels map[string]string, threshNew, threshNa
 	var rest []*faceRec
 	for _, f := range all {
 		switch {
-		case f.label == labelHidden:
+		case f.label == labelHidden, f.label == labelNoFace:
 		case f.label != "" && !strings.HasPrefix(f.label, "!"):
 			c := named[f.label]
 			if c == nil {
