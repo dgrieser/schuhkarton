@@ -441,6 +441,9 @@ body.has-scrubber .view { padding-right: 64px; }
 .v-info .faces { display: flex; flex-wrap: wrap; gap: 10px; }
 .v-info .faces a { display: grid; justify-items: center; gap: 4px; width: 64px; font-size: 11.5px; text-align: center; color: #c9ccd1; }
 .v-info .faces img { width: 52px; height: 52px; border-radius: 50%; object-fit: cover; background: #222; }
+.v-info .faces .face-t { display: inline-flex; align-items: center; gap: 3px; margin-top: -2px; padding: 2px 6px; border-radius: 999px; background: rgba(255, 255, 255, 0.1); color: #e6e8eb; font-size: 10.5px; font-variant-numeric: tabular-nums; cursor: pointer; }
+.v-info .faces .face-t:hover { background: rgba(255, 255, 255, 0.2); }
+.v-info .faces .face-t .i { width: 9px; height: 9px; }
 .v-info .chips .chip { background: #1d1f23; border-color: #2a2d33; color: #cfd2d7; }
 .v-info a.link { color: var(--accent); }
 .v-info code { font-size: 12px; color: #aab0b9; word-break: break-all; }
@@ -1109,10 +1112,16 @@ select.sel, .setup .user select, .setup #nrole, .adm-shift select {
   .dp-top small { display: none; }
   .dp-cards { grid-auto-columns: 86vw; scroll-snap-type: x mandatory; padding: 10px 7vw; gap: 10px; }
   .dp-card { scroll-snap-align: center; }
-  .dp-foot { display: grid; grid-template-columns: 1fr 1fr; }
-  .dp-foot .dp-sum { grid-column: 1 / -1; text-align: center; }
+  /* one row of buttons under a small summary: more room for the photos */
+  .dp-foot { display: grid; grid-template-columns: auto auto 1fr; gap: 6px; padding: 6px 10px calc(8px + env(safe-area-inset-bottom)); }
+  .dp-foot .dp-sum { grid-column: 1 / -1; text-align: center; font-size: 12.5px; }
   .dp-foot .grow { display: none; }
-  .dp-foot [data-apply] { grid-column: 1 / -1; order: -1; height: 48px; justify-content: center; }
+  .dp-foot .btn { height: 40px; padding: 0 12px; font-size: 14px; }
+  .dp-foot [data-apply] { justify-content: center; }
+  .dp-how { margin: 8px 16px 0; font-size: 12.5px; }
+  .dp-cards { padding-top: 8px; padding-bottom: 8px; }
+  .dp-card { gap: 8px; padding: 8px; }
+  .dp-keep { height: 38px; }
   .mk-tabs { display: flex; }
   .mk-tabs a { flex: 1; justify-content: center; }
 }

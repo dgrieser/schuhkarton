@@ -195,7 +195,7 @@ func (l *Library) mediaTodo() (thumbs, previews, faces []*Item) {
 				previews = append(previews, it)
 			}
 		}
-		if it.Kind == Photo && faceOK {
+		if faceOK && (it.Kind == Photo || (it.Kind == Video && it.LivePhoto == "" && l.media.ffmpeg != "")) {
 			done := it.FacesDone && (!recog || !needsEmbedding(it.Faces))
 			if done {
 				nFace++
@@ -214,18 +214,25 @@ func (l *Library) mediaTodo() (thumbs, previews, faces []*Item) {
 	return thumbs, previews, faces
 }
 
-// scanFaces finds the faces of one photo; false when ctx ended first (the
-// photo is scanned again later).
+// scanFaces finds the faces of one photo or video; false when ctx ended
+// first (it is scanned again later).
 func (l *Library) scanFaces(ctx context.Context, it *Item) bool {
 	if ctx.Err() != nil {
 		return false
 	}
 	prefix := filepath.Join(l.opt.CacheDir, "faces", it.key[:2], it.key)
 	os.MkdirAll(filepath.Dir(prefix), 0o755)
-	// crops first under a name of their own: faces marked by hand keep
-	// their index and crop, found ones move to where they end up
+	// crops first under a name of their own: faces marked by hand or
+	// labeled keep their index and crop, found ones move to where they end up
 	tmp := prefix + "-new"
-	faces, err := l.faces.detect(ctx, l, it, tmp)
+	labeled := l.people.labeled(it.ID)
+	var faces []Face
+	var err error
+	if it.Kind == Video {
+		faces, err = l.detectVideo(ctx, it, tmp, l.ItemFaces(it), labeled)
+	} else {
+		faces, err = l.faces.detect(ctx, l, it, tmp)
+	}
 	if err != nil {
 		if ctx.Err() != nil {
 			return false
@@ -237,7 +244,7 @@ func (l *Library) scanFaces(ctx context.Context, it *Item) bool {
 		faces = nil
 	}
 	l.mu.Lock()
-	merged, place := mergeFaces(it.Faces, faces)
+	merged, place := mergeFaces(it.Faces, faces, labeled, l.people.threshNew)
 	it.Faces, it.FacesDone = merged, true
 	l.mu.Unlock()
 	for i, to := range place {

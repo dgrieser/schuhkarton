@@ -744,6 +744,7 @@
         const h264 = () => { if (triedH264) return; triedH264 = true; v.src = `/v/${it.id}?h264=1`; v.play().catch(() => {}); };
         v.onerror = h264;
         v.src = `/v/${it.id}`;
+        for (const ev of ['pause', 'play', 'seeked']) v.addEventListener(ev, () => { if (this.it === it) this.drawFaces(); });
         m.appendChild(v);
         // HEVC without browser support: transcode right away
         api(`/api/item/${it.id}`).then((d) => { if (/hev|hvc|h265/i.test(d.codec || '') && !canHevc && this.it === it) h264(); });
@@ -864,7 +865,8 @@
       const faces = (d.faces || []).map((f) => {
         const per = f.person ? S.peopleById.get(f.person) : null;
         const name = f.name || (per ? t('Unbenannt') : t('Unbekannt'));
-        return `<a href="${f.person ? `#/person/${encodeURIComponent(f.person)}` : '#'}" data-face="${f.idx}"><img src="${faceURL(it.id, f.idx)}" alt="">${esc(name)}</a>`;
+        const at = it.k === 2 ? `<small class="face-t" data-seek title="${t('Im Video zeigen')}">${icon('play', 'fill')}${fmtDur(f.t)}</small>` : '';
+        return `<a href="${f.person ? `#/person/${encodeURIComponent(f.person)}` : '#'}" data-face="${f.idx}"><img src="${faceURL(it.id, f.idx)}" alt="">${esc(name)}${at}</a>`;
       }).join('');
       p.innerHTML = `
         <h3>${t('Aufnahme')}</h3>
@@ -905,6 +907,7 @@
       for (const a of $$('[data-face]', p)) {
         a.onclick = (e) => {
           const f = d.faces.find((x) => x.idx === +a.dataset.face);
+          if (e.target.closest('[data-seek]')) { e.preventDefault(); this.seekFace(f); return; }
           if (!f.person || e.altKey) { e.preventDefault(); this.namePop(a, f); }
           else this.close(true);
         };
@@ -915,12 +918,30 @@
       $('.v-faces', this.media)?.remove();
       $('#vFaces').classList.toggle('on', this.showFaces);
       const d = this.detail;
-      if (!this.showFaces || !d?.faces?.length || this.it.k !== 1) return;
+      if (!this.showFaces || !d?.faces?.length || (this.it.k !== 1 && this.it.k !== 2)) return;
+      let faces = d.faces;
+      if (this.it.k === 2) { // a video: the faces of the frame it is paused at
+        const v = $('video', this.media);
+        if (!v || !v.paused) return;
+        faces = faces.filter((f) => Math.abs((f.t || 0) - v.currentTime) < 0.25);
+        if (!faces.length) return;
+      }
       const ov = document.createElement('div');
       ov.className = 'v-faces';
-      ov.innerHTML = d.faces.map((f) => `<div class="v-face ${f.name ? '' : 'unknown'}" data-idx="${f.idx}" style="left:${f.X * 100}%;top:${f.Y * 100}%;width:${f.W * 100}%;height:${f.H * 100}%"><span>${esc(f.name || (f.person ? t('Unbenannt') : '?'))}</span></div>`).join('');
+      ov.innerHTML = faces.map((f) => `<div class="v-face ${f.name ? '' : 'unknown'}" data-idx="${f.idx}" style="left:${f.X * 100}%;top:${f.Y * 100}%;width:${f.W * 100}%;height:${f.H * 100}%"><span>${esc(f.name || (f.person ? t('Unbenannt') : '?'))}</span></div>`).join('');
       this.media.appendChild(ov);
       for (const b of $$('.v-face', ov)) b.onclick = (e) => { e.stopPropagation(); this.namePop(b, d.faces.find((x) => x.idx === +b.dataset.idx)); };
+    },
+
+    // a face of a video: pause at the second it was found at and show its box
+    seekFace(f) {
+      const v = $('video', this.media);
+      if (!v) return;
+      v.pause();
+      this.showFaces = true;
+      if (this.sheetMode.matches) this.setSheet(Math.min(this.sheetH(), innerHeight * 0.3)); // room for the picture
+      if (Math.abs(v.currentTime - (f.t || 0)) < 0.01) this.drawFaces();
+      else v.currentTime = f.t || 0; // 'seeked' draws the boxes
     },
 
     // draws a box around a face by hand (a paused video: on its frame), then asks for the name

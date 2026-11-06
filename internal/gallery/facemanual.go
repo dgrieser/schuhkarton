@@ -46,10 +46,7 @@ func (l *Library) AddFace(ctx context.Context, id string, box FaceBox, t float64
 	if err != nil {
 		return 0, err
 	}
-	b := frame.Bounds()
-	px := image.Rect(
-		b.Min.X+int(float32(b.Dx())*box.X), b.Min.Y+int(float32(b.Dy())*box.Y),
-		b.Min.X+int(math.Ceil(float64(float32(b.Dx())*(box.X+box.W)))), b.Min.Y+int(math.Ceil(float64(float32(b.Dy())*(box.Y+box.H))))).Intersect(b)
+	px := boxPixels(frame.Bounds(), box.X, box.Y, box.W, box.H)
 	if px.Dx() < 4 || px.Dy() < 4 {
 		return 0, errors.New("box too small")
 	}
@@ -164,38 +161,50 @@ func encodeJPEG(img image.Image, q int) ([]byte, error) {
 	return buf.Bytes(), err
 }
 
-// mergeFaces puts what detection found next to the faces marked by hand:
-// those keep their index (names and crops belong to it), found faces that
-// cover one of them are dropped, the others take the places of the faces
-// found before, in order, then follow at the end. A place no new face takes
-// keeps its old face, so no index moves.
+// mergeFaces puts what detection found next to the faces that keep their
+// index: those marked by hand and those with a label (labeled is the set of
+// their indexes; names, "not this person", hidden and no face belong to the
+// index, and so does the crop). A found face that is one of them is dropped
+// (it may lend its embedding); the others take the places of the other faces
+// found before, where they are, then in order, then follow at the end. A
+// place no new face takes keeps its old face, so no index moves.
+// One face: the same box in the same frame (a photo has one frame, a video
+// one per moment) unless the embeddings tell two people apart; in another
+// frame of a video the same person (similarity of at least same).
 // place[i] is the index found face i got, -1 when it was dropped (for
 // moving its crop).
-func mergeFaces(old, found []Face) (out []Face, place []int) {
+func mergeFaces(old, found []Face, labeled map[int]bool, same float32) (out []Face, place []int) {
 	place = make([]int, len(found))
-	var manual []Face
-	for _, f := range old {
-		if f.Manual {
-			manual = append(manual, f)
-		}
+	keep := make([]bool, len(old))
+	kept := false
+	for i, f := range old {
+		keep[i] = f.Manual || labeled[i]
+		kept = kept || keep[i]
 	}
-	if len(manual) == 0 {
+	if !kept {
 		for i := range place {
 			place[i] = i
 		}
 		return found, place
 	}
 	out = append([]Face(nil), old...)
-	var fresh []int // found faces not covering a manual one
+	var fresh []int // found faces that are none of the kept ones
 	for i, f := range found {
 		place[i] = -1
 		covered := false
 		for j := range out {
-			if m := &out[j]; m.Manual && boxIoU(f, *m) > 0.4 {
+			m := &out[j]
+			if !keep[j] {
+				continue
+			}
+			switch {
+			case sameSpot(f, *m) && !twoPeople(f, *m, same):
 				covered = true
 				if m.Emb == nil && f.Emb != nil {
 					m.Emb = f.Emb // now it counts for recognition too
 				}
+			case !sameFrame(f, *m) && samePerson(f, *m, same):
+				covered = true // already there from another frame of the video
 			}
 		}
 		if !covered {
@@ -210,7 +219,7 @@ func mergeFaces(old, found []Face) (out []Face, place []int) {
 	for _, j := range fresh {
 		best, bestIoU := -1, float32(0.4)
 		for i := range out {
-			if !out[i].Manual && !taken[i] {
+			if !keep[i] && !taken[i] && sameFrame(found[j], old[i]) {
 				if v := boxIoU(found[j], old[i]); v > bestIoU {
 					best, bestIoU = i, v
 				}
@@ -223,7 +232,7 @@ func mergeFaces(old, found []Face) (out []Face, place []int) {
 		out[best], place[j], taken[best] = found[j], best, true
 	}
 	for i := range out {
-		if !out[i].Manual && !taken[i] && len(rest) > 0 {
+		if !keep[i] && !taken[i] && len(rest) > 0 {
 			out[i], place[rest[0]], taken[i] = found[rest[0]], i, true
 			rest = rest[1:]
 		}
@@ -233,6 +242,24 @@ func mergeFaces(old, found []Face) (out []Face, place []int) {
 		out = append(out, found[j])
 	}
 	return out, place
+}
+
+// sameFrame tells whether two faces were seen in the same picture (always
+// in a photo; in a video at the same moment, within a frame at 25 fps).
+func sameFrame(a, b Face) bool { return math.Abs(float64(a.T-b.T)) < 0.04 }
+
+// sameSpot tells whether two boxes are the same face.
+func sameSpot(a, b Face) bool { return sameFrame(a, b) && boxIoU(a, b) > 0.4 }
+
+// twoPeople tells whether the embeddings of two faces differ too much for
+// one person.
+func twoPeople(a, b Face, same float32) bool {
+	return len(a.Emb) > 0 && len(b.Emb) > 0 && !samePerson(a, b, same)
+}
+
+// samePerson tells whether two faces with embeddings look alike enough.
+func samePerson(a, b Face, same float32) bool {
+	return len(a.Emb) > 0 && len(b.Emb) > 0 && dot(normalize(a.Emb), normalize(b.Emb)) >= same
 }
 
 func boxIoU(a, b Face) float32 {
