@@ -87,7 +87,7 @@ func (l *Library) AddFace(ctx context.Context, id string, box FaceBox, t float64
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err == nil {
 		os.WriteFile(p, crop, 0o644)
 	}
-	l.markDirty()
+	l.saveSoon()
 	if name != "" {
 		if _, err := l.LabelFace(it.ID, idx, name); err != nil {
 			return idx, err

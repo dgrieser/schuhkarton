@@ -317,8 +317,14 @@ type Library struct {
 	local *helper.Pool // Python helper for formats Go cannot decode (mode local)
 	media *mediaGen
 
-	saveMu sync.Mutex
-	dirty  atomic.Bool
+	saveMu   sync.Mutex
+	dirty    atomic.Bool
+	lastSave atomic.Int64 // unix ns of the last index save
+	// one pending save (scheduleSave)
+	saveTimerMu sync.Mutex
+	saveTimer   *time.Timer
+	saveAt      time.Time
+	saveGen     int
 	// reclusterSoon: a run is queued; one runs at a time
 	reclusterQueued atomic.Bool
 	reclusterRun    sync.Mutex
@@ -728,8 +734,15 @@ func (l *Library) setItems(items []*Item) {
 func (l *Library) saveIndex() {
 	l.saveMu.Lock()
 	defer l.saveMu.Unlock()
+	l.cancelSave() // this save takes what a pending one would save
 	l.dirty.Store(false)
 	start := time.Now()
+	l.lastSave.Store(start.UnixNano()) // a markDirty meanwhile counts from here
+	failed := func(err error) {
+		l.logf("save index: %v", err)
+		l.dirty.Store(true) // try again later
+		l.scheduleSave(saveEvery)
+	}
 	// only the encoding holds the lock (a writer waiting for it holds up
 	// every reader, the viewer too); compressing and writing come after
 	var buf bytes.Buffer
@@ -738,14 +751,14 @@ func (l *Library) saveIndex() {
 	l.mu.RUnlock()
 	locked := time.Since(start)
 	if err != nil {
-		l.logf("save index: %v", err)
+		failed(err)
 		return
 	}
 	path := filepath.Join(l.opt.CacheDir, "index.gob.gz")
 	tmp := path + ".tmp"
 	f, err := os.Create(tmp)
 	if err != nil {
-		l.logf("save index: %v", err)
+		failed(err)
 		return
 	}
 	zw := gzip.NewWriter(f)
@@ -760,19 +773,80 @@ func (l *Library) saveIndex() {
 		err = os.Rename(tmp, path)
 	}
 	if err != nil {
-		l.logf("save index: %v", err)
+		failed(err)
 	}
-	if d := time.Since(start); d > 3*time.Second {
+	if d := time.Since(start); d > 5*time.Second {
 		l.logf("save index: %v (%v of it holding the library lock)", d.Round(100*time.Millisecond), locked.Round(100*time.Millisecond))
 	}
 }
 
-// markDirty schedules an index save.
+// saveDelay is the wait before a save, so that changes coming together
+// are saved together; saveEvery the least time between two saves for work
+// that is made again after a crash (face scans, metadata): each save costs
+// seconds of CPU on a small machine.
+var (
+	saveDelay = 20 * time.Second
+	saveEvery = 3 * time.Minute
+)
+
+// markDirty schedules an index save: saveDelay from now, or saveEvery after
+// the last save when that is later.
 func (l *Library) markDirty() {
-	if l.dirty.Swap(true) {
-		return
+	l.dirty.Store(true)
+	wait := saveDelay
+	if last := l.lastSave.Load(); last != 0 {
+		wait = max(wait, time.Until(time.Unix(0, last).Add(saveEvery)))
 	}
-	time.AfterFunc(20*time.Second, l.saveIndex)
+	l.scheduleSave(wait)
+}
+
+// saveSoon is markDirty for what somebody did by hand (it cannot be made
+// again): saved after saveDelay, however recent the last save.
+func (l *Library) saveSoon() {
+	l.dirty.Store(true)
+	l.scheduleSave(saveDelay)
+}
+
+// cancelSave drops the pending save (a save runs now).
+func (l *Library) cancelSave() {
+	l.saveTimerMu.Lock()
+	defer l.saveTimerMu.Unlock()
+	if l.saveTimer != nil {
+		l.saveTimer.Stop()
+		l.saveTimer = nil
+	}
+	l.saveGen++ // a timer that fired already finds nothing to do
+}
+
+// scheduleSave makes sure a save comes within d: one pending save at a
+// time, brought forward when needed.
+func (l *Library) scheduleSave(d time.Duration) {
+	if l.closing.Load() {
+		return // Close saves last; no save after it (the cache may be another library's then)
+	}
+	l.saveTimerMu.Lock()
+	defer l.saveTimerMu.Unlock()
+	at := time.Now().Add(d)
+	if l.saveTimer != nil {
+		if !l.saveAt.After(at) {
+			return // one comes soon enough
+		}
+		l.saveTimer.Stop()
+	}
+	l.saveGen++
+	gen := l.saveGen
+	l.saveAt = at
+	l.saveTimer = time.AfterFunc(d, func() {
+		l.saveTimerMu.Lock()
+		current := l.saveGen == gen
+		if current {
+			l.saveTimer = nil
+		}
+		l.saveTimerMu.Unlock()
+		if current && l.dirty.Load() && !l.closing.Load() { // not replaced or cancelled meanwhile
+			l.saveIndex()
+		}
+	})
 }
 
 // --- favorites ---------------------------------------------------------------
