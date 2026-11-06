@@ -139,7 +139,7 @@ func (l *Library) removeItems(gone map[string]bool) {
 	l.setItems(keep)
 	// the index file and the people follow in the background: deleting
 	// (one duplicate after the other) does not wait for them
-	l.markDirty()
+	l.saveSoon()
 	l.reclusterSoon()
 	l.bump()
 }
