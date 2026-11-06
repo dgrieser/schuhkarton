@@ -111,6 +111,8 @@ type Face struct {
 	Score      float32
 	Emb        []float32 // normalized SFace embedding, nil without recognition model
 	Person     string    // filled by clustering
+	Manual     bool      // drawn by hand (facemanual.go)
+	T          float32   // video: the second the face was found or marked at
 }
 
 // Item is one photo or video.
@@ -316,7 +318,10 @@ type Library struct {
 
 	saveMu sync.Mutex
 	dirty  atomic.Bool
-	lock   *os.File
+	// reclusterSoon: a run is queued; one runs at a time
+	reclusterQueued atomic.Bool
+	reclusterRun    sync.Mutex
+	lock            *os.File
 
 	stopBG context.CancelFunc
 	bg     sync.WaitGroup

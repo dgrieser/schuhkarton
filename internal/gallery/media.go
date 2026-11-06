@@ -102,8 +102,9 @@ func exists(p string) bool {
 // Ensure makes sure a derivative exists and returns its path. Concurrent
 // requests for the same file share one generation.
 func (l *Library) Ensure(ctx context.Context, it *Item, variant string) (string, error) {
-	// what a viewer asks for is made to the end, also when the viewer leaves
-	return l.ensure(ctx, context.WithoutCancel(ctx), it, variant, false)
+	// what a viewer asks for is made to the end, also when the viewer leaves;
+	// but not started when the viewer left while it waited for a slot
+	return l.ensure(ctx, waitFor(context.WithoutCancel(ctx), ctx), it, variant, false)
 }
 
 // ensureBG is Ensure for the background work: the making stops with ctx
@@ -129,7 +130,8 @@ func (l *Library) ensure(ctx, work context.Context, it *Item, variant string, ba
 			return "", ctx.Err()
 		}
 		if pc.err != nil {
-			if errors.Is(pc.err, context.Canceled) && ctx.Err() == nil {
+			// the background, or the viewer that started it, stopped it: make it here
+			if (errors.Is(pc.err, context.Canceled) || errors.Is(pc.err, context.DeadlineExceeded)) && ctx.Err() == nil {
 				return l.ensure(ctx, work, it, variant, background) // the background stopped making it: make it here
 			}
 			return "", pc.err
@@ -162,9 +164,11 @@ func (l *Library) ensure(ctx, work context.Context, it *Item, variant string, ba
 		c.err = errors.New("not generated")
 	}
 	if c.err != nil {
-		if work.Err() != nil {
+		switch {
+		case work.Err() != nil:
 			c.err = work.Err()
-		} else {
+		case errors.Is(c.err, context.Canceled): // the viewer left before it began
+		default:
 			l.cnt.errors.Add(1)
 		}
 		return "", c.err
@@ -193,6 +197,9 @@ func (l *Library) makePhotoThumbs(ctx context.Context, it *Item, want string, ba
 		req.Outputs = append(req.Outputs, ConvertOutput{Path: sp, Short: l.smallShort(), MaxLong: l.smallLong(), Quality: q, FromPrev: both})
 	}
 	res, err := l.convert(ctx, req, background)
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err // nobody waits for it any more (the viewer left): no other decoder
+	}
 	if err == nil {
 		w, h := res.W, res.H
 		if o >= 5 && o <= 8 {

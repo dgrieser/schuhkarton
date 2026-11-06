@@ -137,8 +137,10 @@ func (l *Library) removeItems(gone map[string]bool) {
 	l.mu.Unlock()
 	pairLive(keep)
 	l.setItems(keep)
-	l.saveIndex()
-	l.recluster()
+	// the index file and the people follow in the background: deleting
+	// (one duplicate after the other) does not wait for them
+	l.markDirty()
+	l.reclusterSoon()
 	l.bump()
 }
 

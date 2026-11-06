@@ -72,6 +72,8 @@ func New(ctx context.Context, o Options) http.Handler {
 	mux.HandleFunc("GET /api/people/hidden", s.requireUser(s.hiddenPeople))
 	mux.HandleFunc("POST /api/people/hidden/{id}/show", s.requireUser(s.showHidden))
 	mux.HandleFunc("POST /api/face/{id}/{idx}", s.requireUser(s.labelFace))
+	mux.HandleFunc("POST /api/faces/labels", s.requireUser(s.restoreFaceLabels))
+	mux.HandleFunc("POST /api/face/{id}/add", s.requireUser(s.addFace))
 	mux.HandleFunc("POST /api/fav", s.requireUser(s.fav))
 	mux.HandleFunc("POST /api/rescan", s.requireAdmin(s.rescan))
 	mux.HandleFunc("POST /api/zip", s.zip)
@@ -90,7 +92,7 @@ func New(ctx context.Context, o Options) http.Handler {
 		mux.Handle("/setup", o.Setup)
 		mux.Handle("/api/setup/", o.Setup)
 	}
-	return s.gate(mux)
+	return slowLog(s.gate(mux))
 }
 
 // UIFiles returns the embedded UI, or dir during development.
@@ -282,13 +284,18 @@ func (s *Server) item(w http.ResponseWriter, r *http.Request) {
 	}
 	type face struct {
 		X, Y, W, H float32
-		Idx        int    `json:"idx"`
-		Person     string `json:"person,omitempty"`
-		Name       string `json:"name,omitempty"`
+		Idx        int     `json:"idx"`
+		Person     string  `json:"person,omitempty"`
+		Name       string  `json:"name,omitempty"`
+		Manual     bool    `json:"manual,omitempty"`
+		T          float32 `json:"t,omitempty"` // video: the second it was found at
 	}
 	var faces []face
 	for i, f := range s.lib.ItemFaces(it) {
-		fc := face{X: f.X, Y: f.Y, W: f.W, H: f.H, Idx: i, Person: s.lib.PersonOf(it.ID, i)}
+		if s.lib.IsNoFace(it.ID, i) {
+			continue // marked as no face
+		}
+		fc := face{X: f.X, Y: f.Y, W: f.W, H: f.H, Idx: i, Person: s.lib.PersonOf(it.ID, i), Manual: f.Manual, T: f.T}
 		if p := s.lib.Person(fc.Person); p != nil {
 			fc.Name = p.Name
 		}
@@ -373,6 +380,15 @@ func (s *Server) namePerson(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if strings.TrimSpace(req.Name) == "-" { // no face: a group of misdetections
+		prev, err := s.lib.NoFacePerson(r.PathValue("id"))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, r, map[string]any{"ok": true, "undo": prev})
+		return
+	}
 	if strings.TrimSpace(req.Name) == "~" {
 		hid, err := s.lib.HidePerson(r.PathValue("id"))
 		if err != nil {
@@ -411,7 +427,50 @@ func (s *Server) labelFace(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	if err := s.lib.LabelFace(r.PathValue("id"), idx, req.Name); err != nil {
+	if it := s.lib.Get(r.PathValue("id")); it == nil || idx < 0 || idx >= len(s.lib.ItemFaces(it)) {
+		http.Error(w, "unknown face", http.StatusBadRequest)
+		return
+	}
+	prev, err := s.lib.LabelFace(r.PathValue("id"), idx, req.Name)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	// what the face had, for undo
+	writeJSON(w, r, map[string]any{"ok": true, "undo": map[string]string{r.PathValue("id") + ":" + strconv.Itoa(idx): prev}})
+}
+
+// addFace adds a face drawn by hand (on a video at second t).
+func (s *Server) addFace(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		X, Y, W, H float32
+		T          float64 `json:"t"`
+		Name       string  `json:"name"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
+	defer cancel()
+	idx, err := s.lib.AddFace(ctx, r.PathValue("id"), gallery.FaceBox{X: req.X, Y: req.Y, W: req.W, H: req.H}, req.T, req.Name)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, r, map[string]any{"ok": true, "idx": idx})
+}
+
+// restoreFaceLabels sets face labels back (undo of "no face").
+func (s *Server) restoreFaceLabels(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Labels map[string]string `json:"labels"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := s.lib.RestoreFaceLabels(req.Labels); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}

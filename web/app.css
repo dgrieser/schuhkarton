@@ -366,7 +366,7 @@ body.has-scrubber .view { padding-right: 64px; }
 /* --sw/--sh: the stage size, measured in JS, so the picture always fits the visible stage (beside or above the details) */
 .v-media img, .v-media video { display: block; max-width: var(--sw, 100vw); max-height: var(--sh, 100vh); user-select: none; -webkit-user-drag: none; }
 .v-media img.lo { filter: blur(6px); }
-.v-media .live-v { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; transition: opacity .2s; }
+.v-media .live-v { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 1; }
 .v-media .live-v.on { opacity: 1; }
 .v-top {
   position: absolute; left: 0; right: 0; top: 0; z-index: 5; display: flex; align-items: center; gap: 12px;
@@ -405,7 +405,7 @@ body.has-scrubber .view { padding-right: 64px; }
 .v-strip img { width: 100%; height: 100%; object-fit: cover; }
 .viewer.idle .v-top, .viewer.idle .v-strip, .viewer.idle .v-nav { opacity: 0; pointer-events: none; }
 .viewer.idle { cursor: none; }
-.v-faces { position: absolute; inset: 0; pointer-events: none; }
+.v-faces { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
 .v-face {
   position: absolute; border: 2px solid rgba(255, 255, 255, .9); border-radius: 8px; pointer-events: auto; cursor: pointer;
   box-shadow: 0 0 0 1px rgba(0, 0, 0, .3);
@@ -415,6 +415,15 @@ body.has-scrubber .view { padding-right: 64px; }
   background: rgba(0, 0, 0, .72); padding: 2px 8px; border-radius: 6px; font-size: 12px; font-weight: 600;
 }
 .v-face.unknown { border-style: dashed; border-color: rgba(255, 255, 255, .6); }
+/* marking a face by hand */
+.viewer.marking .v-top, .viewer.marking .v-strip, .viewer.marking .v-nav, .viewer.marking .v-faces { opacity: 0; pointer-events: none; }
+.v-mark { position: absolute; inset: 0; z-index: 4; cursor: crosshair; touch-action: none; background: rgba(0, 0, 0, .18); }
+.v-face.mark { border-color: var(--accent); box-shadow: 0 0 0 1px rgba(0, 0, 0, .4), 0 0 0 9999px rgba(0, 0, 0, .25); pointer-events: none; }
+.v-mark-hint { position: absolute; left: 50%; top: 10px; transform: translateX(-50%); display: flex; align-items: center; gap: 8px; width: max-content; max-width: calc(100% - 20px);
+  padding: 6px 6px 6px 12px; border-radius: 10px; background: rgba(0, 0, 0, .75); color: #fff; font-size: 13px; cursor: default; }
+.v-mark-hint button { flex: none; border: 0; border-radius: 7px; padding: 5px 10px; background: rgba(255, 255, 255, .16); color: #fff; font: inherit; font-weight: 600; cursor: pointer; }
+.v-info .mark-face { display: inline-flex; align-items: center; gap: 4px; margin-left: 8px; font-size: 12px; text-transform: none; letter-spacing: 0; vertical-align: middle; }
+.v-info .mark-face .i { width: 15px; height: 15px; }
 .v-info {
   width: 380px; height: 100vh; overflow-y: auto; background: #111214; border-left: 1px solid #222;
   padding: 18px 20px 40px; color: #e6e7e9; font-size: 14px;
@@ -437,12 +446,16 @@ body.has-scrubber .view { padding-right: 64px; }
 .v-info code { font-size: 12px; color: #aab0b9; word-break: break-all; }
 .pop {
   position: fixed; z-index: 120; background: #1c1e22; color: #eee; border: 1px solid #333; border-radius: 12px;
-  box-shadow: var(--shadow); padding: 10px; display: grid; gap: 8px; width: 240px;
+  box-shadow: var(--shadow); padding: 10px; display: grid; gap: 8px; width: min(280px, calc(100vw - 16px));
 }
 .pop input { height: 36px; border-radius: 8px; border: 1px solid #3a3d44; background: #121316; padding: 0 10px; outline: 0; }
 .pop input:focus { border-color: var(--accent); }
 .pop .row { display: flex; gap: 6px; }
-.pop .row button { flex: 1; height: 32px; border-radius: 8px; border: 1px solid #3a3d44; background: #23262b; font-size: 13px; }
+.pop .row { flex-wrap: wrap; }
+.pop > button.ghost { display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 32px; border: 0; border-radius: 8px; background: transparent; color: #c9ccd2; font-size: 13px; }
+.pop > button.ghost:hover { background: #23262b; color: #fff; }
+.pop > button.ghost .i { width: 16px; height: 16px; }
+.pop .row button { flex: 1 1 auto; min-height: 34px; padding: 6px 10px; border-radius: 8px; border: 1px solid #3a3d44; background: #23262b; font-size: 13px; line-height: 1.2; white-space: nowrap; }
 .pop .row button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 650; }
 
 /* --- selection bar / toast ------------------------------------------------------------------ */
@@ -456,13 +469,16 @@ body.has-scrubber .view { padding-right: 64px; }
 .selbar b { margin-right: 8px; white-space: nowrap; }
 .toast {
   position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%) translateY(30px); z-index: 200;
+  width: max-content; max-width: min(560px, calc(100vw - 24px)); line-height: 1.35;
   background: var(--text); color: var(--bg); padding: 10px 18px; border-radius: 12px; font-weight: 600;
   opacity: 0; pointer-events: none; transition: opacity .2s, transform .25s var(--ease);
 }
 .toast.on { opacity: 1; transform: translateX(-50%) translateY(0); }
 .toast.act { display: flex; align-items: center; gap: 10px; padding: 6px 6px 6px 18px; }
 .toast.act.on { pointer-events: auto; }
+.toast span { flex: 1; min-width: 0; }
 .toast button {
+  flex: none; white-space: nowrap;
   font: inherit; font-weight: 700; color: inherit; border: 0; cursor: pointer;
   padding: 8px 14px; border-radius: 9px; background: color-mix(in srgb, currentColor 16%, transparent);
 }
@@ -859,10 +875,10 @@ body:not([data-role="admin"]):not([data-role="user"]) [data-need="user"] { displ
 .adm-menu button { display: flex; align-items: center; gap: 10px; height: 40px; padding: 0 12px; border: 0; border-radius: 9px; background: none; text-align: left; white-space: nowrap; }
 .adm-menu button:hover { background: var(--surface2); }
 .adm-menu button.danger { color: var(--danger); }
-.adm-snack { position: fixed; left: 50%; bottom: 26px; z-index: 210; transform: translate(-50%, 30px); max-width: min(560px, calc(100vw - 24px)); display: flex; align-items: center; gap: 10px; padding: 8px 8px 8px 16px; border-radius: 14px; background: var(--text); color: var(--bg); font-weight: 600; box-shadow: var(--shadow); opacity: 0; pointer-events: none; transition: opacity .2s, transform .25s var(--ease); }
+.adm-snack { position: fixed; left: 50%; bottom: 26px; z-index: 210; transform: translate(-50%, 30px); width: max-content; max-width: min(560px, calc(100vw - 24px)); display: flex; align-items: center; gap: 10px; padding: 8px 8px 8px 16px; border-radius: 14px; background: var(--text); color: var(--bg); font-weight: 600; box-shadow: var(--shadow); opacity: 0; pointer-events: none; transition: opacity .2s, transform .25s var(--ease); }
 .adm-snack.on { opacity: 1; transform: translate(-50%, 0); pointer-events: auto; }
 .adm-snack span { flex: 1; min-width: 0; line-height: 1.35; padding: 4px 0; }
-.adm-snack .btn { color: var(--accent); height: 34px; flex: none; }
+.adm-snack .btn { color: var(--accent); height: 34px; flex: none; white-space: nowrap; }
 .adm-snack .btn:hover { background: color-mix(in srgb, var(--bg) 12%, transparent); }
 .selbar .btn > span.s { display: none; }
 @media (min-width: 721px) and (max-width: 1180px) {
@@ -1186,3 +1202,7 @@ select.sel, .setup .user select, .setup #nrole, .adm-shift select {
     max-width: none !important; max-height: none !important; object-fit: contain; filter: none !important; margin: 0 !important;
   }
 }
+/* duplicates: a decision is being carried out */
+.dp-busy .dp-cards { opacity: .55; pointer-events: none; transition: opacity .15s; }
+.dp-spin { width: 16px; height: 16px; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; animation: dp-spin .7s linear infinite; flex: none; }
+@keyframes dp-spin { to { transform: rotate(360deg); } }
