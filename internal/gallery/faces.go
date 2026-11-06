@@ -249,6 +249,26 @@ func (l *Library) RestoreFaceLabels(labels map[string]string) error {
 	return nil
 }
 
+// labeled returns the indexes of an item's faces that carry a label.
+func (s *peopleStore) labeled(item string) map[int]bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var out map[int]bool
+	for k := range s.labels {
+		rest, ok := strings.CutPrefix(k, item+":")
+		if !ok {
+			continue
+		}
+		if i, err := strconv.Atoi(rest); err == nil {
+			if out == nil {
+				out = map[int]bool{}
+			}
+			out[i] = true
+		}
+	}
+	return out
+}
+
 // IsNoFace tells whether a face was marked as no face.
 func (l *Library) IsNoFace(item string, idx int) bool {
 	l.people.mu.RLock()
