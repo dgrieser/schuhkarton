@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/dgrieser/schuhkarton/internal/helper"
+	"github.com/dgrieser/schuhkarton/internal/nasretry"
 
 	"github.com/dgrieser/schuhkarton/internal/schedule"
 )
@@ -250,6 +251,9 @@ type Status struct {
 	// Offline lists library folders the last scan could not read (their
 	// files stay as they were).
 	Offline []string `json:"offline,omitempty"`
+	// Unreadable lists files the share hangs on, left out of the background
+	// work, the backup and the viewer (for admins only).
+	Unreadable []UnreadableFile `json:"unreadable,omitempty"`
 	// Import folder (nil without one).
 	Import     *ImportStatus `json:"import,omitempty"`
 	RulesError string        `json:"rulesError,omitempty"`
@@ -367,6 +371,8 @@ func Open(opt Options) (*Library, error) {
 		return nil, fmt.Errorf("der Cache %s wird schon von einem anderen schuhkarton-Prozess benutzt", opt.CacheDir)
 	}
 	l := &Library{opt: opt, byID: map[string]*Item{}, favs: map[string]map[string]bool{}, lock: lf}
+	// files the share hangs on, for this process (the backup too)
+	nasretry.LoadUnreadable(filepath.Join(opt.CacheDir, "unreadable.json"))
 	l.phase.Store("bereit")
 	switch opt.Faces.Mode {
 	case "local":
@@ -603,6 +609,7 @@ func (l *Library) Status() Status {
 	s.RulesFail = l.rulesJob.fail.Load()
 	s.Import = l.ImportInfo()
 	s.Offline, _ = l.offline.Load().([]string)
+	s.Unreadable = l.unreadableList()
 	s.RulesError, _ = l.rulesJob.lastErr.Load().(string)
 	fs := l.FaceStatus()
 	s.FaceMode, s.FaceOK, s.FaceRec, s.FaceErr = fs.Mode, fs.Detection, fs.Recognition, fs.Error

@@ -209,7 +209,7 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	st := s.lib.Status()
 	admin := isAdmin(r)
 	if !admin {
-		st.Import = nil // folder paths and file errors are for admins
+		st.Import, st.Unreadable = nil, nil // folder paths and file errors are for admins
 	}
 	res := map[string]any{"status": st, "scanning": s.lib.Scanning()}
 	if s.backup != nil {
@@ -535,6 +535,9 @@ func (s *Server) zip(w http.ResponseWriter, r *http.Request) {
 			name = fmt.Sprintf("%s_%d%s", strings.TrimSuffix(path.Base(it.Rel), ext), n, ext)
 		}
 		used[name] = true
+		if s.lib.Unreadable(it) != nil { // reading it would freeze the share
+			continue
+		}
 		f, err := os.Open(s.lib.Path(it))
 		if err != nil {
 			continue
@@ -638,6 +641,10 @@ func (s *Server) original(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) serveOriginal(w http.ResponseWriter, r *http.Request, it *gallery.Item) {
+	if err := s.lib.Unreadable(it); err != nil { // reading it would freeze the share
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
 	f, err := os.Open(s.lib.Path(it))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
@@ -661,7 +668,7 @@ func (s *Server) print(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	if s.lib.PrintAsIs(it) {
+	if s.lib.PrintAsIs(it) && s.lib.Unreadable(it) == nil { // else the preview from the cache (PrintImage)
 		s.serveOriginal(w, r, it)
 		return
 	}
@@ -702,6 +709,10 @@ func (s *Server) video(w http.ResponseWriter, r *http.Request) {
 	if cached != "" {
 		w.Header().Set("Content-Type", "video/mp4")
 		http.ServeFile(w, r, cached)
+		return
+	}
+	if err := s.lib.Unreadable(it); err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
 	w.Header().Set("Content-Type", "video/mp4")

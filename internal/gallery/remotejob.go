@@ -41,6 +41,28 @@ type jobTask struct {
 	// files it returns true for at the front (cheap ones first:
 	// descriptions of photos with a large preview)
 	first func() func(*Item) bool
+	// reads, when set, returns the files the work reads (else the file
+	// itself): one the share hangs on leaves the work out
+	reads func(*Item) []*Item
+	// avoid, when set, tells instead of reads whether the work is left out
+	avoid func(*Item) bool
+}
+
+// blocked tells whether a file the work reads is left out (the share hangs
+// on it).
+func (l *Library) blocked(t jobTask, it *Item) bool {
+	if t.avoid != nil {
+		return t.avoid(it)
+	}
+	if t.reads == nil {
+		return l.unreadable(it) != nil
+	}
+	for _, r := range t.reads(it) {
+		if l.unreadable(r) != nil {
+			return true
+		}
+	}
+	return false
 }
 
 func (j *remoteJob) kick() {
@@ -169,6 +191,10 @@ func (l *Library) jobPass(ctx context.Context, j *remoteJob, t jobTask) error {
 		go func() {
 			defer wg.Done()
 			for it := range ch {
+				if l.blocked(t, it) { // left out since the list was made
+					j.handled(true, 0)
+					continue
+				}
 				if err := t.one(ctx, it); err != nil {
 					once.Do(func() { stopErr = err; cancel() })
 					return
@@ -209,6 +235,9 @@ func (l *Library) jobTodo(j *remoteJob, t jobTask) []*Item {
 			if bad {
 				failed++
 			}
+		case l.blocked(t, it): // the share hangs on it: left out, counted as failed
+			have++
+			failed++
 		default:
 			todo = append(todo, it)
 		}

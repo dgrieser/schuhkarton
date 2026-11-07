@@ -229,6 +229,9 @@ func (l *Library) kickAISoon() {
 // clip could be made and the video has no description yet: then the poster
 // frame is described instead. The error stops the job (service problems).
 func (l *Library) describeVideo(ctx context.Context, it *Item) (done bool, err error) {
+	if l.unreadable(it) != nil {
+		return false, nil // no clip: the picture's turn, which reports it
+	}
 	j := &l.aiJob
 	old := l.AIOf(it)
 	clip, frames, err := l.videoClip(ctx, it)

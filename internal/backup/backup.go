@@ -15,6 +15,7 @@ package backup
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -369,7 +370,9 @@ func (r *Runner) copyIfChanged(ctx context.Context, root, src, dst string) {
 			return
 		}
 	}
-	if err := nasretry.Do(ctx, "Sicherung "+src, func() error {
+	// a file the share hangs on is left out (see nasretry.DoFile)
+	sig := func() (int64, int64) { return si.Size(), si.ModTime().Unix() } // the version copied (see below)
+	if err := nasretry.DoFile(ctx, "Sicherung "+src, src, sig, func() error {
 		// the source as it is now (it may have changed while the share was away)
 		cur, err := os.Stat(src)
 		if err != nil {
@@ -381,7 +384,9 @@ func (r *Runner) copyIfChanged(ctx context.Context, root, src, dst string) {
 		if ctx.Err() != nil {
 			return // cut short (stopped, or the time window closed): copied next time
 		}
-		log.Printf("Sicherung %s: %v", src, err)
+		if !errors.Is(err, nasretry.ErrUnreadable) { // logged once when it hung
+			log.Printf("Sicherung %s: %v", src, err)
+		}
 		r.set(func(s *Status) { s.Failed++ })
 		return
 	}
@@ -391,11 +396,18 @@ func (r *Runner) copyIfChanged(ctx context.Context, root, src, dst string) {
 	r.set(func(s *Status) { s.Copied++; s.Bytes += si.Size() })
 }
 
-func copyFile(ctx context.Context, src, dst string, si os.FileInfo) error {
+// copyFile copies src to dst. Its errors tell (nasretry.Blame) whether
+// reading src hung: a source the share hangs on is left out from then on,
+// a target that hung is not the source's fault.
+func copyFile(ctx context.Context, src, dst string, si os.FileInfo) (err error) {
+	var slow time.Duration // the longest open or read of src
+	defer func() { err = nasretry.Blame(err, slow >= nasretry.HangTime) }()
 	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
 		return err
 	}
+	start := time.Now()
 	in, err := os.Open(src)
+	slow = time.Since(start)
 	if err != nil {
 		return err
 	}
@@ -405,7 +417,7 @@ func copyFile(ctx context.Context, src, dst string, si os.FileInfo) error {
 	if err != nil {
 		return err
 	}
-	if _, err := io.Copy(out, ctxReader{ctx, in}); err != nil {
+	if _, err := io.Copy(out, ctxReader{ctx, timedReader{in, &slow}}); err != nil {
 		out.Close()
 		os.Remove(tmp)
 		return err
@@ -419,6 +431,19 @@ func copyFile(ctx context.Context, src, dst string, si os.FileInfo) error {
 		return err
 	}
 	return os.Rename(tmp, dst)
+}
+
+// timedReader keeps the longest read in slow.
+type timedReader struct {
+	r    io.Reader
+	slow *time.Duration
+}
+
+func (t timedReader) Read(p []byte) (int, error) {
+	start := time.Now()
+	n, err := t.r.Read(p)
+	*t.slow = max(*t.slow, time.Since(start))
+	return n, err
 }
 
 // ctxReader stops a copy when ctx ends.

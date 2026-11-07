@@ -205,6 +205,9 @@ func (l *Library) runConvert(ctx context.Context, req ConvertRequest) (ConvertRe
 // originalJPEG returns a photo as a JPEG at most n pixels on the long edge
 // (0: full size), turned like in the viewer, made by the child.
 func (l *Library) originalJPEG(ctx context.Context, it *Item, n, quality int, background bool) ([]byte, error) {
+	if err := l.unreadable(it); err != nil { // the share hangs on it
+		return nil, err
+	}
 	tmp, err := os.CreateTemp(l.opt.CacheDir, "conv-*.jpg")
 	if err != nil {
 		return nil, err

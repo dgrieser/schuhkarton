@@ -176,13 +176,19 @@ func (l *Library) generate(ctx context.Context) {
 // mediaTodo returns what is missing and stores the counts for the UI.
 func (l *Library) mediaTodo() (thumbs, previews, faces []*Item) {
 	items := l.Items()
-	var nThumb, nPoster, nPrev, nFace int64
+	var nThumb, nPoster, nPrev, nFace, nThumbFail, nPrevFail int64
 	fs := l.FaceStatus()
 	faceOK, recog := fs.Detection, fs.Recognition
 	has := l.haveCached() // tier 2 listed once, not asked per file
 	for _, it := range items {
+		// a file the share hangs on is left out: what is missing counts as failed
+		off := l.unreadable(it) != nil
 		if !has(it, VarSmall) || (l.opt.Previews && it.Kind == Photo && !has(it, VarLarge)) {
-			thumbs = append(thumbs, it)
+			if off {
+				nThumbFail++
+			} else {
+				thumbs = append(thumbs, it)
+			}
 		} else if it.Kind == Photo {
 			nThumb++
 		} else {
@@ -191,13 +197,15 @@ func (l *Library) mediaTodo() (thumbs, previews, faces []*Item) {
 		if it.Kind == Video && l.opt.VideoPreviews {
 			if has(it, VarPreview) {
 				nPrev++
+			} else if off {
+				nPrevFail++
 			} else {
 				previews = append(previews, it)
 			}
 		}
 		if faceOK && (it.Kind == Photo || (it.Kind == Video && it.LivePhoto == "" && l.media.ffmpeg != "")) {
 			done := it.FacesDone && (!recog || !needsEmbedding(it.Faces))
-			if done {
+			if done || off {
 				nFace++
 			} else {
 				faces = append(faces, it)
@@ -205,8 +213,8 @@ func (l *Library) mediaTodo() (thumbs, previews, faces []*Item) {
 		}
 	}
 	l.cnt.thumbs.Store(nThumb)
-	l.cnt.thumbFail.Store(0)
-	l.cnt.previewFail.Store(0)
+	l.cnt.thumbFail.Store(nThumbFail)
+	l.cnt.previewFail.Store(nPrevFail)
 	l.cnt.posters.Store(nPoster)
 	l.cnt.previews.Store(nPrev)
 	l.cnt.faces.Store(nFace)
@@ -219,6 +227,9 @@ func (l *Library) mediaTodo() (thumbs, previews, faces []*Item) {
 func (l *Library) scanFaces(ctx context.Context, it *Item) bool {
 	if ctx.Err() != nil {
 		return false
+	}
+	if l.unreadable(it) != nil {
+		return true // left out since the list was made: scanned once it is tried again
 	}
 	prefix := filepath.Join(l.opt.CacheDir, "faces", it.key[:2], it.key)
 	os.MkdirAll(filepath.Dir(prefix), 0o755)
@@ -236,6 +247,9 @@ func (l *Library) scanFaces(ctx context.Context, it *Item) bool {
 	if err != nil {
 		if ctx.Err() != nil {
 			return false
+		}
+		if l.unreadable(it) != nil {
+			return true // the share hangs on it: scanned once it is tried again
 		}
 		l.logf("faces %s: %v", it.Rel, err)
 		if isTransient(err) {

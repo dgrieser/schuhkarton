@@ -2196,6 +2196,24 @@
   let statusT = 0;
   const stalled = {}; // progress label -> last count and since when
   const scheduleReload = debounce(async () => { await loadItems(); if (!Viewer.open_) rerender(); }, 300);
+  // trying unreadable files again: a second click within a few seconds, since every try may freeze the share
+  // (the deadline lives here: the status panel is drawn anew every few seconds)
+  let unreadArmed = 0;
+  const unreadLabel = () => t(Date.now() < unreadArmed ? 'Wirklich? Noch einmal klicken' : 'Erneut versuchen');
+  const unreadRelabel = () => { for (const b of $$('[data-unread-retry]')) b.textContent = unreadLabel(); };
+  $('#status').addEventListener('click', async (e) => {
+    if (!e.target.closest('[data-unread-retry]')) return;
+    if (Date.now() >= unreadArmed) {
+      unreadArmed = Date.now() + 5000;
+      unreadRelabel();
+      setTimeout(unreadRelabel, 5100);
+      return;
+    }
+    unreadArmed = 0;
+    try { await post('/api/admin/unreadable/retry', {}); toast(t('Wird noch einmal versucht')); } catch (err) { toast(err.message); }
+    pollStatus();
+  });
+
   async function pollStatus() {
     clearTimeout(statusT);
     let busy = false;
@@ -2274,6 +2292,11 @@
       const bk = res.backup;
       if (bk?.running) { busy = true; rows.push(`<div class="row"><span>${t('Sicherung')}: ${esc(t(bk.phase || ''))} · ${t('{n} kopiert', { n: num(bk.copied) })}</span></div>`); }
       if (!rows.length) rows.push(`<div class="row"><span>${pl(s.photos, '{n} Foto', '{n} Fotos')} · ${pl(s.videos, '{n} Video', '{n} Videos')}${s.people ? ` · ${pl(s.people, '{n} Person', '{n} Personen')}` : ''}</span>${missing ? `<span class="faint" title="${t('Diese Dateien lassen sich nicht lesen')}">${num(missing)} ${t('ohne Vorschau')}</span>` : ''}${noAI ? `<span class="faint" title="${esc(t('Diese Dateien ließen sich nicht lesen; sie werden später noch einmal versucht.'))}">${num(noAI)} ${t('ohne Beschreibung')}</span>` : ''}${noOCR ? `<span class="faint" title="${esc(t('Diese Dateien ließen sich nicht lesen; sie werden später noch einmal versucht.'))}">${num(noOCR)} ${t('ohne Texterkennung')}</span>` : ''}</div>`);
+      if (s.unreadable?.length && Account.can('admin')) {
+        // files the share hangs on: left out until they change or are tried again here (below the summary, which stays)
+        const list = s.unreadable.map((f) => f.name + (f.aside ? '' : ` (${t('wird später noch einmal versucht')})`)).join('\n');
+        rows.push(`<div class="row"><span class="bad" title="${esc(t('Das Netzlaufwerk hängt beim Lesen dieser Dateien. Sie werden ausgelassen, bis sie sich ändern.') + '\n\n' + list)}">${t('Nicht lesbar')}: ${pl(s.unreadable.length, '{n} Datei', '{n} Dateien')}</span><button class="link" data-unread-retry title="${esc(t('Jeder Versuch kann das Netzlaufwerk für einige Minuten anhalten.'))}">${unreadLabel()}</button></div>`);
+      }
       $('#status').innerHTML = rows.join('');
       const mini = $('#statusMini');
       mini.hidden = first === null;

@@ -57,7 +57,7 @@ var suspectTexts = []string{"file not found", "no such file", "format error in f
 // suspect tells whether err may come from the share dropping for a moment.
 func suspect(err error) bool {
 	var f final
-	if errors.As(err, &f) {
+	if errors.As(err, &f) || errors.Is(err, ErrUnreadable) {
 		return false
 	}
 	if errors.Is(err, fs.ErrNotExist) {
@@ -100,7 +100,7 @@ func Final(err error) error {
 // something wrong with the file.
 func Outage(err error) bool {
 	var f final
-	if err == nil || errors.As(err, &f) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+	if err == nil || errors.As(err, &f) || errors.Is(err, ErrUnreadable) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
 	}
 	for _, e := range outageErrnos {

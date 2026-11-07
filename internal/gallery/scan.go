@@ -236,7 +236,11 @@ func (l *Library) Scan(ctx context.Context) error {
 		}
 		it := &Item{ID: id, Root: f.root, RootName: rname, Rel: f.rel, Kind: KindOf(f.rel), Size: f.size, MTime: f.mtime}
 		it.key = itemKey(rname, f.rel, f.size, f.mtime)
-		if o := old[id]; o != nil && hasManualFace(o.Faces) {
+		if o := old[id]; o != nil && o.Size == f.size && o.MTime == f.mtime && o.FacesDone {
+			// the same file, read again only for its metadata (a sidecar
+			// the share hung on): the faces found in it stay
+			it.Faces, it.FacesDone = o.Faces, true
+		} else if o != nil && hasManualFace(o.Faces) {
 			// faces marked by hand cannot be found again: they stay at their
 			// index with their crops (detection runs again and fills in
 			// around them)
@@ -324,8 +328,13 @@ func (l *Library) Scan(ctx context.Context) error {
 // false when a file could not be read: then the check runs again next scan.
 func (l *Library) checkFormats(ctx context.Context, items []*Item) (refresh []string, all bool) {
 	var todo []*Item
+	skipped := false
 	for _, it := range items {
 		if it.Kind == Photo && it.Format == "" {
+			if l.unreadable(it) != nil { // the share hangs on it: checked once it is tried again
+				skipped = true
+				continue
+			}
 			todo = append(todo, it)
 		}
 	}
@@ -351,7 +360,7 @@ func (l *Library) checkFormats(ctx context.Context, items []*Item) (refresh []st
 	}
 	close(next)
 	wg.Wait()
-	all = ctx.Err() == nil
+	all = ctx.Err() == nil && !skipped
 	for i, it := range todo {
 		all = all && read[i]
 		if found[i] == "" {
@@ -415,6 +424,19 @@ func (l *Library) readMeta(ctx context.Context, todo []*Item) error {
 			return ctx.Err()
 		}
 		chunk := todo[i:min(i+batch, len(todo))]
+		// files the share hangs on are not read: read once they are tried
+		// again (MetaDone stays false)
+		var readable []*Item
+		for _, it := range chunk {
+			if l.unreadable(it) != nil {
+				l.cnt.meta.Add(1)
+				continue
+			}
+			readable = append(readable, it)
+		}
+		if chunk = readable; len(chunk) == 0 {
+			continue
+		}
 		paths := make([]string, len(chunk))
 		for j, it := range chunk {
 			paths[j] = l.Path(it)
@@ -447,6 +469,9 @@ func (l *Library) readMeta(ctx context.Context, todo []*Item) error {
 			if !side && it.Format != "" && it.MetaSig == "" {
 				p, side = xmpTarget(paths[j], strings.ToLower(path.Ext(paths[j])))
 				moved[j] = side
+			}
+			if side && sideUnreadable(p) {
+				continue // the share hangs on its sidecar: read once it is tried again (MetaDone stays false)
 			}
 			if side && exists(p) {
 				sides = append(sides, p)
