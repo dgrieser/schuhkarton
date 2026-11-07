@@ -207,6 +207,16 @@ func speechEligible(it *Item) bool {
 	return (it.Kind == Video && it.LivePhoto == "") || (it.Kind == Photo && it.LiveVideo != "")
 }
 
+// speechReads returns the item with the sound (a Live Photo's video).
+func (l *Library) speechReads(it *Item) []*Item {
+	if it.Kind == Photo {
+		if v := l.Get(it.LiveVideo); v != nil {
+			return []*Item{v}
+		}
+	}
+	return []*Item{it}
+}
+
 // speechSource returns the file with the sound.
 func (l *Library) speechSource(it *Item) (string, error) {
 	if it.Kind == Video {
@@ -223,6 +233,7 @@ func (l *Library) speechTask() jobTask {
 	return jobTask{
 		workers:  l.opt.Speech.Workers,
 		eligible: speechEligible,
+		reads:    l.speechReads,
 		state: func(it *Item, now time.Time) (handled, failed bool) {
 			l.speech.mu.Lock()
 			s := l.speech.items[l.favKey(it)]
@@ -253,6 +264,10 @@ func (l *Library) transcribeAll(ctx context.Context) error {
 func (l *Library) transcribeOne(ctx context.Context, it *Item) error {
 	j := &l.speechJob
 	fail := func(err error) error {
+		if isUnreadable(err) { // not a failure of its own: tried once the share reads it
+			j.handled(true, 0)
+			return nil
+		}
 		l.logf("speech %s: %v", it.Rel, err)
 		l.setSpeech(it, &SpeechInfo{Err: err.Error(), At: time.Now().Unix(), Model: j.client.opt.Model})
 		j.handled(true, 0)
@@ -261,6 +276,11 @@ func (l *Library) transcribeOne(ctx context.Context, it *Item) error {
 	src, err := l.speechSource(it)
 	if err != nil {
 		return fail(err)
+	}
+	for _, r := range l.speechReads(it) {
+		if err := l.unreadable(r); err != nil {
+			return fail(err)
+		}
 	}
 	audio, lvl, err := l.extractAudio(ctx, src, cmpInt(l.opt.Speech.MaxSeconds, speechMaxSeconds))
 	if err != nil {

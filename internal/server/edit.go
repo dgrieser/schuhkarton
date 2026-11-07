@@ -1,6 +1,7 @@
 package server
 
 import (
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -12,6 +13,7 @@ import (
 // moving, deleting and the trash.
 func (s *Server) adminRoutes(mux *http.ServeMux, admin func(http.HandlerFunc) http.HandlerFunc) {
 	mux.HandleFunc("POST /api/admin/edit", admin(s.adminEdit))
+	mux.HandleFunc("POST /api/admin/unreadable/retry", admin(s.adminRetryUnreadable))
 	mux.HandleFunc("POST /api/admin/rotate", admin(s.adminRotate))
 	mux.HandleFunc("POST /api/admin/delete", admin(s.adminDelete))
 	mux.HandleFunc("GET /api/admin/trash", admin(s.adminTrash))
@@ -264,4 +266,26 @@ func (s *Server) adminMove(w http.ResponseWriter, r *http.Request) {
 	}
 	res, err := s.lib.Move(req.IDs, req.Root, req.Dir)
 	s.adminResult(w, r, res, err)
+}
+
+// adminRetryUnreadable tries files the share hung on again (all of them
+// without paths).
+func (s *Server) adminRetryUnreadable(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Paths []string `json:"paths"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	s.lib.RetryUnreadable(req.Paths)
+	if s.backup != nil {
+		s.backup.Trigger() // their copies too
+	}
+	go func() { // what a scan left out of them is read now
+		if err := s.lib.Scan(s.ctx); err != nil {
+			log.Printf("rescan: %v", err)
+		}
+	}()
+	writeJSON(w, r, map[string]any{"ok": true})
 }

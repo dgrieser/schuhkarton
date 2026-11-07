@@ -119,6 +119,9 @@ func (l *Library) frameImage(ctx context.Context, it *Item, t float64) (image.Im
 // videoFrame is one frame of a video at second t as a JPEG, at most long
 // pixels on the long side.
 func (l *Library) videoFrame(ctx context.Context, it *Item, t float64, long int) ([]byte, error) {
+	if err := l.unreadable(it); err != nil {
+		return nil, err
+	}
 	tmp, err := os.CreateTemp(l.opt.CacheDir, "frame-*.jpg")
 	if err != nil {
 		return nil, err

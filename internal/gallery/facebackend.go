@@ -245,6 +245,9 @@ func (f *remoteFaces) post(ctx context.Context, body []byte, name string) ([]Wor
 // faceImage returns what is sent to the face container: an oriented JPEG
 // of at most 1600 px, made here when Go can decode the file.
 func (l *Library) faceImage(ctx context.Context, it *Item) ([]byte, string, error) {
+	if err := l.unreadable(it); err != nil { // the share hangs on it
+		return nil, "", err
+	}
 	src := l.Path(it)
 	if !rawExt[it.Ext()] {
 		if b, err := l.originalJPEG(ctx, it, 1600, 90, true); err == nil {

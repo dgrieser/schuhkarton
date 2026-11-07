@@ -110,6 +110,7 @@ type dupeStore struct {
 	ignore [][]string          // sets of keys that are not duplicates of each other
 	groups []DupeGroup
 	fp     string            // what the groups were made from (see dupeFingerprint), kept in dupes.json; "" groups again
+	unread string            // the files left out when last grouped or checked (unreadableSig)
 	keys   map[string]string // item id -> file key of each group member when grouped
 	// a file could not be read while grouping (a share away): the groups
 	// are not reused after a scan or start, the next grouping reads again
@@ -623,15 +624,17 @@ func (l *Library) findDupes(ctx context.Context) {
 	// Grouping compares the whole library (seconds on a small machine): a
 	// changed item list groups at once, new hashes (photos coming in one by
 	// one) at most every dupeRegroup; the first time at once.
-	lv := l.listVer()
+	lv, us := l.listVer(), unreadableSig()
 	l.dupe.mu.Lock()
-	listChanged, fp := l.dupe.ver != lv, l.dupe.fp
+	// files left out are not compared byte for byte: a change there (a
+	// pause ended, a retry) is checked like a new item list
+	listChanged, fp := l.dupe.ver != lv || l.dupe.unread != us, l.dupe.fp
 	l.dupe.mu.Unlock()
 	if listChanged && fp != "" && fp == l.dupeFingerprint(l.Items()) {
 		// a new item list with the same photos (a scan, a start): the
 		// groups are still right
 		l.dupe.mu.Lock()
-		l.dupe.ver, listChanged = lv, false
+		l.dupe.ver, l.dupe.unread, listChanged = lv, us, false
 		l.dupe.mu.Unlock()
 	}
 	l.dupe.mu.Lock()
@@ -716,8 +719,10 @@ func (l *Library) dupeFingerprint(items []*Item) string {
 		if lv := l.liveOf(it); lv != nil {
 			live = lv.key // its size counts in what a group frees
 		}
-		keys = append(keys, fmt.Sprintf("%s|%s|%s|%t|%s|%s|%d|%d|%t|%t", it.ID, r.k, it.key, r.ok, meta, live,
-			min(3, l.favCount(it)), min(4, l.namedFaces(it)), l.override(it) != nil, l.AIOf(it) != nil))
+		// a file the share hangs on is not compared byte for byte (shaOf):
+		// once it reads again, the groups are made again
+		keys = append(keys, fmt.Sprintf("%s|%s|%s|%t|%s|%s|%d|%d|%t|%t|%t", it.ID, r.k, it.key, r.ok, meta, live,
+			min(3, l.favCount(it)), min(4, l.namedFaces(it)), l.override(it) != nil, l.AIOf(it) != nil, l.unreadable(it) != nil))
 	}
 	sort.Strings(keys)
 	h := sha256.New()
@@ -779,7 +784,7 @@ type dupNode struct {
 
 // groupDupes builds the groups from the hashes.
 func (l *Library) groupDupes() {
-	ver := l.listVer()
+	ver, us := l.listVer(), unreadableSig()
 	lim := l.opt.Dupes.limits()
 	var nodes []dupNode
 	all := l.Items()
@@ -974,7 +979,7 @@ func (l *Library) groupDupes() {
 		}
 	}
 	l.dupe.mu.Lock()
-	l.dupe.groups, l.dupe.ver, l.dupe.fp, l.dupe.keys = groups, ver, fp, keys
+	l.dupe.groups, l.dupe.ver, l.dupe.fp, l.dupe.keys, l.dupe.unread = groups, ver, fp, keys, us
 	l.dupe.incomplete = l.dupe.readFail.Load()
 	l.dupe.mu.Unlock()
 	l.dupe.nGrp.Store(int64(len(groups)))
@@ -1001,6 +1006,9 @@ func (l *Library) shaOf(n dupNode) string {
 		return s.Sha
 	}
 	l.dupe.mu.Unlock()
+	if l.unreadable(n.it) != nil {
+		return "" // the share hangs on it: not compared byte for byte (no read failure, no new try)
+	}
 	h, err := fileSHA(l.Path(n.it))
 	if err != nil {
 		l.dupeReadFailed(n.it, err)
@@ -1188,7 +1196,7 @@ func (l *Library) rankCopies(items []*Item) ([]*Item, []string) {
 // dims returns the pixel size of a photo from its file header (the index
 // may not know it without exiftool), else what the index says.
 func (l *Library) dims(it *Item) (int, int) {
-	if it.Kind == Photo {
+	if it.Kind == Photo && l.unreadable(it) == nil {
 		if v, ok := l.dupe.dims.Load(it.key); ok {
 			d := v.([2]int)
 			return d[0], d[1]

@@ -251,6 +251,10 @@ func (l *Library) describeOne(ctx context.Context, it *Item) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		if isUnreadable(err) { // not a failure of its own: tried once the share reads it
+			j.handled(true, 0)
+			return nil
+		}
 		l.logf("describe %s: %v", it.Rel, err)
 		l.setAI(it, &AIInfo{Err: err.Error(), At: time.Now().Unix()})
 		j.handled(true, 0)

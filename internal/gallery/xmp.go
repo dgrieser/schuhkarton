@@ -495,6 +495,16 @@ func (l *Library) xmpTask() jobTask {
 		},
 		one:  l.writeXMPOne,
 		save: l.closeXMPTools,
+		// the target is what is read and written (a sidecar: not the
+		// original); its tries go through nasretry.DoFile, so after the
+		// pause a file with one strike is tried again
+		avoid: func(it *Item) bool {
+			target, side := xmpTarget(l.Path(it), it.Ext())
+			if side {
+				return nasretry.Due(target, -1, -1) != nil
+			}
+			return nasretry.Due(target, it.Size, it.MTime) != nil
+		},
 	}
 }
 
@@ -542,8 +552,20 @@ func (l *Library) writeXMPOne(ctx context.Context, it *Item) error {
 	}
 	// read what is there now (also a sidecar someone else just made) and
 	// write the merge; a new try reads again, so edits made by others
-	// while the share was away stay
-	err = retry(func() error {
+	// while the share was away stay. Writing into the file reads all of it:
+	// a file the share hangs on is left out (see nasretry.DoFile).
+	// the version of the target each try works on (the file, or its
+	// sidecar: the share may hang on either)
+	targetSig := func() (int64, int64) {
+		if st, err := os.Stat(target); err == nil {
+			return st.Size(), st.ModTime().Unix()
+		}
+		return 0, 0
+	}
+	write := func(fn func() error) error {
+		return nasretry.DoFile(ctx, "metadata "+it.Rel, target, targetSig, fn, place)
+	}
+	err = write(func() error {
 		cur, err := et.readOne(target, append([]string{"-XMP-dc:Subject", "-XMP-iptcExt:PersonInImage"}, xmpReadTags...))
 		if err != nil {
 			return err
@@ -592,7 +614,9 @@ func createEmptyXMP(target string) error {
 }
 
 func (l *Library) xmpFailed(it *Item, sig string, err error) {
-	l.logf("metadata %s: %v", it.Rel, err)
+	if !errors.Is(err, nasretry.ErrUnreadable) { // logged once when it hung
+		l.logf("metadata %s: %v", it.Rel, err)
+	}
 	l.xmpMu.Lock()
 	l.xmpFails[l.favKey(it)] = xmpFailure{sig, time.Now()}
 	l.xmpMu.Unlock()

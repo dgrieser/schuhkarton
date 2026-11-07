@@ -146,6 +146,10 @@ func (l *Library) ensure(ctx, work context.Context, it *Item, variant string, ba
 		c.err = err
 		return "", err
 	}
+	if err := l.unreadable(it); err != nil { // the share hangs on it: not again
+		c.err = err
+		return "", err
+	}
 	switch {
 	case work.Err() != nil: // the background stopped (one photo in hand is finished, it takes seconds)
 		c.err = work.Err()
@@ -561,6 +565,8 @@ func (l *Library) PrintAsIs(it *Item) bool {
 // viewer: HEIC and the like decoded, RAW files from their embedded JPEG,
 // odd formats by the helper or ffmpeg. Videos give their preview frame.
 func (l *Library) PrintImage(ctx context.Context, it *Item) ([]byte, error) {
+	// an original the share hangs on is not read (originalJPEG and
+	// decodeExternal refuse it): the preview from the cache then
 	if it.Kind == Photo {
 		b, err := l.originalJPEG(ctx, it, 0, 95, false)
 		if err == nil {
@@ -583,6 +589,9 @@ func (l *Library) PrintImage(ctx context.Context, it *Item) ([]byte, error) {
 // helper (Pillow) or ffmpeg; they apply the file's orientation, the admin
 // rotation comes on top.
 func (l *Library) decodeExternal(ctx context.Context, it *Item) (image.Image, error) {
+	if err := l.unreadable(it); err != nil {
+		return nil, err
+	}
 	src := l.Path(it)
 	tmp, err := os.CreateTemp(l.opt.CacheDir, "full-*.jpg")
 	if err != nil {

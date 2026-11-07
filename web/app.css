@@ -89,6 +89,7 @@ svg.i.fill { fill: currentColor; stroke: none; }
 .status .row { display: grid; gap: 3px; }
 .status .bar { height: 3px; border-radius: 3px; background: var(--surface2); overflow: hidden; }
 .status .bar i { display: block; height: 100%; background: var(--accent); border-radius: 3px; transition: width .6s var(--ease); }
+.status .row button.link { justify-self: start; border: 0; background: none; padding: 0; color: var(--accent); font: inherit; font-size: 11.5px; cursor: pointer; }
 .status .row.sub { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 2px 8px; margin-top: -3px; font-size: 11.5px; color: var(--faint); }
 .side-tools { display: flex; gap: 6px; }
 .side-tools #theme { padding: 0 10px; gap: 8px; font-size: 13px; color: var(--muted); }
