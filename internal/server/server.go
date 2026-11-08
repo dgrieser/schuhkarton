@@ -329,8 +329,14 @@ func (s *Server) item(w http.ResponseWriter, r *http.Request) {
 	if a := s.lib.AIOf(it); a != nil {
 		res["ai"] = map[string]any{"de": a.De, "en": a.En, "tagsDe": a.TagsDe, "tagsEn": a.TagsEn, "people": a.People, "model": a.Model}
 	}
-	if t := s.lib.OCRText(it); t != "" {
-		res["ocr"] = t
+	if o := s.lib.OCROf(it); o != nil && o.Text != "" {
+		res["ocr"] = o.Text
+		// translations: the text in the viewer's language
+		for k, v := range map[string]string{"ocrLang": o.Lang, "ocrDe": o.De, "ocrEn": o.En} {
+			if v != "" {
+				res[k] = v
+			}
+		}
 	}
 	if s.lib.OCRApplies(it) {
 		res["ocrOn"] = true // admins can have it read again, also without text so far

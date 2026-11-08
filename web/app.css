@@ -985,6 +985,7 @@ select.sel, .setup .user select, .setup #nrole, .adm-shift select {
 
 /* --- AI descriptions ------------------------------------------------------------ */
 .v-info .ai-desc { line-height: 1.5; margin-bottom: 8px; }
+.v-info .ocr-orig summary { cursor: pointer; color: var(--muted); font-size: 13px; margin: 6px 0 4px; }
 .ai-badge { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 6px; font-size: 10px; letter-spacing: .06em;
   vertical-align: 2px; background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--accent); }
 /* header on phones: search shrinks so menu, slideshow and fullscreen fit */

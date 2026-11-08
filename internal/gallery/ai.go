@@ -540,16 +540,10 @@ func (c *aiClient) ask(ctx context.Context, prompt string, media ...any) (*AIInf
 			Total int `json:"total_tokens"`
 		} `json:"usage"`
 	}
-	err := c.do(ctx, http.MethodPost, "/chat/completions", req, &resp)
-	var ae *aiError
-	if errors.As(err, &ae) && ae.status == 400 && strings.Contains(ae.msg, "chat_template_kwargs") && !c.noKwargs.Load() {
-		c.noKwargs.Store(true)
-		delete(req, "chat_template_kwargs")
-		err = c.do(ctx, http.MethodPost, "/chat/completions", req, &resp)
-	}
-	if err != nil {
+	if err := c.chat(ctx, req, &resp); err != nil {
 		return nil, err
 	}
+	var ae *aiError
 	if len(resp.Choices) == 0 {
 		return nil, &aiError{msg: "leere Antwort"}
 	}
@@ -585,6 +579,19 @@ func (c *aiClient) ask(ctx context.Context, prompt string, media ...any) (*AIInf
 	}
 	info.Model, info.Tokens, info.At = c.opt.Model, tokens, time.Now().Unix()
 	return info, nil
+}
+
+// chat sends a chat request. A server that refuses chat_template_kwargs
+// gets it again without them (and from then on never with them).
+func (c *aiClient) chat(ctx context.Context, req map[string]any, out any) error {
+	err := c.do(ctx, http.MethodPost, "/chat/completions", req, out)
+	var ae *aiError
+	if _, kw := req["chat_template_kwargs"]; kw && errors.As(err, &ae) && ae.status == 400 && strings.Contains(ae.msg, "chat_template_kwargs") {
+		c.noKwargs.Store(true)
+		delete(req, "chat_template_kwargs")
+		err = c.do(ctx, http.MethodPost, "/chat/completions", req, out)
+	}
+	return err
 }
 
 // aiAnswerRetries is how often a model is asked again for an answer that

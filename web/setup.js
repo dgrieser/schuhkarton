@@ -658,7 +658,8 @@
         </div>
         <div class="addrow"><button class="btn primary" id="otest">${t('Texterkennung testen')}</button></div>
         <div class="stat" id="ores"></div>
-        <p class="muted small">${t('Der Test schickt ein kleines gezeichnetes Bild mit Text, kein Foto. Empfohlen: {m}.', { m: '<code>GLM-OCR</code>' })}</p>`}
+        <p class="muted small">${t('Der Test schickt ein kleines gezeichnetes Bild mit Text, kein Foto. Empfohlen: {m}.', { m: '<code>GLM-OCR</code>' })}</p>
+        <p class="muted small">${t('Sind Beschreibungen an, übersetzt deren Modell den erkannten Text in ihre Sprachen.')}</p>`}
       </section>
       <section class="card">
         <h2>${t('Sprache erkennen')}</h2>
