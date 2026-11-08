@@ -46,8 +46,9 @@ type fakeAI struct {
 	status      atomic.Int32 // answer with this HTTP status when not 0
 	calls       atomic.Int32
 	speechCalls atomic.Int32
-	noKwarg     bool // refuse chat_template_kwargs like a strict server
-	noVideo     bool // refuse video_url like a server started without video input
+	trCalls     atomic.Int32 // translations of recognized text
+	noKwarg     bool         // refuse chat_template_kwargs like a strict server
+	noVideo     bool         // refuse video_url like a server started without video input
 	mu          sync.Mutex
 	lastReq     map[string]any
 }
@@ -104,6 +105,29 @@ func (f *fakeAI) server(t *testing.T) *httptest.Server {
 				w.WriteHeader(400)
 				io.WriteString(w, `{"error":{"message":"At most 0 video(s) may be provided in one prompt."}}`)
 				return
+			}
+			if msgs, _ := req["messages"].([]any); len(msgs) == 2 {
+				if p, _ := msgs[1].(map[string]any)["content"].(string); strings.Contains(p, "<<<text>>>") {
+					if req["model"] != "vision-1" {
+						w.WriteHeader(404)
+						io.WriteString(w, `{"error":{"message":"The model does not exist."}}`)
+						return
+					}
+					f.trCalls.Add(1) // a translation: the shopping list, or only numbers
+					answer := "<<<lang>>>\nde\n<<<de>>>\nEinkaufszettel\n\nMilch\nBrot\n<<<en>>>\nShopping list\n\nMilk  \nBread\n"
+					if strings.HasSuffix(p, "12345") {
+						answer = "<think>numbers</think><<<lang>>>\nnone\n"
+					}
+					if strings.HasSuffix(p, "kaputt") { // an answer without the sections
+						answer = "Hello"
+					}
+					b, _ := json.Marshal(map[string]any{
+						"choices": []any{map[string]any{"message": map[string]any{"content": answer}}},
+						"usage":   map[string]any{"total_tokens": 77},
+					})
+					w.Write(b)
+					return
+				}
 			}
 			if req["model"] == "GLM-OCR" { // text recognition: plain text, in a code fence like some models do
 				b, _ := json.Marshal(map[string]any{

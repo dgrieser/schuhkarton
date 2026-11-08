@@ -154,7 +154,7 @@ func (l *Library) buildDoc(it *Item) *doc {
 	if it.GPS {
 		kind += " gps ort"
 	}
-	ocrText, spoken := l.OCRText(it), l.SpeechText(it)
+	ocrText, spoken := l.ocrSearchText(it), l.SpeechText(it)
 	if it.Desc != "" || ocrText != "" {
 		kind += " text"
 	}
@@ -484,7 +484,7 @@ func (l *Library) Search(q, user, lang string) []Hit {
 		}
 		h := Hit{ID: it.ID, Score: score}
 		if snipWord != "" {
-			h.Snip = snippet(joinText(it.Desc, l.OCRText(it), l.SpeechText(it)), snipWord)
+			h.Snip = snippet(joinText(it.Desc, l.ocrSearchText(it), l.SpeechText(it)), snipWord)
 			if h.Snip == "" && d.notes != "" {
 				h.Snip = snippet(l.noteText(it), snipWord)
 			}

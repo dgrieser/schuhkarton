@@ -286,6 +286,7 @@ type Library struct {
 	aiJob     remoteJob
 	ocr       ocrStore
 	ocrJob    remoteJob
+	ocrTr     *aiClient // translates recognized texts (nil: they are not)
 	speech    speechStore
 	speechJob remoteJob
 	xmpJob    remoteJob
@@ -394,6 +395,14 @@ func Open(opt Options) (*Library, error) {
 		l.ocrJob.client = newAIClient(AIOptions{URL: o.URL, Key: o.Key, Model: o.Model, Workers: o.Workers})
 		l.ocrJob.wake = make(chan struct{}, 1)
 		l.ocrJob.name, l.ocrJob.kind = "text recognition", schedule.JobOCR
+		if o.Translate != "" {
+			l.ocrTr = newAIClient(AIOptions{URL: o.URL, Key: o.Key, Model: o.Translate, Languages: o.Languages})
+			if len(l.ocrTr.trLangs()) == 0 {
+				l.ocrTr = nil
+			} else {
+				l.ocrTr.http.Timeout = 10 * time.Minute // two translations of a long page
+			}
+		}
 	}
 	l.loadSpeech()
 	if o := opt.Speech; o.Model != "" && o.URL != "" {

@@ -849,7 +849,9 @@
         }
         return h;
       };
-      const text = marked(d.desc), ocrText = marked(d.ocr), speechText = marked(d.speech);
+      // text in the picture in the viewer's language (a translation), the original below it
+      const ocrShown = (LANG === 'en' ? d.ocrEn : d.ocrDe) || d.ocr, ocrTr = !!d.ocr && ocrShown !== d.ocr;
+      const text = marked(d.desc), ocrText = marked(ocrShown), speechText = marked(d.speech);
       // AI description in the viewer's language (the other one as fallback)
       const ai = d.ai || null;
       let aiText = '', aiTags = [];
@@ -881,7 +883,8 @@
           ${aiText ? `<div class="ai-desc">${aiText}</div>` : ''}
           ${aiTags.length ? `<div class="chips">${aiTags.map((k) => `<a class="chip" href="#/suche/${encodeURIComponent(k)}">${esc(k)}</a>`).join('')}</div>` : ''}
           ${Account.can('admin') && S.config.ai === 'on' ? `<button class="link ai-redo" data-redesc>${t('Neu beschreiben')}</button>` : ''}` : ''}
-        ${d.ocr ? `<h3>${t('Text im Bild')} <span class="ai-badge" title="${t('Von einem KI-Modell gelesen')}">${t('erkannt')}</span></h3><div class="text ocr">${ocrText}</div>
+        ${d.ocr ? `<h3>${t('Text im Bild')} <span class="ai-badge" title="${t('Von einem KI-Modell gelesen')}">${t('erkannt')}</span>${ocrTr ? `<span class="ai-badge" title="${t('Von einem KI-Modell übersetzt')}">${t('übersetzt')}</span>` : ''}</h3><div class="text ocr">${ocrText}</div>
+          ${ocrTr ? `<details class="ocr-orig"><summary>${t('Original')}</summary><div class="text ocr">${marked(d.ocr)}</div></details>` : ''}
           ${Account.can('admin') && d.ocrOn ? `<button class="link ai-redo" data-reocr>${t('Neu erkennen')}</button>` : ''}`
           : Account.can('admin') && d.ocrOn ? `<button class="link ai-redo" data-reocr>${t('Text neu erkennen')}</button>` : ''}
         ${d.speech ? `<h3>${t('Gesprochen')} <span class="ai-badge" title="${t('Von einem KI-Modell gehört')}">${t('erkannt')}</span></h3><div class="text ocr">${speechText}</div>

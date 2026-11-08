@@ -420,6 +420,14 @@ shows below it as *Text aus der Datei*. Admins can have a picture read again
 (*Neu erkennen*). Progress, pauses and failures show like those of the
 descriptions.
 
+With descriptions on, their model (`ai.model`) also translates the text into
+their languages (`ai.languages`): the details show it in the viewer's
+language, marked *übersetzt*, with the original below, and the search finds
+it in every language. Only the text is sent for that, no picture. Texts
+recognized before are translated in the next pass; a text that only holds
+numbers or names keeps the original. The translations live in `ocr.json` and
+are not written into the files.
+
 ### Speech recognition
 
 *Einstellungen → KI → Sprache erkennen* writes down what is said in videos

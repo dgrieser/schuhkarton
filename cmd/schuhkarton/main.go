@@ -297,12 +297,17 @@ func ruleSet(cfg *config.Config) gallery.RuleSet {
 }
 
 // ocrOptions: text recognition with ai.ocr documents or all, over the AI
-// service (also with descriptions off).
+// service (also with descriptions off). With descriptions on, their model
+// translates the text into their languages.
 func ocrOptions(cfg *config.Config) gallery.OCROptions {
 	if cfg.AI.OCR == "off" {
 		return gallery.OCROptions{}
 	}
-	return gallery.OCROptions{URL: cfg.AI.URL, Key: cfg.AI.Key(), Model: cfg.AI.OCRModel, Workers: cfg.AI.OCRWorkers, Scope: cfg.AI.OCR}
+	o := gallery.OCROptions{URL: cfg.AI.URL, Key: cfg.AI.Key(), Model: cfg.AI.OCRModel, Workers: cfg.AI.OCRWorkers, Scope: cfg.AI.OCR}
+	if cfg.AI.Mode == "on" {
+		o.Translate, o.Languages = cfg.AI.Model, cfg.AI.Languages
+	}
+	return o
 }
 
 // speechOptions: speech recognition with ai.speech on, over the AI service.

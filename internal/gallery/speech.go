@@ -319,7 +319,7 @@ func (l *Library) transcribeOne(ctx context.Context, it *Item) error {
 		return fail(err)
 	}
 	l.setSpeech(it, s)
-	l.search.updateText(it.ID, it.Desc, l.OCRText(it), s.Text)
+	l.search.updateText(it.ID, it.Desc, l.ocrSearchText(it), s.Text)
 	j.handled(false, 0)
 	l.kickXMP()
 	return nil
