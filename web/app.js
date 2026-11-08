@@ -696,6 +696,7 @@
     list: [], i: 0, it: null, detail: null,
     showInfo: store.get('info', !isTouch), showFaces: false,
     zoom: { s: 1, x: 0, y: 0 }, slideT: 0, idleT: 0, open_: false,
+    mark: null, // a face being marked by hand: { key(e), end() }
 
     open(list, i, push = true) {
       this.list = list;
@@ -716,6 +717,7 @@
       this.el.hidden = true;
       this.media.innerHTML = '';
       document.body.classList.remove('locked');
+      this.mark?.end();
       $('#pop')?.remove();
       if (FS.auto) FS.exit();
       if (!fromPop) history.back();
@@ -732,6 +734,7 @@
 
     async show() {
       const it = (this.it = this.list[this.i]);
+      this.mark?.end();
       this.resetZoom();
       $('#pop')?.remove();
       const m = this.media;
@@ -920,6 +923,7 @@
     drawFaces() {
       $('.v-faces', this.media)?.remove();
       $('#vFaces').classList.toggle('on', this.showFaces);
+      this.el.classList.toggle('faces-on', this.showFaces);
       const d = this.detail;
       if (!this.showFaces || !d?.faces?.length || (this.it.k !== 1 && this.it.k !== 2)) return;
       let faces = d.faces;
@@ -947,61 +951,193 @@
       else v.currentTime = f.t || 0; // 'seeked' draws the boxes
     },
 
-    // draws a box around a face by hand (a paused video: on its frame), then asks for the name
-    markFace() {
+    // a long press (a right click with a mouse) on a photo while its face boxes are shown:
+    // a menu at that spot (above a finger, so it is not covered). False when there is none
+    // (e.g. beside the picture).
+    faceMenu(x, y, touch = false) {
+      if (!this.showFaces || this.it?.k !== 1 || this.mark || !Account.can('user')) return false;
+      const r = this.media.getBoundingClientRect();
+      if (x < r.left || x > r.right || y < r.top || y > r.bottom) return false;
+      const at = { x: (x - r.left) / r.width, y: (y - r.top) / r.height };
+      $('#pop')?.remove();
+      const menu = document.createElement('div');
+      menu.className = 'pop v-ctx';
+      menu.id = 'pop';
+      menu.innerHTML = `<button type="button" data-a="face">${icon('face-plus')}<span>${t('Gesicht hinzufügen')}</span></button>`;
+      document.body.appendChild(menu);
+      menu.style.left = `${clamp(x, 8, innerWidth - menu.offsetWidth - 8)}px`;
+      menu.style.top = `${clamp(touch ? y - menu.offsetHeight - 24 : y, 8, innerHeight - menu.offsetHeight - 8)}px`;
+      const off = (e) => { if (!menu.contains(e.target)) close(); };
+      const close = () => { menu.remove(); removeEventListener('pointerdown', off, true); };
+      addEventListener('pointerdown', off, true);
+      menu.onclick = (e) => { if (e.target.closest('[data-a="face"]')) { close(); this.markFace(at); } };
+      navigator.vibrate?.(12);
+      return true;
+    },
+
+    // draws a box around a face by hand (a paused video: on its frame). The box can then be
+    // moved and resized before the name is asked for. at: a point of the picture (0..1) that
+    // gets a box right away instead of drawing one.
+    markFace(at) {
       if (!Account.need('user')) return;
       const it = this.it, m = this.media;
       const v = it.k === 2 ? $('video', m) : null;
-      const at = v ? (v.pause(), v.currentTime) : 0;
+      const time = v ? (v.pause(), v.currentTime) : 0;
       const lv = $('.live-v', m); // a Live Photo: the box is drawn on the still photo
       if (lv) { lv.pause(); lv.classList.remove('on'); }
+      this.mark?.end();
       this.resetZoom();
       if (this.sheetMode.matches) this.setSheet(Math.min(this.sheetH(), innerHeight * 0.3)); // room for the picture
-      $('.v-mark', m)?.remove();
       $('#pop')?.remove();
       const ov = document.createElement('div');
       ov.className = 'v-mark';
-      ov.innerHTML = `<div class="v-mark-hint"><span>${t('Rahmen um das Gesicht ziehen oder auf das Gesicht tippen')}</span><button type="button" data-cancel>${t('Abbrechen')}</button></div>`;
+      ov.innerHTML = `<div class="v-mark-hint"><span></span><button type="button" data-cancel>${t('Abbrechen')}</button></div>`;
       m.appendChild(ov);
-      this.el.classList.add('marking'); // bars out of the way
-      const done = () => { ov.remove(); $('#pop')?.remove(); this.el.classList.remove('marking'); };
-      $('[data-cancel]', ov).onclick = (e) => { e.stopPropagation(); done(); };
-      let start = null;
+      const hint = $('.v-mark-hint span', ov);
       const box = document.createElement('div');
       box.className = 'v-face mark';
+      // size and confirm buttons next to the box; outside the picture, so they also fit beside a small one
+      const tools = document.createElement('div');
+      tools.className = 'v-mark-tools';
+      tools.innerHTML = `<button type="button" data-k="-" title="${t('Kleiner')} (−)">${icon('minus')}</button>
+        <button type="button" data-k="+" title="${t('Größer')} (+)">${icon('plus')}</button>
+        <button type="button" class="ok" data-k="ok" title="${t('Weiter')} (Enter)">${icon('check')}<span>${t('Weiter')}</span></button>`;
+      this.el.classList.add('marking'); // bars out of the way
+      let b = null, drag = null;
+      const placeTools = () => {
+        if (!tools.isConnected) return;
+        const r = box.getBoundingClientRect(), tw = tools.offsetWidth, th = tools.offsetHeight;
+        let top = r.bottom + 10;
+        if (top + th > innerHeight - 8) top = r.top - th - 10; // no room below: above
+        tools.style.left = `${clamp(r.left + r.width / 2 - tw / 2, 8, innerWidth - tw - 8)}px`;
+        tools.style.top = `${clamp(top, 8, innerHeight - th - 8)}px`;
+      };
+      const ro = new ResizeObserver(placeTools); // the picture changes size (sheet, rotation)
+      ro.observe(ov);
+      const done = () => {
+        ov.remove();
+        tools.remove();
+        ro.disconnect();
+        $('#pop')?.remove();
+        this.el.classList.remove('marking');
+        if (this.mark === mark) this.mark = null;
+      };
+      // with a box: it can be moved and resized; without: one is drawn
+      const adjusting = (on) => {
+        hint.textContent = on ? t('Rahmen auf das Gesicht schieben, Größe mit − und +') : t('Rahmen um das Gesicht ziehen oder auf das Gesicht tippen');
+        if (!on) { tools.remove(); return; }
+        $('#pop')?.remove();
+        document.body.appendChild(tools);
+        placeTools();
+      };
+      const place = (nb) => {
+        const w = clamp(nb.w, 0, 1), h = clamp(nb.h, 0, 1);
+        b = { x: clamp(nb.x, 0, 1 - w), y: clamp(nb.y, 0, 1 - h), w, h };
+        if (!box.isConnected) ov.appendChild(box);
+        Object.assign(box.style, { left: `${b.x * 100}%`, top: `${b.y * 100}%`, width: `${w * 100}%`, height: `${h * 100}%` });
+        placeTools();
+      };
+      // a square box around a point: given size (fractions), or a fifth of the picture's shorter side
+      const around = (p, size) => {
+        const r = ov.getBoundingClientRect(), side = Math.min(r.width, r.height) * 0.2;
+        const w = size?.w ?? side / r.width, h = size?.h ?? side / r.height;
+        place({ x: p.x - w / 2, y: p.y - h / 2, w, h });
+      };
+      // grows or shrinks the box around its middle, at most to the whole picture
+      const resize = (f) => {
+        if (!b) return;
+        const r = ov.getBoundingClientRect();
+        f = Math.min(f, 1 / b.w, 1 / b.h);
+        if (f < 1 && Math.min(b.w * r.width, b.h * r.height) * f < 16) return;
+        const w = b.w * f, h = b.h * f;
+        place({ x: b.x - (w - b.w) / 2, y: b.y - (h - b.h) / 2, w, h });
+      };
+      const ok = () => {
+        if (!b) return;
+        tools.remove();
+        this.namePop(box, { add: true, box: b, t: time }, done);
+      };
+      const mark = (this.mark = {
+        end: done,
+        // keys while marking: true when used
+        key: (e) => {
+          if ($('#pop')) { // the name: Escape goes back to the box
+            if (e.key !== 'Escape') return false;
+            adjusting(true);
+            return true;
+          }
+          const step = e.shiftKey ? 0.05 : 0.01;
+          switch (e.key) {
+            case 'Escape': done(); break;
+            case 'Enter': ok(); break;
+            case '+': case '=': resize(1.2); break;
+            case '-': resize(1 / 1.2); break;
+            case 'ArrowLeft': if (b) place({ ...b, x: b.x - step }); break;
+            case 'ArrowRight': if (b) place({ ...b, x: b.x + step }); break;
+            case 'ArrowUp': if (b) place({ ...b, y: b.y - step }); break;
+            case 'ArrowDown': if (b) place({ ...b, y: b.y + step }); break;
+            default: return false;
+          }
+          return true;
+        },
+      });
+      $('[data-cancel]', ov).onclick = (e) => { e.stopPropagation(); done(); };
+      tools.onclick = (e) => {
+        const k = e.target.closest('[data-k]')?.dataset.k;
+        if (k === '+') resize(1.2);
+        if (k === '-') resize(1 / 1.2);
+        if (k === 'ok') ok();
+      };
       const pos = (e) => {
         const r = ov.getBoundingClientRect();
         return { x: clamp((e.clientX - r.left) / r.width, 0, 1), y: clamp((e.clientY - r.top) / r.height, 0, 1) };
       };
-      const draw = (a, b) => {
-        const x = Math.min(a.x, b.x), y = Math.min(a.y, b.y), w = Math.abs(a.x - b.x), h = Math.abs(a.y - b.y);
-        Object.assign(box.style, { left: `${x * 100}%`, top: `${y * 100}%`, width: `${w * 100}%`, height: `${h * 100}%` });
-        return { x, y, w, h };
+      // on the box, or a few pixels around it (a finger covers more than the edge)
+      const onBox = (e) => {
+        if (!b) return false;
+        const r = ov.getBoundingClientRect(), p = pos(e), sx = 12 / r.width, sy = 12 / r.height;
+        return p.x >= b.x - sx && p.x <= b.x + b.w + sx && p.y >= b.y - sy && p.y <= b.y + b.h + sy;
       };
+      const draw = (a, c) => place({ x: Math.min(a.x, c.x), y: Math.min(a.y, c.y), w: Math.abs(a.x - c.x), h: Math.abs(a.y - c.y) });
       ov.onpointerdown = (e) => {
         if (e.target.closest('.v-mark-hint')) return;
         e.preventDefault(); e.stopPropagation();
-        $('#pop')?.remove();
         ov.setPointerCapture(e.pointerId);
-        start = pos(e);
-        ov.appendChild(box);
-        draw(start, start);
+        const p = pos(e);
+        if (onBox(e)) { drag = { p, b0: b, move: true }; adjusting(true); return; }
+        drag = { p, prev: b };
+        $('#pop')?.remove();
+        tools.remove();
+        draw(p, p);
       };
-      ov.onpointermove = (e) => { if (start) { e.stopPropagation(); draw(start, pos(e)); } };
-      ov.onpointerup = (e) => {
-        if (!start) return;
-        e.stopPropagation();
-        let b = draw(start, pos(e));
-        start = null;
-        if (b.w < 0.02 || b.h < 0.02) { // a tap: a box around that point
-          const r = ov.getBoundingClientRect(), side = Math.min(r.width, r.height) * 0.2;
-          const w = side / r.width, h = side / r.height;
-          const x = clamp(b.x - w / 2, 0, 1 - w), y = clamp(b.y - h / 2, 0, 1 - h);
-          b = draw({ x, y }, { x: x + w, y: y + h });
+      ov.onpointermove = (e) => {
+        if (!drag) {
+          if (e.pointerType === 'mouse') ov.style.cursor = onBox(e) ? 'move' : '';
+          return;
         }
-        this.namePop(box, { add: true, box: b, t: at }, done);
+        e.stopPropagation();
+        const p = pos(e);
+        if (drag.move) place({ ...drag.b0, x: drag.b0.x + p.x - drag.p.x, y: drag.b0.y + p.y - drag.p.y });
+        else draw(drag.p, p);
       };
+      ov.onpointerup = ov.onpointercancel = (e) => {
+        if (!drag) return;
+        e.stopPropagation();
+        const d = drag;
+        drag = null;
+        // a tap: the box goes there, keeping its size; the first one gets a size of its own
+        if (!d.move && (b.w < 0.02 || b.h < 0.02)) around(d.p, d.prev);
+        adjusting(true);
+      };
+      ov.addEventListener('wheel', (e) => {
+        e.preventDefault(); e.stopPropagation();
+        if (!b) return;
+        if (!tools.isConnected) adjusting(true);
+        resize(Math.exp(-e.deltaY * 0.0022));
+      }, { passive: false });
       for (const ev of ['click', 'dblclick', 'touchstart']) ov.addEventListener(ev, (e) => e.stopPropagation());
+      if (at) around(at);
+      adjusting(!!at);
     },
 
     namePop(anchor, face, onClose) {
@@ -1224,7 +1360,7 @@
 
     // pointer gestures: pan (zoomed), pinch, swipe (fitted), taps
     const pts = new Map();
-    let start = null, pinch = null, moved = false, multi = false, held = false, lastTap = null, tapT = 0, longT = 0, lastType = 'mouse';
+    let start = null, pinch = null, moved = false, multi = false, held = false, menued = false, lastTap = null, tapT = 0, longT = 0, lastType = 'mouse';
     V.stage.addEventListener('dblclick', (e) => {
       if (V.it?.k !== 1 || lastType !== 'mouse') return; // touch double taps are handled in end()
       V.animateZoom();
@@ -1237,9 +1373,16 @@
       pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
       V.media.style.transition = '';
       if (pts.size === 1) {
-        moved = multi = held = false;
+        moved = multi = held = menued = false;
         start = { x: e.clientX, y: e.clientY, zx: V.zoom.x, zy: V.zoom.y };
-        if (V.it?.lv) longT = setTimeout(() => { held = true; V.playLive(false); }, 450);
+        // a long press: the face menu while the face boxes are shown, else a Live Photo plays
+        const x = e.clientX, y = e.clientY;
+        if (e.button === 0) {
+          longT = setTimeout(() => {
+            if (V.faceMenu(x, y, lastType !== 'mouse')) held = menued = true;
+            else if (V.it?.lv) { held = true; V.playLive(false); }
+          }, 450);
+        }
       } else if (pts.size === 2) {
         const [a, b] = [...pts.values()];
         multi = moved = true;
@@ -1262,7 +1405,7 @@
         pinch = { d, cx, cy };
         return;
       }
-      if (!start) return;
+      if (!start || menued) return; // the menu is open: the finger lifting off must not swipe
       const dx = e.clientX - start.x, dy = e.clientY - start.y;
       if (!moved && Math.abs(dx) + Math.abs(dy) > 8) { moved = true; clearTimeout(longT); }
       if (!moved) return;
@@ -1313,6 +1456,12 @@
     };
     V.stage.addEventListener('pointerup', end);
     V.stage.addEventListener('pointercancel', end);
+    // a right click opens the face menu; on touch the long press above does, the browser's menu stays away
+    V.stage.addEventListener('contextmenu', (e) => {
+      if (!V.showFaces || V.it?.k !== 1 || !Account.can('user')) return;
+      e.preventDefault();
+      if (lastType === 'mouse') V.faceMenu(e.clientX, e.clientY);
+    });
 
     // Videos keep their own controls (tap to play, seek bar). A sideways swipe on the
     // picture still goes to the neighbours and a swipe down closes, also while playing;
@@ -1389,6 +1538,7 @@
     if (Viewer.open_) {
       if (typing) return;
       const V = Viewer;
+      if (V.mark?.key(e)) { e.preventDefault(); return; }
       switch (e.key) {
         case 'Escape': $('#pop') ? $('#pop').remove() : V.close(); break;
         case 'ArrowRight': V.step(1); break;
