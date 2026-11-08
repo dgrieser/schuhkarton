@@ -423,6 +423,16 @@ body.has-scrubber .view { padding-right: 64px; }
 .v-mark-hint { position: absolute; left: 50%; top: 10px; transform: translateX(-50%); display: flex; align-items: center; gap: 8px; width: max-content; max-width: calc(100% - 20px);
   padding: 6px 6px 6px 12px; border-radius: 10px; background: rgba(0, 0, 0, .75); color: #fff; font-size: 13px; cursor: default; }
 .v-mark-hint button { flex: none; border: 0; border-radius: 7px; padding: 5px 10px; background: rgba(255, 255, 255, .16); color: #fff; font: inherit; font-weight: 600; cursor: pointer; }
+.v-mark-tools { position: fixed; z-index: 115; display: flex; gap: 6px; padding: 5px; border-radius: 12px; background: rgba(0, 0, 0, .8); box-shadow: 0 6px 20px rgba(0, 0, 0, .45); }
+.v-mark-tools button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-width: 42px; height: 42px; padding: 0 10px; border: 0; border-radius: 9px;
+  background: rgba(255, 255, 255, .16); color: #fff; font-weight: 600; touch-action: manipulation; }
+.v-mark-tools button:hover { background: rgba(255, 255, 255, .26); }
+.v-mark-tools button.ok { padding: 0 14px; background: var(--accent); color: var(--accent-ink); }
+.viewer.faces-on .v-media img { -webkit-touch-callout: none; }
+.pop.v-ctx { width: auto; min-width: 200px; padding: 6px; gap: 2px; }
+.pop.v-ctx button { display: flex; align-items: center; gap: 10px; height: 40px; padding: 0 12px; border: 0; border-radius: 8px; background: none; font-size: 14px; text-align: left; white-space: nowrap; }
+.pop.v-ctx button:hover { background: #2a2d33; }
+.pop.v-ctx svg.i { width: 18px; height: 18px; }
 .v-info .mark-face { display: inline-flex; align-items: center; gap: 4px; margin-left: 8px; font-size: 12px; text-transform: none; letter-spacing: 0; vertical-align: middle; }
 .v-info .mark-face .i { width: 15px; height: 15px; }
 .v-info {

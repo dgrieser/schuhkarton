@@ -32,7 +32,10 @@ or another one.
   search finds "Hund im Schnee" or "birthday cake".
 - **People:** YuNet detection and SFace recognition, clustered into groups. Give
   groups names; equal names merge them. "Nicht diese Person" removes a single
-  face from a group.
+  face from a group. A face that was not found can be framed by hand: with the
+  face boxes shown, a long press (right click) on the photo opens a menu with
+  *Gesicht hinzufügen*; the frame can be moved and resized (− and +, the mouse
+  wheel or the keys) before it gets a name.
 - **Backup:** copies photos, cache and settings to a folder (a USB disk or a
   share) in the background. It only adds and updates; nothing in the backup is
   ever deleted.
