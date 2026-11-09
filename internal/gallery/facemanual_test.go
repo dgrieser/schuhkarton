@@ -1,8 +1,11 @@
 package gallery
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"image/jpeg"
+	"os"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
@@ -260,4 +263,55 @@ func (f *noModelFaces) detect(ctx context.Context, l *Library, it *Item, prefix 
 func (f *noModelFaces) detectData(ctx context.Context, l *Library, data []byte) ([]Face, error) {
 	f.calls.Add(1)
 	return []Face{{X: .3, Y: .3, W: .4, H: .4, Score: .9}}, nil
+}
+
+// The crops of faces marked by hand are made again once (small ones were
+// garbled), inside the background window.
+func TestRedoManualCrops(t *testing.T) {
+	root := t.TempDir()
+	saveJPEG(t, filepath.Join(root, "2020/IMG_20200101_120000.jpg"), picture(5, 800, 600, 0), 90)
+	l, err := Open(Options{Roots: []Root{{Name: "B", Path: root}}, CacheDir: t.TempDir(), Workers: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(l.Close)
+	ctx := context.Background()
+	if err := l.Scan(ctx); err != nil {
+		t.Fatal(err)
+	}
+	it := l.Items()[0]
+	idx, err := l.AddFace(ctx, it.ID, FaceBox{X: .45, Y: .45, W: .05, H: .05}, 0, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	crop := l.FacePath(it, idx)
+	if err := os.WriteFile(crop, []byte("garbled"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// the window is closed: later
+	now := time.Now()
+	w, _ := schedule.Parse(now.Add(2*time.Hour).Format("15:04"), now.Add(3*time.Hour).Format("15:04"))
+	l.opt.Window = w
+	if done, wait := l.redoManualCrops(ctx); done || wait <= 0 {
+		t.Fatalf("outside the window: done %v, wait %v", done, wait)
+	}
+	l.opt.Window = schedule.Window{}
+	if done, _ := l.redoManualCrops(ctx); !done {
+		t.Fatal("not done in the window")
+	}
+	b, err := os.ReadFile(crop)
+	if err != nil {
+		t.Fatal(err)
+	}
+	img, err := jpeg.Decode(bytes.NewReader(b))
+	if err != nil || img.Bounds().Dx() != 200 {
+		t.Fatalf("crop not made again: %v", err)
+	}
+	os.WriteFile(crop, []byte("garbled"), 0o644)
+	if done, _ := l.redoManualCrops(ctx); !done {
+		t.Fatal("second time not done")
+	}
+	if b, _ := os.ReadFile(crop); string(b) != "garbled" {
+		t.Error("made again a second time")
+	}
 }

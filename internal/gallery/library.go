@@ -277,6 +277,7 @@ type Library struct {
 
 	version  atomic.Int64
 	scanning atomic.Bool
+	scans    atomic.Int64 // scans started, so work running beside one can tell
 
 	cnt struct {
 		meta, metaTodo, thumbs, posters, previews, faces, faceTodo, scanned, errors atomic.Int64
@@ -313,6 +314,7 @@ type Library struct {
 	importJob    importJob
 	manualEmb    chan struct{} // wakes manualEmbLoop: a face was marked by hand
 	freshEmb     sync.Map      // FaceRef keys of faces just marked: looked at outside the window too
+	cropsRedone  sync.Map      // FaceRef keys whose crop redoManualCrops made again in this run
 	scannedOnce  atomic.Bool   // the first scan is through
 	formatsKnown atomic.Bool   // every item's format was checked by its content (format.go)
 	aiSoon       atomic.Bool   // descriptions start again shortly (video.go)

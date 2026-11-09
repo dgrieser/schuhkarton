@@ -69,10 +69,9 @@ func (l *Library) Start(ctx context.Context) {
 		l.bg.Add(1)
 		go l.importLoop(ctx)
 	}
-	if l.faces != nil {
-		l.bg.Add(1)
-		go l.manualEmbLoop(ctx)
-	}
+	// also without a face service: it makes the crops of hand-marked faces again once
+	l.bg.Add(1)
+	go l.manualEmbLoop(ctx)
 }
 
 func (m *mediaGen) kick() {

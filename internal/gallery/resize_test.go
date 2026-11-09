@@ -96,3 +96,22 @@ func absDiff(a, b uint8) uint8 {
 	}
 	return b - a
 }
+
+// Growing (a small face crop enlarged to 200 px) keeps the picture: before,
+// the averaging scaler, which only shrinks, garbled it.
+func TestAreaResizeGrows(t *testing.T) {
+	src := image.NewRGBA(image.Rect(0, 0, 60, 40))
+	for y := range 40 {
+		for x := range 60 {
+			src.Set(x, y, color.RGBA{uint8(x * 4), uint8(y * 6), 100, 255})
+		}
+	}
+	dst := areaResize(src, 150, 100)
+	for _, p := range []image.Point{{10, 10}, {75, 50}, {140, 90}} {
+		want := src.RGBAAt(p.X*60/150, p.Y*40/100)
+		got := dst.RGBAAt(p.X, p.Y)
+		if d := int(absDiff(got.R, want.R)) + int(absDiff(got.G, want.G)) + int(absDiff(got.B, want.B)); d > 30 {
+			t.Errorf("at %v: %v, want about %v", p, got, want)
+		}
+	}
+}
