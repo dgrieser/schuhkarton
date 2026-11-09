@@ -91,14 +91,21 @@ Optional tools, found on the `PATH`:
 | `ffmpeg` | video thumbnails, previews, HEVC playback | `apt install ffmpeg`, `brew install ffmpeg` |
 
 Without exiftool, dates come from file and folder names. HEIC and AVIF photos
-are decoded by the binary itself; no extra tool is needed. On 32-bit ARM (a
-Raspberry Pi with the 32-bit OS) that decoder is very slow (minutes per
-photo); install `libheif-examples` there and `heif-dec`/`heif-convert` is used
-instead. An older libheif cannot read some newer iPhone photos ("Metadata not
-correctly assigned to image"); those still take the slow decoder, about half
-an hour for a 24 MP photo on a Raspberry Pi. That happens once, for the
-thumbnail and the large preview; faces use that preview instead of decoding
-the photo again. A decode is stopped after 60 minutes (others after 5).
+are decoded by the binary itself; no extra tool is needed:
+
+1. HEIC by a decoder in pure Go ([gen2brain/h265](https://github.com/gen2brain/h265)):
+   a few seconds per photo, also on a Raspberry Pi with the 32-bit OS (a 24 MP
+   iPhone photo in about 5 s).
+2. Photos it cannot read go to `heif-dec` (libheif). The Linux release builds
+   carry a static one (libheif 1.23 with libde265, built by `deploy/heif-dec`
+   and unpacked into the cache folder); other builds use one installed
+   (`libheif-examples`).
+3. Last, libheif and libavif compiled to WebAssembly. On 32-bit ARM that is
+   interpreted and takes about half an hour per photo, one at a time
+   (`media.slow_decodes`); AVIF lands there unless an installed `heif-dec`
+   can read AV1. Faces never wait for it: they use the large preview.
+
+A decode is stopped after 5 minutes, on that slow path after 60.
 
 ## First start
 
@@ -630,7 +637,7 @@ media:
   thumb_size: 360             # short edge of grid thumbnails
   preview_size: 2048          # long edge of lightbox previews
   jpeg_quality: 82
-  slow_decodes: 1             # 32-bit ARM: HEIC/AVIF decoded at once by the slow built-in decoder
+  slow_decodes: 1             # 32-bit ARM: HEIC/AVIF decoded at once by the slow WebAssembly decoder
   video_previews: true
   video_preview_size: 240
   transcode: true             # H.264 for browsers without HEVC

@@ -235,8 +235,8 @@ func Tools(exiftool, ffmpeg string) []Tool {
 		ff.Version = v
 	}
 	tools := []Tool{et, ff}
-	if gallery.SlowHEIF() { // HEIC/AVIF: minutes per photo without it
-		tools = append(tools, Tool{Name: "heif-dec", Path: gallery.FindHEIFTool(), Needed: "HEIC- und AVIF-Fotos schnell öffnen (auf diesem Prozessor ist der eingebaute Weg sehr langsam)"})
+	if gallery.SlowHEIF() { // AVIF: minutes per photo without it
+		tools = append(tools, Tool{Name: "heif-dec", Path: gallery.FindHEIFTool(), Needed: "AVIF-Fotos schnell öffnen (auf diesem Prozessor ist der eingebaute Weg sehr langsam); HEIC liest Schuhkarton selbst"})
 	}
 	return tools
 }

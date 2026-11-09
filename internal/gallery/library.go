@@ -369,6 +369,7 @@ func Open(opt Options) (*Library, error) {
 	}
 	opt = withDefaults(opt)
 	setSlowDecodes(opt.SlowDecodes)
+	setToolDir(opt.CacheDir) // the bundled heif-dec is unpacked there
 	if opt.OverflowDir == "" {
 		opt.MaxCache = -1
 	}

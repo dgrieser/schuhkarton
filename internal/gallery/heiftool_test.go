@@ -1,14 +1,19 @@
 package gallery
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"image"
 	"image/color"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	h265heic "github.com/gen2brain/h265/heic"
 )
 
 // A stand-in heif tool (it only copies a JPEG): decodeFile uses it for HEIC
@@ -81,25 +86,81 @@ func TestSlowDecodes(t *testing.T) {
 	b()
 }
 
-// On 64-bit the built-in decoder goes first; a native heif-dec on the PATH
-// steps in for files it cannot read.
-func TestHEIFToolAfterBuiltIn(t *testing.T) {
-	if !wasmCompiled {
-		t.Skip("64-bit only")
-	}
+// HEIC goes to the decoder in Go first; the heif tool only steps in for a
+// file that one cannot read.
+func TestHEIFOrder(t *testing.T) {
 	dir := t.TempDir()
 	src := image.NewRGBA(image.Rect(0, 0, 5, 4))
 	jp := filepath.Join(dir, "ready.jpg")
 	if err := writeJPEG(jp, src, 90); err != nil {
 		t.Fatal(err)
 	}
-	os.WriteFile(filepath.Join(dir, "heif-dec"), []byte("#!/bin/sh\ncp "+jp+" \"$4\"\n"), 0o755)
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	heic := filepath.Join(dir, "IMG_2.HEIC")
-	os.WriteFile(heic, append([]byte("\x00\x00\x00\x18ftypheic\x00\x00\x00\x00mif1heic"), make([]byte, 64)...), 0o644)
+	called := filepath.Join(dir, "called")
+	tool := filepath.Join(dir, "heif-dec")
+	os.WriteFile(tool, []byte("#!/bin/sh\ntouch "+called+"\ncp "+jp+" \"$4\"\n"), 0o755)
+	old, oldPath := heifTool, pathHEIFTool
+	heifTool, pathHEIFTool = func() string { return tool }, func() string { return "" }
+	defer func() { heifTool, pathHEIFTool = old, oldPath }()
+
+	// a real HEIC, 64 x 32
+	pic := image.NewRGBA(image.Rect(0, 0, 64, 32))
+	for i := range pic.Pix {
+		pic.Pix[i] = 128
+	}
+	var buf bytes.Buffer
+	if err := h265heic.Encode(&buf, pic, h265heic.EncodeOptions{Quality: 50}); err != nil {
+		t.Fatal(err)
+	}
+	heic := filepath.Join(dir, "IMG_1.HEIC")
+	os.WriteFile(heic, buf.Bytes(), 0o644)
 	img, err := decodeFile(heic)
-	if err != nil || img.Bounds().Dx() != 5 {
+	if err != nil || img.Bounds().Dx() != 64 || img.Bounds().Dy() != 32 {
+		t.Fatalf("go decoder: %v %v", err, img)
+	}
+	if exists(called) {
+		t.Error("the tool was asked for a HEIC the Go decoder reads")
+	}
+
+	// one the Go decoder cannot read: the tool
+	bad := filepath.Join(dir, "IMG_2.HEIC")
+	os.WriteFile(bad, append([]byte("\x00\x00\x00\x18ftypheic\x00\x00\x00\x00mif1heic"), make([]byte, 64)...), 0o644)
+	img, err = decodeFile(bad)
+	if err != nil || img.Bounds().Dx() != 5 || !exists(called) {
 		t.Fatalf("fallback: %v", err)
+	}
+}
+
+// The bundled heif-dec is unpacked once into the cache folder, executable.
+func TestBundledHEIFDec(t *testing.T) {
+	script := []byte("#!/bin/sh\necho bundled\n")
+	var gz bytes.Buffer
+	zw := gzip.NewWriter(&gz)
+	zw.Write(script)
+	zw.Close()
+	oldGz := bundledHEIFGz
+	bundledHEIFGz = gz.Bytes()
+	reset := func() {
+		bundle.Lock()
+		bundle.dir, bundle.path, bundle.err = "", "", nil
+		bundle.Unlock()
+	}
+	reset()
+	defer func() { bundledHEIFGz = oldGz; reset() }()
+	dir := t.TempDir()
+	setToolDir(dir)
+	p := bundledHEIFDec()
+	if !strings.HasPrefix(p, filepath.Join(dir, "tools", "heif-dec-")) {
+		t.Fatalf("path %q", p)
+	}
+	out, err := exec.Command(p).Output()
+	if err != nil || string(out) != "bundled\n" {
+		t.Fatalf("run: %v %q", err, out)
+	}
+	if heifTool() != p || bundledHEIFDec() != p {
+		t.Error("not the bundled one")
+	}
+	if m, _ := filepath.Glob(filepath.Join(dir, "tools", ".unpack-*")); len(m) > 0 {
+		t.Errorf("left over: %v", m)
 	}
 }
 
@@ -258,5 +319,47 @@ func TestFaceImageSkipsSlowPath(t *testing.T) {
 	want, _ := os.ReadFile(p)
 	if name != "face.jpg" || string(b) != string(want) {
 		t.Errorf("not the preview: %s, %d bytes", name, len(b))
+	}
+}
+
+// The bundled heif-dec reads only HEVC: for AVIF an installed one goes
+// first; for HEIC the bundled one, then the installed one.
+func TestHEIFToolsForAVIF(t *testing.T) {
+	dir := t.TempDir()
+	src := image.NewRGBA(image.Rect(0, 0, 7, 3))
+	jp := filepath.Join(dir, "ready.jpg")
+	if err := writeJPEG(jp, src, 90); err != nil {
+		t.Fatal(err)
+	}
+	log := filepath.Join(dir, "log")
+	mk := func(name string, ok bool) string {
+		p := filepath.Join(dir, name)
+		body := "#!/bin/sh\necho " + name + " >>" + log + "\n"
+		if ok {
+			body += "cp " + jp + " \"$4\"\n"
+		} else {
+			body += "exit 1\n"
+		}
+		os.WriteFile(p, []byte(body), 0o755)
+		return p
+	}
+	bundled, installed := mk("bundled", false), mk("installed", true)
+	oldPath := pathHEIFTool
+	pathHEIFTool = func() string { return installed }
+	defer func() { pathHEIFTool = oldPath }()
+	for _, c := range []struct{ name, head, want string }{
+		{"x.avif", "\x00\x00\x00\x18ftypavif\x00\x00\x00\x00mif1avif", "installed\n"},
+		{"x.heic", "\x00\x00\x00\x18ftypheic\x00\x00\x00\x00mif1heic", "bundled\ninstalled\n"},
+	} {
+		os.Remove(log)
+		f := filepath.Join(dir, c.name)
+		os.WriteFile(f, append([]byte(c.head), make([]byte, 64)...), 0o644)
+		img, err := decodeForConvert(f, false, bundled)
+		if err != nil || img.Bounds().Dx() != 7 {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if b, _ := os.ReadFile(log); string(b) != c.want {
+			t.Errorf("%s: tools %q, want %q", c.name, b, c.want)
+		}
 	}
 }

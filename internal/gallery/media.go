@@ -17,8 +17,6 @@ import (
 	"sync"
 	"time"
 
-	_ "github.com/gen2brain/avif" // pure Go (WebAssembly), no cgo
-	_ "github.com/gen2brain/heic"
 	_ "golang.org/x/image/bmp"
 	"golang.org/x/image/draw"
 	_ "golang.org/x/image/tiff"
@@ -299,10 +297,10 @@ func firstLine(b []byte) string {
 // decodeFile decodes a picture in this process (cached JPEGs and the like;
 // photos go through the convert child, see convert.go).
 func decodeFile(p string) (image.Image, error) {
-	img, err := decodeForConvert(p, false)
+	img, err := decodeForConvert(p, false, heifTool())
 	if errors.Is(err, errNeedSlow) {
 		defer slowSlot()()
-		img, err = decodeForConvert(p, true)
+		img, err = decodeForConvert(p, true, heifTool())
 	}
 	return img, err
 }
