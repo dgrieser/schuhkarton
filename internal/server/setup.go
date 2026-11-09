@@ -1,12 +1,14 @@
 package server
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
 	"errors"
+	"html"
 	"io/fs"
 	"net"
 	"net/http"
@@ -192,9 +194,35 @@ func (s *Setup) page(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	b = withLang(b, s.o.Config().UI.Language)
+	if !s.o.Install {
+		b = settingsPage(b, homePath(s.o.Config().Server.PublicURL, r))
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Write(b)
+}
+
+// settingsReplacements turn the first-start page into the settings page.
+func settingsReplacements(home string) [][2]string {
+	return [][2]string{
+		{`<title>Schuhkarton einrichten</title>`, `<title>Schuhkarton – Einstellungen</title>`},
+		{`<h1 id="title" data-t="Schuhkarton einrichten">Schuhkarton einrichten</h1>`, `<h1 id="title" data-t="Einstellungen">Einstellungen</h1>`},
+		{`<p class="muted" id="subtitle" data-t="In wenigen Schritten zur eigenen Fotogalerie.">In wenigen Schritten zur eigenen Fotogalerie.</p>`,
+			`<p class="muted" id="subtitle">Schuhkarton ` + html.EscapeString(version.String()) + ` · ` + runtime.GOOS + "/" + runtime.GOARCH + `</p>`},
+		{`<a class="btn ghost" id="back" href="/" hidden`, `<a class="btn ghost" id="back" href="` + html.EscapeString(home) + `"`},
+		{`<button class="btn" id="prev" data-t="Zurück">`, `<button class="btn" id="prev" hidden data-t="Zurück">`},
+		{`<button class="btn primary" id="next" data-t="Weiter">Weiter</button>`, `<button class="btn primary" id="next" disabled data-t="Speichern">Speichern</button>`},
+	}
+}
+
+// settingsPage makes the page a running instance sends already the settings
+// page, so the first-start welcome does not show until the script has
+// loaded the state.
+func settingsPage(b []byte, home string) []byte {
+	for _, r := range settingsReplacements(home) {
+		b = bytes.Replace(b, []byte(r[0]), []byte(r[1]), 1)
+	}
+	return b
 }
 
 func (s *Setup) state(w http.ResponseWriter, r *http.Request) {

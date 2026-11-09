@@ -454,7 +454,7 @@
             ${numField('media.jpeg_quality', t('JPEG-Qualität (1–100)'), 1, 100, 1, defaultNote('media.jpeg_quality'))}
             ${numField('media.video_preview_size', t('Video-Vorschau (kurze Seite, Pixel)'), 64, 1080, 10, defaultNote('media.video_preview_size'))}
           </div>
-          <p class="warn" id="sizewarn" ${sizesChanged() ? '' : 'hidden'}>${icon('warn')}<span>${t('Gilt nur für Vorschauen, die ab jetzt entstehen. Vorhandene bleiben, wie sie sind; im Raster stehen dann alte und neue nebeneinander. Größere Werte brauchen mehr Platz im Cache und mehr Rechenzeit.')}</span></p>
+          <p class="note ${sizesChanged() ? 'warn' : ''}" id="sizewarn">${icon('info')}<span>${t('Gilt nur für Vorschauen, die ab jetzt entstehen. Vorhandene bleiben, wie sie sind; im Raster stehen dann alte und neue nebeneinander. Größere Werte brauchen mehr Platz im Cache und mehr Rechenzeit.')}</span></p>
         </details>
         <h3>${t('Hintergrundarbeit')}</h3>
         <p class="muted">${t('Vorschaubilder, Gesichter, Beschreibungen, Text- und Spracherkennung, Schreiben in Dateien, Duplikate, Import, regelmäßiges Einlesen und Sicherung laufen nur in diesen Zeitfenstern, z.B. Mo–Fr 23:00–08:00 und Sa–So 00:00–07:00. Ein Fenster über Mitternacht gehört zum Tag, an dem es beginnt. Keine Fenster: jederzeit. Was jemand anschaut oder von Hand startet, läuft sofort.')}</p>
@@ -507,7 +507,7 @@
     $('#workers', el).oninput = (e) => { C.media.workers = Math.max(1, +e.target.value || 1); };
     const slowdec = $('#slowdec', el);
     if (slowdec) slowdec.oninput = (e) => { C.media.slow_decodes = Math.max(1, Math.min(8, +e.target.value || 1)); };
-    bindFields(el, (key) => { if (SIZES.includes(key)) $('#sizewarn', el).hidden = !sizesChanged(); });
+    bindFields(el, (key) => { if (SIZES.includes(key)) $('#sizewarn', el).classList.toggle('warn', sizesChanged()); });
     // the older single window becomes a rule for every day
     const B = (C.background ??= { from: '', to: '' });
     B.windows ||= [];

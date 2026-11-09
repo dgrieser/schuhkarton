@@ -1,9 +1,13 @@
 package server
 
 import (
+	"bytes"
+	"io/fs"
+	"strings"
 	"testing"
 
 	"github.com/dgrieser/schuhkarton/internal/config"
+	"github.com/dgrieser/schuhkarton/web"
 )
 
 // The settings page sends weekly and one-time windows; they reach the file.
@@ -79,5 +83,23 @@ func TestMergeAllSettings(t *testing.T) {
 	in.Media.ThumbSize, in.UI.MapTiles = 0, ""
 	if n = merge(n, in); n.Media.ThumbSize != 400 || n.UI.MapTiles != config.Defaults().UI.MapTiles {
 		t.Errorf("thumb %d tiles %q", n.Media.ThumbSize, n.UI.MapTiles)
+	}
+}
+
+// A running instance sends the settings page right away, not the
+// first-start welcome; every replacement still finds its text.
+func TestSettingsPage(t *testing.T) {
+	b, err := fs.ReadFile(web.FS, "setup.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range settingsReplacements("/x/") {
+		if !bytes.Contains(b, []byte(r[0])) {
+			t.Errorf("setup.html lacks %q", r[0])
+		}
+	}
+	out := string(settingsPage(b, "/schuhkarton/"))
+	if strings.Contains(out, "Schuhkarton einrichten") || strings.Contains(out, "In wenigen Schritten") || !strings.Contains(out, `href="/schuhkarton/"`) {
+		t.Errorf("settings page still shows the welcome or the wrong link")
 	}
 }
