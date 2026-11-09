@@ -3,9 +3,11 @@ package gallery
 import (
 	"image"
 	"image/draw"
+
+	xdraw "golang.org/x/image/draw"
 )
 
-// areaResize scales img down to w x h by averaging the source pixels each
+// areaResize scales img to w x h. Shrinking (the usual case) averages the source pixels each
 // target pixel covers (box filter with exact fractional coverage). It reads
 // the source one row at a time and keeps two rows of sums, so the memory
 // beyond the result is a few rows, whatever the size of the photo. The
@@ -17,6 +19,12 @@ func areaResize(img image.Image, w, h int) *image.RGBA {
 	sw, sh := b.Dx(), b.Dy()
 	dst := image.NewRGBA(image.Rect(0, 0, w, h))
 	if sw <= 0 || sh <= 0 || w <= 0 || h <= 0 {
+		return dst
+	}
+	if w > sw || h > sh {
+		// growing (a small face crop): averaging only shrinks. The kernel
+		// scaler is fine here, the pictures are small.
+		xdraw.CatmullRom.Scale(dst, dst.Rect, img, b, draw.Src, nil)
 		return dst
 	}
 	hx := spans(sw, w)

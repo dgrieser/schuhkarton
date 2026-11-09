@@ -102,8 +102,16 @@ func (l *Library) kickManualEmb() {
 // were marked and for those still without one (also from before a restart).
 func (l *Library) manualEmbLoop(ctx context.Context) {
 	defer l.bg.Done()
+	cropsDone := false
 	for {
 		wait := l.manualEmbPass(ctx)
+		if !cropsDone {
+			var w time.Duration
+			cropsDone, w = l.redoManualCrops(ctx)
+			if w > 0 && (wait == 0 || w < wait) {
+				wait = w
+			}
+		}
 		var again <-chan time.Time
 		if wait > 0 {
 			again = time.After(wait)
@@ -115,6 +123,139 @@ func (l *Library) manualEmbLoop(ctx context.Context) {
 		case <-again:
 		}
 	}
+}
+
+// manualCropsMark marks that the crops of the hand-marked faces were made
+// again once: before, small faces were enlarged with a scaler that only
+// shrinks, which garbled their crops.
+const manualCropsMark = ".manual-crops-v2"
+
+// redoManualCrops makes the crops of all hand-marked faces again, once,
+// inside the background window of media work. It returns whether that is
+// done, else when to try again.
+func (l *Library) redoManualCrops(ctx context.Context) (bool, time.Duration) {
+	mark := filepath.Join(l.opt.CacheDir, "faces", manualCropsMark)
+	if _, err := os.Stat(mark); err == nil {
+		return true, 0
+	}
+	if l.Scanning() || !l.scannedOnce.Load() {
+		return false, time.Minute // a scan makes items anew and copies their crops: after it
+	}
+	scans := l.scans.Load()
+	type job struct {
+		it  *Item
+		idx int
+		f   Face
+		key string // the cache key then: a rotation changes it (a centred box may stay the same)
+	}
+	var jobs []job
+	l.mu.RLock()
+	for _, it := range l.items {
+		for i, f := range it.Faces {
+			if f.Manual {
+				jobs = append(jobs, job{it, i, f, it.key})
+			}
+		}
+	}
+	l.mu.RUnlock()
+	if len(jobs) > 0 {
+		win := l.window(schedule.JobMedia)
+		now := time.Now()
+		if !win.Open(now) {
+			if next := win.Next(now); !next.IsZero() {
+				return false, max(next.Sub(now), time.Second)
+			}
+			return false, manualEmbRetry
+		}
+		wctx, cancel := ctx, context.CancelFunc(func() {})
+		if end := win.End(now); !end.IsZero() {
+			wctx, cancel = context.WithDeadline(ctx, end)
+		}
+		defer cancel()
+		redone, failed, replaced := 0, 0, 0
+		for _, j := range jobs {
+			key := FaceRef{j.it.ID, j.idx}.key()
+			if _, ok := l.cropsRedone.Load(key); ok {
+				continue // made again earlier in this run
+			}
+			if wctx.Err() != nil {
+				break // window closed or shutdown: the checks below, then on later
+			}
+			frame, err := l.frameImage(wctx, j.it, float64(j.f.T))
+			if err != nil {
+				if wctx.Err() != nil {
+					break // stopped (window closed, shutdown): not done
+				}
+				l.logf("faces %s (marked by hand): crop not made again: %v", j.it.Rel, err)
+				failed++ // e.g. the share is away: again later
+				continue
+			}
+			px := boxPixels(frame.Bounds(), j.f.X, j.f.Y, j.f.W, j.f.H)
+			cropImg, _ := cropSquare(frame, px, 1.5, 200)
+			crop, err := encodeJPEG(cropImg, 88)
+			if err != nil {
+				failed++
+				continue
+			}
+			// checked and written under opMu: a rotation moves the crops and changes the key
+			l.opMu.Lock()
+			l.mu.RLock()
+			cur := l.byID[j.it.ID]
+			still := cur != nil && j.idx < len(cur.Faces) && cur.Faces[j.idx].Manual // the face is there
+			same := cur == j.it && still && sameBox(cur.Faces[j.idx], j.f) && cur.key == j.key
+			l.mu.RUnlock()
+			var werr error
+			if same {
+				p := l.FacePath(j.it, j.idx)
+				os.MkdirAll(filepath.Dir(p), 0o755)
+				werr = os.WriteFile(p, crop, 0o644)
+			}
+			l.opMu.Unlock()
+			switch {
+			case still && !same:
+				replaced++ // made anew by a scan, or turned meanwhile: again with what it is now
+				continue
+			case werr != nil:
+				failed++
+				continue
+			case same:
+				redone++
+			}
+			l.cropsRedone.Store(key, true) // done, or the face is gone (nothing to make)
+		}
+		if redone > 0 {
+			l.logf("faces: %d crops of faces marked by hand made again", redone)
+			l.bump()
+		}
+		// a scan ran meanwhile: it may have copied crops not made again yet to
+		// items it made anew (same IDs), so all of them again after it
+		if l.Scanning() || l.scans.Load() != scans {
+			l.cropsRedone.Clear()
+			return false, time.Minute
+		}
+		// a scan may have made an item anew meanwhile (with the old crops): again then
+		l.mu.RLock()
+		for _, j := range jobs {
+			if cur := l.byID[j.it.ID]; cur != nil && cur != j.it {
+				l.cropsRedone.Delete(FaceRef{j.it.ID, j.idx}.key())
+				replaced++
+			}
+		}
+		l.mu.RUnlock()
+		switch {
+		case ctx.Err() != nil:
+			return false, 0
+		case wctx.Err() != nil:
+			return false, manualEmbRetry // the window closed: on in the next one
+		case replaced > 0:
+			return false, time.Minute
+		case failed > 0:
+			return false, time.Hour
+		}
+	}
+	os.MkdirAll(filepath.Dir(mark), 0o755)
+	os.WriteFile(mark, nil, 0o644)
+	return true, 0
 }
 
 // wantsEmb tells whether a hand-marked face still waits for its embedding.

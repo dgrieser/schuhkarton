@@ -26,6 +26,7 @@ func (l *Library) Scan(ctx context.Context) error {
 	if !l.scanning.CompareAndSwap(false, true) {
 		return nil
 	}
+	l.scans.Add(1)
 	defer l.scanning.Store(false)
 
 	l.phase.Store("Ordner werden gelesen")
