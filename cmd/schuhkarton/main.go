@@ -262,7 +262,7 @@ func libOptions(cfg *config.Config) gallery.Options {
 		Faces: gallery.FaceOptions{
 			Mode: cfg.Faces.Mode, URL: cfg.Faces.URL, Token: cfg.Faces.Token, Workers: cfg.Faces.Workers,
 			MinScore: cfg.Faces.MinScore, ClusterThreshold: cfg.Faces.ClusterThreshold, NamedThreshold: cfg.Faces.NamedThreshold,
-			Python: python, ModelsDir: cfg.Faces.ModelsDir,
+			SamePhotoThreshold: cfg.Faces.SamePhotoThreshold, Python: python, ModelsDir: cfg.Faces.ModelsDir,
 		},
 		AI:          aiOptions(cfg),
 		RetryFailed: cfg.RetryFailed(),

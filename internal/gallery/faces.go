@@ -46,6 +46,9 @@ type peopleStore struct {
 	// cosine similarity needed to join an unnamed cluster (children look
 	// alike: rather split than mix) and a named person's centroid
 	threshNew, threshNamed float32
+	// similarity a second face needs to join a person or group that already
+	// has a face in the same picture (a collage of one person)
+	threshSame float32
 
 	mu     sync.RWMutex
 	labels map[string]string // face key -> name, "!name" (not this person), "~" (hidden) or "-" (no face)
@@ -55,10 +58,11 @@ type peopleStore struct {
 	hidden []hiddenRec       // groups hidden with "Ausblenden", newest last
 
 	clusterMu sync.Mutex
+	apart     int // faces the last clustering kept away from a person already in their picture
 }
 
-func newPeopleStore(path string, threshNew, threshNamed float64) *peopleStore {
-	s := &peopleStore{path: path, threshNew: float32(threshNew), threshNamed: float32(threshNamed),
+func newPeopleStore(path string, threshNew, threshNamed, threshSame float64) *peopleStore {
+	s := &peopleStore{path: path, threshNew: float32(threshNew), threshNamed: float32(threshNamed), threshSame: float32(threshSame),
 		labels: map[string]string{}, byID: map[string]*Person{}, byFace: map[string]string{}}
 	if b, err := os.ReadFile(path); err == nil {
 		var f struct {
@@ -314,17 +318,35 @@ type faceRec struct {
 	quality float32
 	taken   int64
 	label   string
+	frame   frame
+}
+
+// frame is one picture: a photo, or one moment of a video. A person is in a
+// frame once, except in a collage.
+type frame struct {
+	item string
+	t    float32
 }
 
 type cluster struct {
-	sum  []float32
-	cent []float32
-	refs []*faceRec
-	name string
+	sum    []float32
+	cent   []float32
+	refs   []*faceRec
+	name   string
+	frames map[frame]bool
+}
+
+// join makes f a member without a say in the centroid.
+func (c *cluster) join(f *faceRec) {
+	c.refs = append(c.refs, f)
+	if c.frames == nil {
+		c.frames = map[frame]bool{}
+	}
+	c.frames[f.frame] = true
 }
 
 func (c *cluster) add(f *faceRec) {
-	c.refs = append(c.refs, f)
+	c.join(f)
 	if len(f.emb) == 0 {
 		return // named by hand without an embedding: a member, no say in the centroid
 	}
@@ -362,7 +384,9 @@ func (l *Library) reclusterSoon() {
 }
 
 func (l *Library) recluster() {
-	l.people.cluster(l.faceSnapshot())
+	if apart, changed := l.people.cluster(l.faceSnapshot()); changed {
+		l.logf("faces: %d faces kept apart from a person already in their picture (same_photo_threshold %.2f)", apart, l.people.threshSame)
+	}
 	l.kickXMP() // names go into the files
 }
 
@@ -380,8 +404,10 @@ func (l *Library) faceSnapshot() []faceSnap {
 	return snap
 }
 
-// cluster rebuilds the people from labels and face embeddings.
-func (s *peopleStore) cluster(items []faceSnap) {
+// cluster rebuilds the people from labels and face embeddings. It returns
+// how many faces were kept away from a person already in their picture,
+// and whether that number changed since the last time (worth a log line).
+func (s *peopleStore) cluster(items []faceSnap) (apart int, changed bool) {
 	s.clusterMu.Lock()
 	defer s.clusterMu.Unlock()
 
@@ -392,7 +418,9 @@ func (s *peopleStore) cluster(items []faceSnap) {
 	}
 	s.mu.RUnlock()
 
-	people := buildPeople(items, labels, s.threshNew, s.threshNamed, false)
+	people, apart := buildPeople(items, labels, s.threshNew, s.threshNamed, s.threshSame, false)
+	changed = apart != s.apart
+	s.apart = apart
 	byID := map[string]*Person{}
 	byFace := map[string]string{}
 	for _, p := range people {
@@ -404,6 +432,7 @@ func (s *peopleStore) cluster(items []faceSnap) {
 	s.mu.Lock()
 	s.people, s.byID, s.byFace = people, byID, byFace
 	s.mu.Unlock()
+	return apart, changed
 }
 
 // faceRecs lists the faces with embeddings and their labels.
@@ -422,7 +451,8 @@ func faceRecs(items []faceSnap, labels map[string]string) (map[string]int64, []*
 			if f.Emb == nil && !f.Manual && (label == "" || label == labelNoFace || strings.HasPrefix(label, "!")) {
 				continue
 			}
-			r := &faceRec{ref: FaceRef{it.id, i}, emb: f.Emb, quality: f.Score * float32(math.Sqrt(float64(f.W*f.H))), taken: it.taken}
+			r := &faceRec{ref: FaceRef{it.id, i}, emb: f.Emb, quality: f.Score * float32(math.Sqrt(float64(f.W*f.H))), taken: it.taken,
+				frame: frame{it.id, f.T}}
 			r.label = label
 			all = append(all, r)
 		}
@@ -457,7 +487,13 @@ func newPerson(refs []*faceRec, id, name string, taken map[string]int64) *Person
 // buildPeople groups the faces: named people from labels, the rest by
 // similarity. Unnamed groups smaller than minCluster faces or with only one
 // photo are left out unless keepSmall is set.
-func buildPeople(items []faceSnap, labels map[string]string, threshNew, threshNamed float32, keepSmall bool) []*Person {
+//
+// A person is in a picture (a photo, a moment of a video) once: a face
+// joins a person or group that already has a face of its picture only when
+// at least threshSame alike (a collage), and else goes on to the next best
+// one. Faces named by hand always stay with their name. apart counts the
+// faces this kept away from their closest person or group.
+func buildPeople(items []faceSnap, labels map[string]string, threshNew, threshNamed, threshSame float32, keepSmall bool) (people []*Person, apart int) {
 	taken, all := faceRecs(items, labels)
 
 	// 1. named people from labels
@@ -477,7 +513,9 @@ func buildPeople(items []faceSnap, labels map[string]string, threshNew, threshNa
 			rest = append(rest, f)
 		}
 	}
-	// 2. unlabeled faces join a named person when close enough
+	// 2. unlabeled faces join a named person when close enough. The most
+	// alike pairs go first, so of several faces of one picture that are like
+	// one person the most alike gets that person and the others try the next.
 	var namedList []*cluster
 	for _, c := range named {
 		namedList = append(namedList, c)
@@ -485,12 +523,38 @@ func buildPeople(items []faceSnap, labels map[string]string, threshNew, threshNa
 	sort.Slice(namedList, func(a, b int) bool { return namedList[a].name < namedList[b].name })
 	var pool []*faceRec
 	if len(namedList) > 0 {
-		best := bestMatches(rest, namedList)
+		type pair struct {
+			f   int
+			c   *cluster
+			sim float32
+		}
+		var pairs []pair
+		for i, ms := range candidates(rest, namedList, threshNamed) {
+			for _, m := range ms {
+				if rest[i].label != "!"+m.c.name {
+					pairs = append(pairs, pair{i, m.c, m.sim})
+				}
+			}
+		}
+		sort.SliceStable(pairs, func(a, b int) bool { return pairs[a].sim > pairs[b].sim })
+		placed := make([]bool, len(rest))
+		kept := make([]bool, len(rest))
+		for _, p := range pairs {
+			f := rest[p.f]
+			switch {
+			case placed[p.f]:
+			case p.c.frames[f.frame] && p.sim < threshSame:
+				kept[p.f] = true
+			default:
+				p.c.join(f) // centroid stays the user's choice
+				placed[p.f] = true
+			}
+		}
 		for i, f := range rest {
-			c, sim := best[i].c, best[i].sim
-			if c != nil && sim >= threshNamed && f.label != "!"+c.name {
-				c.refs = append(c.refs, f) // centroid stays the user's choice
-			} else {
+			if kept[i] {
+				apart++
+			}
+			if !placed[i] {
 				pool = append(pool, f)
 			}
 		}
@@ -512,6 +576,22 @@ func buildPeople(items []faceSnap, labels map[string]string, threshNew, threshNa
 					c, sim = nc, s
 				}
 			}
+			if c != nil && c.frames[f.frame] {
+				// the closest group has this picture already: its likeness is taken
+				// again (the centroid may have moved within this chunk), and below
+				// threshSame the closest group without the picture is looked for
+				if sim = dot(f.emb, c.cent); sim < threshSame {
+					if sim >= threshNew {
+						apart++
+					}
+					c, sim = nil, -2
+					for _, oc := range clusters {
+						if s := dot(f.emb, oc.cent); s > sim && (!oc.frames[f.frame] || s >= threshSame) {
+							c, sim = oc, s
+						}
+					}
+				}
+			}
 			if c != nil && sim >= threshNew {
 				c.add(f)
 			} else {
@@ -523,7 +603,6 @@ func buildPeople(items []faceSnap, labels map[string]string, threshNew, threshNa
 	}
 
 	// build people
-	var people []*Person
 	mk := func(c *cluster, id, name string) {
 		if p := newPerson(c.refs, id, name, taken); p != nil && (name != "" || keepSmall || (p.Faces >= minCluster && p.Count >= 2)) {
 			p.cent = c.cent
@@ -542,12 +621,35 @@ func buildPeople(items []faceSnap, labels map[string]string, threshNew, threshNa
 		}
 		return people[a].Count > people[b].Count
 	})
-	return people
+	return people, apart
 }
 
 type match struct {
 	c   *cluster
 	sim float32
+}
+
+// candidates lists per face the clusters at least that alike, in parallel.
+func candidates(faces []*faceRec, clusters []*cluster, least float32) [][]match {
+	out := make([][]match, len(faces))
+	var wg sync.WaitGroup
+	n := runtime.NumCPU()
+	step := max(1, (len(faces)+n-1)/n)
+	for start := 0; start < len(faces); start += step {
+		wg.Add(1)
+		go func(lo, hi int) {
+			defer wg.Done()
+			for i := lo; i < hi; i++ {
+				for _, c := range clusters {
+					if s := dot(faces[i].emb, c.cent); s >= least {
+						out[i] = append(out[i], match{c, s})
+					}
+				}
+			}
+		}(start, min(start+step, len(faces)))
+	}
+	wg.Wait()
+	return out
 }
 
 // bestMatches finds the closest cluster centroid per face, in parallel.

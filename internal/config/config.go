@@ -332,6 +332,10 @@ type Faces struct {
 	MinScore         float64 `yaml:"min_score" json:"min_score"`
 	ClusterThreshold float64 `yaml:"cluster_threshold" json:"cluster_threshold"`
 	NamedThreshold   float64 `yaml:"named_threshold" json:"named_threshold"`
+	// SamePhotoThreshold is the similarity a second face needs to join a
+	// person already in the same picture (a collage); below it the face
+	// goes to the next best person or group.
+	SamePhotoThreshold float64 `yaml:"same_photo_threshold" json:"same_photo_threshold"`
 	// Python and ModelsDir are for mode "local" and for the worker.
 	Python    string `yaml:"python" json:"python"`
 	ModelsDir string `yaml:"models_dir" json:"models_dir"`
@@ -454,7 +458,7 @@ func Defaults() *Config {
 			Workers: max(2, runtime.NumCPU()/2), ThumbSize: 360, PreviewSize: 2048, JPEGQuality: 82,
 			VideoPreviews: true, VideoPreviewSize: 240, Transcode: true, SlowDecodes: 1,
 		},
-		Faces: Faces{Mode: "off", Workers: max(1, runtime.NumCPU()/4), MinScore: 0.86, ClusterThreshold: 0.48, NamedThreshold: 0.42},
+		Faces: Faces{Mode: "off", Workers: max(1, runtime.NumCPU()/4), MinScore: 0.86, ClusterThreshold: 0.48, NamedThreshold: 0.42, SamePhotoThreshold: 0.75},
 		AI: AI{Mode: "off", URL: MittwaldAIURL, Model: "Qwen3.8-27B-NVFP4", Workers: 2, Languages: []string{"de", "en"}, ImageSize: 1024,
 			OCR: "off", OCRModel: "GLM-OCR", OCRWorkers: 2,
 			Speech: "off", SpeechModel: "whisper-large-v3-turbo", SpeechFallback: "cohere-transcribe-03-2026", SpeechWorkers: 2},
@@ -600,6 +604,9 @@ func (c *Config) normalize() {
 	}
 	if c.Faces.NamedThreshold <= 0 {
 		c.Faces.NamedThreshold = d.Faces.NamedThreshold
+	}
+	if c.Faces.SamePhotoThreshold <= 0 {
+		c.Faces.SamePhotoThreshold = d.Faces.SamePhotoThreshold
 	}
 	c.Worker.Listen = cmpOr(c.Worker.Listen, d.Worker.Listen)
 	if c.Worker.Workers <= 0 {

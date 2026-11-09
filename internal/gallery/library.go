@@ -102,8 +102,10 @@ type FaceOptions struct {
 	MinScore         float64
 	ClusterThreshold float64
 	NamedThreshold   float64
-	Python           string // local
-	ModelsDir        string // local
+	// similarity a second face of one person in one picture needs (a collage)
+	SamePhotoThreshold float64
+	Python             string // local
+	ModelsDir          string // local
 }
 
 // Face is one detected face. Box coordinates are relative (0..1) to the
@@ -419,7 +421,7 @@ func Open(opt Options) (*Library, error) {
 		l.xmpJob.wake = make(chan struct{}, 1)
 		l.xmpJob.name, l.xmpJob.kind = "metadata", schedule.JobMetadata
 	}
-	l.people = newPeopleStore(filepath.Join(opt.CacheDir, "people.json"), opt.Faces.ClusterThreshold, opt.Faces.NamedThreshold)
+	l.people = newPeopleStore(filepath.Join(opt.CacheDir, "people.json"), opt.Faces.ClusterThreshold, opt.Faces.NamedThreshold, opt.Faces.SamePhotoThreshold)
 	l.importJob.wake = make(chan struct{}, 1)
 	l.tiers.wake = make(chan struct{}, 1)
 	l.tiers.lookups = make(chan struct{}, maxTier2Lookups)
@@ -514,6 +516,9 @@ func withDefaults(o Options) Options {
 	}
 	if o.Faces.NamedThreshold <= 0 {
 		o.Faces.NamedThreshold = 0.42
+	}
+	if o.Faces.SamePhotoThreshold <= 0 {
+		o.Faces.SamePhotoThreshold = 0.75
 	}
 	return o
 }

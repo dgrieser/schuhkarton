@@ -32,7 +32,10 @@ or another one.
   search finds "Hund im Schnee" or "birthday cake".
 - **People:** YuNet detection and SFace recognition, clustered into groups. Give
   groups names; equal names merge them. "Nicht diese Person" removes a single
-  face from a group. A face that was not found can be framed by hand: with the
+  face from a group. A person is in a picture once: of two faces in one photo
+  that look like the same person the more alike one gets that person, the
+  other the next best one, unless both are very alike (a collage,
+  `faces.same_photo_threshold`). Faces named by hand always keep their name. A face that was not found can be framed by hand: with the
   face boxes shown, a long press (right click) on the photo opens a menu with
   *Gesicht hinzufügen*; the frame can be moved and resized (− and +, the mouse
   wheel or the keys) before it gets a name.
@@ -624,6 +627,7 @@ faces:
   min_score: 0.86             # detection threshold
   cluster_threshold: 0.48     # similarity to join an unnamed group (higher: more, purer groups)
   named_threshold: 0.42       # similarity to join a named person
+  same_photo_threshold: 0.75  # similarity for a person twice in one picture (a collage)
   python: ""                  # local
   models_dir: ""              # local
 ai:                           # image descriptions by a vision model (optional)

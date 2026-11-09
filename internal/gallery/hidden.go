@@ -201,7 +201,8 @@ func (s *peopleStore) hiddenGroups(items []faceSnap) []*HiddenPerson {
 		}
 	}
 	var loose []*faceRec
-	for _, p := range buildPeople(items, only, s.threshNew, s.threshNamed, true) {
+	people, _ := buildPeople(items, only, s.threshNew, s.threshNamed, s.threshSame, true)
+	for _, p := range people {
 		if p.Faces < minCluster || p.Count < 2 {
 			for _, r := range p.refs {
 				loose = append(loose, byKey[r.key()])

@@ -306,7 +306,7 @@ func TestResolveDupesMerges(t *testing.T) {
 
 func TestRankCopies(t *testing.T) {
 	l := &Library{opt: Options{Roots: []Root{{Name: "B", Path: "/x"}}}, favs: map[string]map[string]bool{}, edits: map[string]*Override{}}
-	l.people = newPeopleStore("", 0.48, 0.42)
+	l.people = newPeopleStore("", 0.48, 0.42, 0.75)
 	l.loadAI()
 	big := &Item{ID: "1", Rel: "WhatsApp/IMG-20200105-WA0001.jpg", W: 1600, H: 1200, Size: 300_000, TakenSrc: "mtime"}
 	heic := &Item{ID: "2", Rel: "2020/IMG_1234.HEIC", W: 4032, H: 3024, Size: 2_000_000, TakenSrc: "exif", GPS: true}
