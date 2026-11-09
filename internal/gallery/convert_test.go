@@ -3,10 +3,13 @@ package gallery
 import (
 	"bytes"
 	"context"
+	"errors"
 	"image"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 // The test binary plays the convert child when asked to (see
@@ -66,5 +69,29 @@ func TestConvertChild(t *testing.T) {
 	convertMu.Unlock()
 	if _, err := l.convert(ctx, ConvertRequest{Src: l.Path(it), Outputs: []ConvertOutput{{Path: filepath.Join(t.TempDir(), "x.jpg"), Quality: 80}}}, true); err == nil {
 		t.Error("a dead child was no error")
+	}
+}
+
+// A child that takes too long is stopped: an error the callers fall back
+// from (not a context error), soon after the limit.
+func TestConvertTimeout(t *testing.T) {
+	convertMu.Lock()
+	ConvertCommand = []string{"/bin/sh", "-c", "exec sleep 30"}
+	oldLimit := convertTimeout
+	convertTimeout = 200 * time.Millisecond
+	convertMu.Unlock()
+	defer func() {
+		convertMu.Lock()
+		ConvertCommand, convertTimeout = nil, oldLimit
+		convertMu.Unlock()
+	}()
+	l := &Library{opt: Options{CacheDir: t.TempDir()}}
+	start := time.Now()
+	_, err := l.runConvert(context.Background(), ConvertRequest{Src: "x.jpg"})
+	if err == nil || errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "no result after") {
+		t.Fatalf("error %v", err)
+	}
+	if d := time.Since(start); d > 4*time.Second {
+		t.Errorf("stopped after %s", d)
 	}
 }
