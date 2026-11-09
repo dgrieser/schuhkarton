@@ -69,6 +69,10 @@ func (l *Library) Start(ctx context.Context) {
 		l.bg.Add(1)
 		go l.importLoop(ctx)
 	}
+	if l.faces != nil {
+		l.bg.Add(1)
+		go l.manualEmbLoop(ctx)
+	}
 }
 
 func (m *mediaGen) kick() {

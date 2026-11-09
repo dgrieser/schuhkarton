@@ -11,15 +11,20 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
+
+	"github.com/dgrieser/schuhkarton/internal/schedule"
 )
 
 // Faces marked by hand: somebody draws a box on a photo, or on a paused
 // video, and may name it. The box is cut out of the picture as the face
-// crop; when a face backend runs, it looks at the box (with some room
-// around it) for the embedding, so the face counts for recognition too.
-// Without an embedding a named face still belongs to its person.
+// crop and the face is kept at once. When a face backend runs, it looks at
+// the box (with some room around it) for the embedding in the background
+// (manualEmbLoop), so the face counts for recognition too; a busy or
+// unreachable service is asked again later. Without an embedding a named
+// face still belongs to its person.
 
 // FaceBox is a box relative to the picture as shown (0..1).
 type FaceBox struct{ X, Y, W, H float32 }
@@ -51,25 +56,6 @@ func (l *Library) AddFace(ctx context.Context, id string, box FaceBox, t float64
 		return 0, errors.New("box too small")
 	}
 	face := Face{X: box.X, Y: box.Y, W: box.W, H: box.H, Score: 1, Manual: true, T: float32(max(t, 0))}
-	// the embedding: the backend looks at the box with room around it
-	if l.faces != nil {
-		regionImg, sq := cropSquare(frame, px, 2.2, 0)
-		if region, err := encodeJPEG(regionImg, 90); err == nil {
-			dctx, cancel := context.WithTimeout(ctx, 60*time.Second)
-			if found, err := l.faces.detectData(dctx, l, region); err == nil {
-				// the drawn box within the region: only a face found there counts
-				side := float32(sq.Dx())
-				drawn := Face{X: float32(px.Min.X-sq.Min.X) / side, Y: float32(px.Min.Y-sq.Min.Y) / side,
-					W: float32(px.Dx()) / side, H: float32(px.Dy()) / side}
-				if f := matchingFace(found, drawn); f != nil {
-					face.Emb = f.Emb
-				}
-			} else {
-				l.logf("faces %s (marked by hand): %v", it.Rel, err)
-			}
-			cancel()
-		}
-	}
 	cropImg, _ := cropSquare(frame, px, 1.5, 200)
 	crop, err := encodeJPEG(cropImg, 88)
 	if err != nil {
@@ -88,6 +74,8 @@ func (l *Library) AddFace(ctx context.Context, id string, box FaceBox, t float64
 		os.WriteFile(p, crop, 0o644)
 	}
 	l.saveSoon()
+	l.freshEmb.Store(FaceRef{it.ID, idx}.key(), true)
+	l.kickManualEmb() // the embedding comes in the background, for this face right away
 	if name != "" {
 		if _, err := l.LabelFace(it.ID, idx, name); err != nil {
 			return idx, err
@@ -97,6 +85,204 @@ func (l *Library) AddFace(ctx context.Context, id string, box FaceBox, t float64
 		l.bump()
 	}
 	return idx, nil
+}
+
+// manualEmbRetry is how long a hand-marked face waits after the face
+// service failed (busy, unreachable, the file could not be read).
+const manualEmbRetry = 15 * time.Minute
+
+func (l *Library) kickManualEmb() {
+	select {
+	case l.manualEmb <- struct{}{}:
+	default:
+	}
+}
+
+// manualEmbLoop gives hand-marked faces their embedding, right after they
+// were marked and for those still without one (also from before a restart).
+func (l *Library) manualEmbLoop(ctx context.Context) {
+	defer l.bg.Done()
+	for {
+		wait := l.manualEmbPass(ctx)
+		var again <-chan time.Time
+		if wait > 0 {
+			again = time.After(wait)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-l.manualEmb:
+		case <-again:
+		}
+	}
+}
+
+// wantsEmb tells whether a hand-marked face still waits for its embedding.
+func (f Face) wantsEmb() bool { return f.Manual && f.Emb == nil && !f.NoEmb }
+
+// manualEmbPass looks for the embeddings of the hand-marked faces that
+// need one. A face just marked is looked at right away (somebody waits for
+// it); retries and faces from before keep to the background window of
+// media work. It returns when to look again (0: when a face is marked).
+func (l *Library) manualEmbPass(ctx context.Context) time.Duration {
+	if l.faces == nil {
+		return 0
+	}
+	if !l.FaceStatus().Recognition {
+		// no embeddings now (the service is away, or has no recognition model): look again later
+		return manualEmbRetry
+	}
+	type job struct {
+		it    *Item
+		idx   int
+		f     Face
+		fresh bool
+	}
+	var jobs []job
+	var wait time.Duration
+	later := func(d time.Duration) {
+		if d > 0 && (wait == 0 || d < wait) {
+			wait = d
+		}
+	}
+	now := time.Now()
+	win := l.window(schedule.JobMedia)
+	// until the window opens (no window within days: look again after the retry time)
+	untilOpen := func(t time.Time) time.Duration {
+		if next := win.Next(t); !next.IsZero() {
+			return max(next.Sub(t), time.Second)
+		}
+		return manualEmbRetry
+	}
+	l.mu.RLock()
+	for _, it := range l.items {
+		for i, f := range it.Faces {
+			if !f.wantsEmb() {
+				continue
+			}
+			_, fresh := l.freshEmb.Load(FaceRef{it.ID, i}.key())
+			if !fresh {
+				if f.EmbTry != 0 {
+					if left := manualEmbRetry - now.Sub(time.Unix(f.EmbTry, 0)); left > 0 {
+						later(left)
+						continue
+					}
+				}
+				if !win.Open(now) {
+					later(untilOpen(now))
+					continue
+				}
+			}
+			jobs = append(jobs, job{it, i, f, fresh})
+		}
+	}
+	l.mu.RUnlock()
+	// just marked first
+	sort.SliceStable(jobs, func(a, b int) bool { return jobs[a].fresh && !jobs[b].fresh })
+	changed := false
+	for _, j := range jobs {
+		if ctx.Err() != nil {
+			return 0
+		}
+		if !j.fresh && !win.Open(time.Now()) {
+			later(untilOpen(time.Now())) // the window closed meanwhile
+			break
+		}
+		l.freshEmb.Delete(FaceRef{j.it.ID, j.idx}.key()) // a retry keeps to the window
+		// background work stops when its window closes, like the media generator
+		jctx, cancel := ctx, context.CancelFunc(func() {})
+		if !j.fresh {
+			if end := win.End(time.Now()); !end.IsZero() {
+				jctx, cancel = context.WithDeadline(ctx, end)
+			}
+		}
+		emb, err := l.manualEmbedding(jctx, j.it, j.f)
+		closed := jctx.Err() != nil && ctx.Err() == nil
+		cancel()
+		if ctx.Err() != nil {
+			return 0
+		}
+		if closed { // not tried to the end: the next window takes it up
+			later(untilOpen(time.Now()))
+			break
+		}
+		if err != nil {
+			l.logf("faces %s (marked by hand): %v, again in %s", j.it.Rel, err, manualEmbRetry)
+		}
+		l.mu.Lock()
+		// the same face still (no new scan of the file, same box)
+		if l.byID[j.it.ID] == j.it && j.idx < len(j.it.Faces) && sameBox(j.it.Faces[j.idx], j.f) && j.it.Faces[j.idx].wantsEmb() {
+			faces := append([]Face(nil), j.it.Faces...)
+			f := &faces[j.idx]
+			f.EmbTry = time.Now().Unix()
+			switch {
+			case err != nil:
+			case emb != nil:
+				f.Emb = emb
+			default:
+				f.NoEmb = true
+			}
+			j.it.Faces = faces
+			changed = true
+		} else {
+			later(time.Minute) // replaced meanwhile (a scan): look at it again soon
+		}
+		l.mu.Unlock()
+		if err != nil {
+			later(manualEmbRetry)
+			if errors.Is(err, errTransient) || errors.Is(err, context.DeadlineExceeded) {
+				break // the service is away: the others wait too
+			}
+		}
+	}
+	if changed {
+		l.saveSoon()
+		l.reclusterSoon()
+	}
+	return wait
+}
+
+// manualEmbedding asks the face service for the embedding of a hand-marked
+// face: it looks at the box with room around it, and only a face found
+// there counts. nil without an error: no face there.
+func (l *Library) manualEmbedding(ctx context.Context, it *Item, f Face) ([]float32, error) {
+	frame, err := l.frameImage(ctx, it, float64(f.T))
+	if err != nil {
+		return nil, err
+	}
+	px := boxPixels(frame.Bounds(), f.X, f.Y, f.W, f.H)
+	if px.Dx() < 4 || px.Dy() < 4 {
+		return nil, nil
+	}
+	regionImg, sq := cropSquare(frame, px, 2.2, 0)
+	region, err := encodeJPEG(regionImg, 90)
+	if err != nil {
+		return nil, err
+	}
+	dctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	found, err := l.faces.detectData(dctx, l, region)
+	if err != nil {
+		return nil, err
+	}
+	side := float32(sq.Dx())
+	drawn := Face{X: float32(px.Min.X-sq.Min.X) / side, Y: float32(px.Min.Y-sq.Min.Y) / side,
+		W: float32(px.Dx()) / side, H: float32(px.Dy()) / side}
+	if m := matchingFace(found, drawn); m != nil {
+		return m.Emb, nil
+	}
+	// a face there, but without an embedding: the service cannot recognize
+	// right now (no model), so this is asked again, not taken as "no face"
+	for _, m := range found {
+		if m.Emb == nil && boxIoU(m, drawn) > 0.25 {
+			return nil, errors.New("Gesicht gefunden, aber ohne Merkmale (fehlt das Erkennungsmodell?)")
+		}
+	}
+	return nil, nil
+}
+
+func sameBox(a, b Face) bool {
+	return a.X == b.X && a.Y == b.Y && a.W == b.W && a.H == b.H && a.T == b.T
 }
 
 // frameImage is the picture faces are found in: the oriented photo (at
