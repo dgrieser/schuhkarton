@@ -4,7 +4,11 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
+	"time"
+
+	"github.com/dgrieser/schuhkarton/internal/schedule"
 )
 
 func TestAddFaceByHand(t *testing.T) {
@@ -102,4 +106,158 @@ func TestMergeFacesKeepsManual(t *testing.T) {
 	if got, place := mergeFaces([]Face{auto(.1)}, []Face{auto(.4)}, nil, .48); len(got) != 1 || got[0].X != .4 || place[0] != 0 {
 		t.Errorf("without manual faces: %+v %v", got, place)
 	}
+}
+
+// regionFaces finds one face in the middle of every picture it gets; with
+// away set it does not answer (busy, unreachable), with none it finds nothing.
+type regionFaces struct {
+	away, none atomic.Bool
+	calls      atomic.Int32
+}
+
+func (f *regionFaces) probe() FaceInfo {
+	return FaceInfo{Mode: "fake", Detection: true, Recognition: true}
+}
+func (f *regionFaces) detect(ctx context.Context, l *Library, it *Item, prefix string) ([]Face, error) {
+	return nil, nil
+}
+func (f *regionFaces) detectData(ctx context.Context, l *Library, data []byte) ([]Face, error) {
+	f.calls.Add(1)
+	if f.away.Load() {
+		return nil, fmt.Errorf("%w: test", errTransient)
+	}
+	if f.none.Load() {
+		return nil, nil
+	}
+	return []Face{{X: .3, Y: .3, W: .4, H: .4, Score: .9, Emb: []float32{1, 0}}}, nil
+}
+
+// A face marked by hand is kept at once; its embedding comes in the
+// background, and a service that is away is asked again later.
+func TestManualEmbeddingInBackground(t *testing.T) {
+	root := t.TempDir()
+	saveJPEG(t, filepath.Join(root, "2020/IMG_20200101_120000.jpg"), picture(5, 800, 600, 0), 90)
+	saveJPEG(t, filepath.Join(root, "2020/IMG_20200102_120000.jpg"), picture(6, 800, 600, 0), 90)
+	l, err := Open(Options{Roots: []Root{{Name: "B", Path: root}}, CacheDir: t.TempDir(), Workers: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(l.Close)
+	ctx := context.Background()
+	if err := l.Scan(ctx); err != nil {
+		t.Fatal(err)
+	}
+	fake := &regionFaces{}
+	fake.away.Store(true)
+	l.faces = fake
+	it := l.Items()[0]
+	idx, err := l.AddFace(ctx, it.ID, FaceBox{X: .4, Y: .3, W: .2, H: .25}, 0, "Anna")
+	if err != nil || fake.calls.Load() != 0 || l.ItemFaces(it)[idx].Emb != nil {
+		t.Fatalf("marking waited for the service: %v, %d calls", err, fake.calls.Load())
+	}
+	// the service is away: tried, then it waits
+	if wait := l.manualEmbPass(ctx); wait <= 0 || wait > manualEmbRetry {
+		t.Errorf("wait %v", wait)
+	}
+	if f := l.ItemFaces(it)[idx]; f.Emb != nil || f.EmbTry == 0 || f.NoEmb {
+		t.Fatalf("after a failure: %+v", f)
+	}
+	n := fake.calls.Load()
+	l.manualEmbPass(ctx)
+	if fake.calls.Load() != n {
+		t.Error("asked again before the retry time")
+	}
+	// later the service answers: the face gets its embedding
+	fake.away.Store(false)
+	l.mu.Lock()
+	fs := append([]Face(nil), it.Faces...)
+	fs[idx].EmbTry -= int64(manualEmbRetry/time.Second) + 1
+	it.Faces = fs
+	l.mu.Unlock()
+	if wait := l.manualEmbPass(ctx); wait != 0 {
+		t.Errorf("nothing left, but wait %v", wait)
+	}
+	if f := l.ItemFaces(it)[idx]; f.Emb == nil || f.NoEmb {
+		t.Fatalf("no embedding: %+v", f)
+	}
+	// nothing in the box: no embedding, and it is not asked for again
+	fake.none.Store(true)
+	other := l.Items()[1]
+	j, err := l.AddFace(ctx, other.ID, FaceBox{X: .1, Y: .1, W: .2, H: .2}, 0, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.manualEmbPass(ctx)
+	if f := l.ItemFaces(other)[j]; f.Emb != nil || !f.NoEmb {
+		t.Fatalf("no face in the box: %+v", f)
+	}
+	n = fake.calls.Load()
+	l.manualEmbPass(ctx)
+	if fake.calls.Load() != n {
+		t.Error("asked again for a face the service did not find")
+	}
+}
+
+// Faces from before (not just marked) wait for the background window; a
+// face just marked does not. A face found without an embedding (the service
+// has no recognition model right now) is asked for again, not given up.
+func TestManualEmbeddingWindowAndNoModel(t *testing.T) {
+	root := t.TempDir()
+	saveJPEG(t, filepath.Join(root, "2020/IMG_20200101_120000.jpg"), picture(5, 800, 600, 0), 90)
+	l, err := Open(Options{Roots: []Root{{Name: "B", Path: root}}, CacheDir: t.TempDir(), Workers: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(l.Close)
+	ctx := context.Background()
+	if err := l.Scan(ctx); err != nil {
+		t.Fatal(err)
+	}
+	fake := &noModelFaces{}
+	l.faces = fake
+	// a window that is closed now: two hours from now for one hour
+	now := time.Now()
+	w, err := schedule.Parse(now.Add(2*time.Hour).Format("15:04"), now.Add(3*time.Hour).Format("15:04"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.opt.Window = w
+	it := l.Items()[0]
+	idx, err := l.AddFace(ctx, it.ID, FaceBox{X: .4, Y: .3, W: .2, H: .25}, 0, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wait := l.manualEmbPass(ctx)
+	if fake.calls.Load() != 1 {
+		t.Fatalf("a face just marked waited for the window: %d calls", fake.calls.Load())
+	}
+	if f := l.ItemFaces(it)[idx]; f.NoEmb || f.EmbTry == 0 {
+		t.Fatalf("found without an embedding counts as no face: %+v", f)
+	}
+	if wait <= 0 {
+		t.Errorf("no retry planned: %v", wait)
+	}
+	// the retry time is over, but the window is closed: it waits
+	l.mu.Lock()
+	fs := append([]Face(nil), it.Faces...)
+	fs[idx].EmbTry -= int64(manualEmbRetry/time.Second) + 1
+	it.Faces = fs
+	l.mu.Unlock()
+	if wait := l.manualEmbPass(ctx); fake.calls.Load() != 1 || wait < time.Hour || wait > 2*time.Hour+time.Minute {
+		t.Errorf("retry outside the window: %d calls, wait %v", fake.calls.Load(), wait)
+	}
+}
+
+// noModelFaces finds the face but has no recognition model (no embedding).
+type noModelFaces struct{ calls atomic.Int32 }
+
+func (f *noModelFaces) probe() FaceInfo {
+	return FaceInfo{Mode: "fake", Detection: true, Recognition: true}
+}
+func (f *noModelFaces) detect(ctx context.Context, l *Library, it *Item, prefix string) ([]Face, error) {
+	return nil, nil
+}
+func (f *noModelFaces) detectData(ctx context.Context, l *Library, data []byte) ([]Face, error) {
+	f.calls.Add(1)
+	return []Face{{X: .3, Y: .3, W: .4, H: .4, Score: .9}}, nil
 }

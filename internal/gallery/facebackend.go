@@ -99,9 +99,12 @@ type remoteFaces struct {
 	url, token string
 	client     *http.Client
 
-	mu     sync.Mutex
-	info   FaceInfo
-	infoAt time.Time
+	mu         sync.Mutex
+	info       FaceInfo
+	infoAt     time.Time
+	known      bool // info was asked for once
+	refreshing bool
+	onUp       func() // the background check found detection or recognition back
 }
 
 func newRemoteFaces(url, token string) *remoteFaces {
@@ -142,21 +145,45 @@ func ProbeWorker(ctx context.Context, url, token string) (WorkerInfo, error) {
 	return wi, json.NewDecoder(resp.Body).Decode(&wi)
 }
 
+// probe tells what the face service can do. The first time it waits for
+// the answer; after that it answers with what is known and asks again in
+// the background once a minute, so a slow service does not hold up the
+// status (and the pages asking for it).
 func (f *remoteFaces) probe() FaceInfo {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if time.Since(f.infoAt) < time.Minute {
+	if !f.known {
+		f.info, f.infoAt, f.known = f.ask(), time.Now(), true
 		return f.info
 	}
+	if time.Since(f.infoAt) >= time.Minute && !f.refreshing {
+		f.refreshing = true
+		go func() {
+			info := f.ask()
+			f.mu.Lock()
+			old := f.info
+			f.info, f.infoAt, f.refreshing = info, time.Now(), false
+			up := f.onUp
+			f.mu.Unlock()
+			// work that was skipped while the service was away can start now
+			if up != nil && (info.Detection && !old.Detection || info.Recognition && !old.Recognition) {
+				up()
+			}
+		}()
+	}
+	return f.info
+}
+
+// ask asks the face service for its features (up to 10 s).
+func (f *remoteFaces) ask() FaceInfo {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	wi, err := ProbeWorker(ctx, f.url, f.token)
-	f.info = FaceInfo{Mode: "remote", Detection: wi.Detection, Recognition: wi.Recognition, Missing: wi.Missing, Version: wi.Version, Error: wi.Error}
+	info := FaceInfo{Mode: "remote", Detection: wi.Detection, Recognition: wi.Recognition, Missing: wi.Missing, Version: wi.Version, Error: wi.Error}
 	if err != nil {
-		f.info.Error = fmt.Sprintf("Gesichtserkennung unter %s nicht erreichbar: %v", f.url, err)
+		info.Error = fmt.Sprintf("Gesichtserkennung unter %s nicht erreichbar: %v", f.url, err)
 	}
-	f.infoAt = time.Now()
-	return f.info
+	return info
 }
 
 // WorkerFace is one face in the answer of POST /v1/faces.

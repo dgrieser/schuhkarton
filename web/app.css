@@ -442,8 +442,10 @@ body.has-scrubber .view { padding-right: 64px; }
 .pop.v-ctx button { display: flex; align-items: center; gap: 10px; height: 40px; padding: 0 12px; border: 0; border-radius: 8px; background: none; font-size: 14px; text-align: left; white-space: nowrap; }
 .pop.v-ctx button:hover { background: #2a2d33; }
 .pop.v-ctx svg.i { width: 18px; height: 18px; }
-.v-info .mark-face { display: inline-flex; align-items: center; gap: 4px; margin-left: 8px; font-size: 12px; text-transform: none; letter-spacing: 0; vertical-align: middle; }
-.v-info .mark-face .i { width: 15px; height: 15px; }
+/* "Gesicht markieren" next to the heading: on its line, not pushed down like the other .ai-redo links */
+.v-info h3:has(> .mark-face) { display: flex; align-items: center; }
+.v-info h3 .mark-face { display: inline-flex; align-items: center; gap: 4px; margin: 0 0 0 8px; font-size: 12px; line-height: 1; text-transform: none; letter-spacing: 0; }
+.v-info h3 .mark-face .i { width: 15px; height: 15px; }
 .v-info {
   width: 380px; height: 100vh; overflow-y: auto; background: #111214; border-left: 1px solid #222;
   padding: 18px 20px 40px; color: #e6e7e9; font-size: 14px;

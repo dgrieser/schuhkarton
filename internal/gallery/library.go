@@ -117,6 +117,11 @@ type Face struct {
 	Person     string    // filled by clustering
 	Manual     bool      // drawn by hand (facemanual.go)
 	T          float32   // video: the second the face was found or marked at
+	// hand-marked faces get their embedding in the background (manualEmbLoop):
+	// EmbTry is when it was last looked for (unix seconds, 0: not yet), NoEmb
+	// that the face service found no face in the box (so there is none)
+	EmbTry int64
+	NoEmb  bool
 }
 
 // Item is one photo or video.
@@ -306,13 +311,15 @@ type Library struct {
 	rules        atomic.Pointer[compiledRules]
 	rulesJob     rulesJob
 	importJob    importJob
-	scannedOnce  atomic.Bool  // the first scan is through
-	formatsKnown atomic.Bool  // every item's format was checked by its content (format.go)
-	aiSoon       atomic.Bool  // descriptions start again shortly (video.go)
-	offline      atomic.Value // []string: library folders the last scan could not read
-	rootDev      rootDevices  // device each library folder had its files on
-	editGen      atomic.Int64 // counts metadata edits, so plans notice them
-	closing      atomic.Bool  // Close has begun: no new filing runs
+	manualEmb    chan struct{} // wakes manualEmbLoop: a face was marked by hand
+	freshEmb     sync.Map      // FaceRef keys of faces just marked: looked at outside the window too
+	scannedOnce  atomic.Bool   // the first scan is through
+	formatsKnown atomic.Bool   // every item's format was checked by its content (format.go)
+	aiSoon       atomic.Bool   // descriptions start again shortly (video.go)
+	offline      atomic.Value  // []string: library folders the last scan could not read
+	rootDev      rootDevices   // device each library folder had its files on
+	editGen      atomic.Int64  // counts metadata edits, so plans notice them
+	closing      atomic.Bool   // Close has begun: no new filing runs
 	// rulesChunkHook runs before each chunk of a filing run (tests only)
 	rulesChunkHook func(start int)
 	editMu         sync.Mutex           // guards edits
@@ -383,7 +390,9 @@ func Open(opt Options) (*Library, error) {
 			Models: modelDirs(opt), Size: opt.Faces.Workers, MinScore: opt.Faces.MinScore})
 		l.faces = &localFaces{pool: l.local}
 	case "remote":
-		l.faces = newRemoteFaces(opt.Faces.URL, opt.Faces.Token)
+		rf := newRemoteFaces(opt.Faces.URL, opt.Faces.Token)
+		rf.onUp = func() { l.media.kick(); l.kickManualEmb() }
+		l.faces = rf
 	}
 	l.media = newMediaGen(l)
 	l.loadAI()
@@ -423,6 +432,7 @@ func Open(opt Options) (*Library, error) {
 	}
 	l.people = newPeopleStore(filepath.Join(opt.CacheDir, "people.json"), opt.Faces.ClusterThreshold, opt.Faces.NamedThreshold, opt.Faces.SamePhotoThreshold)
 	l.importJob.wake = make(chan struct{}, 1)
+	l.manualEmb = make(chan struct{}, 1)
 	l.tiers.wake = make(chan struct{}, 1)
 	l.tiers.lookups = make(chan struct{}, maxTier2Lookups)
 	l.loadEdits()
