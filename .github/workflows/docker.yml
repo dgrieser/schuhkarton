@@ -12,6 +12,12 @@ permissions:
   contents: read
   packages: write
 
+# releases one after the other, from building :latest through the webhook and
+# the faces-deployed tag, so the tag names the image that was pulled
+concurrency:
+  group: face-container-${{ startsWith(github.ref, 'refs/tags/v') && 'release' || github.ref }}
+  cancel-in-progress: false
+
 jobs:
   image:
     name: Build and push schuhkarton-faces
@@ -49,3 +55,46 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: VERSION=${{ github.ref_type == 'tag' && github.ref_name || 'dev' }}
+
+  # The container at mittwald runs :latest; its webhook (a GET to the secret
+  # MITTWALD_WEBHOOK_URL) pulls it again and restarts it. Only when what the
+  # worker runs changed since the last deployment, which the tag
+  # faces-deployed marks (moved only after a successful call; a restart
+  # interrupts face work). By hand: run the workflow on a tag.
+  redeploy:
+    name: Redeploy the face container at mittwald
+    needs: image
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: [self-hosted, Linux, X64, ubuntu]
+    permissions:
+      contents: write # moves the faces-deployed tag
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Did the face container change since the last deployment?
+        id: changed
+        run: |
+          prev=$(git rev-parse -q --verify 'refs/tags/faces-deployed^{commit}' || true)
+          if [ -z "$prev" ] || ! git diff --quiet "$prev" "$GITHUB_SHA" -- Dockerfile.faces go.mod go.sum \
+              cmd/schuhkarton internal/worker internal/helper internal/config internal/version internal/gallery/facebackend.go; then
+            echo "face container changed since ${prev:-ever (not deployed yet)}"
+            echo "redeploy=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "face container unchanged since the deployment of $prev"
+            echo "redeploy=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Call the webhook
+        if: steps.changed.outputs.redeploy == 'true' || github.event_name == 'workflow_dispatch'
+        env:
+          WEBHOOK: ${{ secrets.MITTWALD_WEBHOOK_URL }}
+        run: |
+          if [ -z "$WEBHOOK" ]; then
+            echo "MITTWALD_WEBHOOK_URL is not set, no redeploy"
+            exit 0
+          fi
+          curl -fsS -o /dev/null --retry 3 --retry-delay 10 --max-time 60 "$WEBHOOK"
+          echo "mittwald webhook called"
+          git push -f origin "$GITHUB_SHA:refs/tags/faces-deployed"

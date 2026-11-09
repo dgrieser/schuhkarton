@@ -525,6 +525,13 @@ stores the faces, embeddings and crops in its cache. Clustering into people
 happens in the gallery. If the container is unreachable, the scan resumes when
 it is back.
 
+Each release tag pushes a new `:latest`. When the repository secret
+`MITTWALD_WEBHOOK_URL` is set, the image workflow then calls that URL (a GET)
+to have a hosted container pull the image again and restart, but only when
+what the worker runs changed since the last successful call (the tag
+`faces-deployed` marks it); running the workflow by hand on a tag calls it in
+any case.
+
 Signed-in accounts can hide a group of faces on its person page (*Ausblenden*).
 A toast offers to undo it right away, and *Personen → Ausgeblendet* lists every
 hidden group with a few of its faces and a *Wieder zeigen* button. Groups hidden
