@@ -13,7 +13,7 @@
 
   async function api(path, body, method) {
     const r = await fetch(path, body === undefined && !method ? {} : { method: method || 'POST', headers: { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
-    if (!r.ok) throw new Error((await r.text()) || r.statusText);
+    if (!r.ok) throw Object.assign(new Error((await r.text()) || r.statusText), { status: r.status });
     return r.json();
   }
   let toastT;
@@ -120,6 +120,50 @@
   };
   const lockNote = (key) => (locked(key) ? `<span class="lock">${t('festgelegt durch {x}', { x: esc(locked(key)) })}</span>` : '');
   const dis = (key) => (locked(key) ? 'disabled' : '');
+  // settings by key ("media.thumb_size"): in the form (C), as saved (S.config), the default (S.defaults)
+  const getKey = (key, o = C) => key.split('.').reduce((v, k) => v?.[k], o);
+  const setKey = (key, v) => { const ks = key.split('.'), last = ks.pop(); ks.reduce((o, k) => (o[k] ??= {}), C)[last] = v; };
+  const defaultNote = (key) => t('Standard: {v}', { v: getKey(key, S.defaults) ?? '' });
+  const fieldHelp = (help) => (help ? `<span class="muted small">${help}</span>` : '');
+  // a number field; bindFields keeps the value from before for anything outside min..max
+  const numField = (key, label, min, max, step, help = '') => `<label class="field"><span>${label}</span>
+    <input type="number" data-num="${key}" min="${min}" max="${max}" step="${step}" value="${esc(String(getKey(key) ?? ''))}" ${dis(key)}>${lockNote(key)}${fieldHelp(help)}</label>`;
+  const textField = (key, label, placeholder = '', help = '') => `<label class="field"><span>${label}</span>
+    <input data-text="${key}" value="${esc(getKey(key) || '')}" placeholder="${esc(placeholder)}" spellcheck="false" ${dis(key)}>${lockNote(key)}${fieldHelp(help)}</label>`;
+  // wires numField and textField; changed(key) runs after each change
+  const bindFields = (el, changed) => {
+    for (const inp of $$('[data-num]', el)) {
+      const key = inp.dataset.num;
+      const ok = () => inp.value !== '' && +inp.value >= +inp.min && +inp.value <= +inp.max;
+      let before = getKey(key);
+      inp.onfocus = () => { before = getKey(key); };
+      // change too: the browser may clamp a value above max when the field is left
+      inp.oninput = inp.onchange = () => { setKey(key, ok() ? +inp.value : before); changed?.(key); };
+      inp.onblur = () => { if (!ok()) inp.value = getKey(key); };
+    }
+    for (const inp of $$('[data-text]', el)) inp.oninput = () => { setKey(inp.dataset.text, inp.value.trim()); changed?.(inp.dataset.text); };
+  };
+  // the start page of the gallery as this browser sees it (behind a proxy under its path)
+  const homeLink = (link) => (!link ? S.home || '/' : link.startsWith('/') ? (S.home || '/') + link.slice(1) : link);
+  // HTTPS switched on or off: this page's address stops answering, so the
+  // progress cannot be asked for there. followTLS goes to the same host name
+  // with the other scheme (and the new port, if that changed too) once it
+  // answers, or after a while anyway (e.g. a certificate the browser asks about).
+  // through a reverse proxy the browser's address does not change with it
+  const tlsFlip = () => !S.proxied && !!C.server.tls_cert !== !!S.config.server.tls_cert;
+  function followTLS(path) {
+    // the port stays, also when the address left it out (80 for http, 443 for https)
+    const port = C.server.listen !== S.config.server.listen ? (C.server.listen.match(/:(\d+)$/) || [])[1]
+      : location.port || (location.protocol === 'https:' ? '443' : '80');
+    const scheme = C.server.tls_cert ? 'https:' : 'http:';
+    const dflt = port === (scheme === 'https:' ? '443' : '80');
+    const origin = `${scheme}//${location.hostname}${port && !dflt ? `:${port}` : ''}`;
+    $('#hint').textContent = t('Wechsel zu {u} …', { u: origin });
+    const go = () => { location.href = origin + path; };
+    const probe = (n) => fetch(`${origin}/healthz`, { mode: 'no-cors', cache: 'no-store' })
+      .then(() => setTimeout(go, 500), () => (n > 0 ? setTimeout(() => probe(n - 1), 1000) : go()));
+    setTimeout(() => probe(30), 1500);
+  }
 
   const adminOK = () => admin.name.trim() && admin.pw.length >= 8 && admin.pw === admin.pw2;
   let STEPS = [];
@@ -268,6 +312,7 @@
           <label class="field"><span>${t('Empfindlichkeit')}</span><select id="fdsens" ${dis('dupes.sensitivity')}>
             ${[['strict', t('streng – nur sehr sichere Treffer')], ['normal', t('normal')], ['loose', t('großzügig – mehr Treffer, mehr prüfen')]].map(([v, l]) => `<option value="${v}" ${(C.dupes?.sensitivity || 'normal') === v ? 'selected' : ''}>${l}</option>`).join('')}
           </select>${lockNote('dupes.sensitivity')}</label>
+          ${numField('dupes.similar_minutes', t('Serie: höchstens so viele Minuten zwischen zwei Fotos'), 1, 1440, 1, defaultNote('dupes.similar_minutes'))}
           <label class="field"><span>${t('Ordner mit Dokumenten (Scans, Belege; standardmäßig ausgeblendet, kommagetrennt)')}</span>
           <input id="fdocs" value="${esc((C.library.documents || []).join(', '))}" ${dis('library.documents')}>${lockNote('library.documents')}</label>
           <label class="field"><span>${t('Diese Datei- und Ordnernamen auslassen (Muster, kommagetrennt)')}</span>
@@ -343,9 +388,13 @@
     C.dupes ||= { mode: 'on', sensitivity: 'normal', similar_minutes: 10 };
     $('#fdupes', el).onchange = (e) => { C.dupes.mode = e.target.checked ? 'on' : 'off'; };
     $('#fdsens', el).onchange = (e) => { C.dupes.sensitivity = e.target.value; };
+    bindFields(el);
   }
 
   // --- step 2: storage ------------------------------------------------------------
+  // the previews' size and quality; they apply to previews made from then on
+  const SIZES = ['media.thumb_size', 'media.preview_size', 'media.jpeg_quality', 'media.video_preview_size'];
+  const sizesChanged = () => SIZES.some((k) => getKey(k) !== getKey(k, S.config));
   function renderStorage(el) {
     const caches = (S.caches || []).filter((c) => c.items > 0);
     const tr = t;
@@ -398,6 +447,15 @@
         </div>
         ${S.slowHEIF ? `<label class="field"><span>${t('HEIC/AVIF gleichzeitig auf dem langsamen Weg')}</span><input type="number" id="slowdec" min="1" max="8" value="${C.media.slow_decodes || 1}" ${dis('media.slow_decodes')}>${lockNote('media.slow_decodes')}
           <span class="muted small">${t('Auf diesem Prozessor braucht der eingebaute HEIC/AVIF-Decoder Minuten und einige hundert MB pro Foto. Er springt nur ein, wo heif-dec fehlt oder ein Foto nicht lesen kann. Weitere Fotos warten, statt den Speicher zu füllen.')}</span></label>` : ''}
+        <details class="more" ${sizesChanged() ? 'open' : ''}><summary>${t('Größe und Qualität der Vorschauen')}</summary>
+          <div class="row2">
+            ${numField('media.thumb_size', t('Vorschaubilder im Raster (kurze Seite, Pixel)'), 64, 2000, 10, defaultNote('media.thumb_size'))}
+            ${numField('media.preview_size', t('Große Vorschau (lange Seite, Pixel)'), 256, 8192, 16, defaultNote('media.preview_size'))}
+            ${numField('media.jpeg_quality', t('JPEG-Qualität (1–100)'), 1, 100, 1, defaultNote('media.jpeg_quality'))}
+            ${numField('media.video_preview_size', t('Video-Vorschau (kurze Seite, Pixel)'), 64, 1080, 10, defaultNote('media.video_preview_size'))}
+          </div>
+          <p class="warn" id="sizewarn" ${sizesChanged() ? '' : 'hidden'}>${icon('warn')}<span>${t('Gilt nur für Vorschauen, die ab jetzt entstehen. Vorhandene bleiben, wie sie sind; im Raster stehen dann alte und neue nebeneinander. Größere Werte brauchen mehr Platz im Cache und mehr Rechenzeit.')}</span></p>
+        </details>
         <h3>${t('Hintergrundarbeit')}</h3>
         <p class="muted">${t('Vorschaubilder, Gesichter, Beschreibungen, Text- und Spracherkennung, Schreiben in Dateien, Duplikate, Import, regelmäßiges Einlesen und Sicherung laufen nur in diesen Zeitfenstern, z.B. Mo–Fr 23:00–08:00 und Sa–So 00:00–07:00. Ein Fenster über Mitternacht gehört zum Tag, an dem es beginnt. Keine Fenster: jederzeit. Was jemand anschaut oder von Hand startet, läuft sofort.')}</p>
         <p class="muted">${t('Pro Fenster lässt sich wählen, welche Arbeit darin laufen darf, z.B. tagsüber nur Duplikate oder nur die Sicherung. Arbeit, die kein Fenster erlaubt, wartet.')}</p>
@@ -409,6 +467,10 @@
         <div class="btns"><button class="btn" id="bgoadd" ${dis('background.once')}>${icon('plus')}<span>${t('Einmalig')}</span></button></div>
         ${lockNote('background.windows')}${lockNote('background.once')}
         <h3>${t('Werkzeuge')}</h3><ul class="tools">${tools}</ul>
+        <div class="row2">
+          ${textField('media.exiftool', t('Pfad zu exiftool'), t('leer: aus dem Suchpfad'))}
+          ${textField('media.ffmpeg', t('Pfad zu ffmpeg'), t('leer: aus dem Suchpfad'))}
+        </div>
         <p class="muted small">${t('Fehlt etwas: {a} und {b} über die Paketverwaltung installieren (z.B. {c}), dann neu starten.', { a: '<code>exiftool</code>', b: '<code>ffmpeg</code>', c: '<code>apt install libimage-exiftool-perl ffmpeg</code>' })}${S.slowHEIF ? ' ' + t('{a} kommt mit {b}.', { a: '<code>heif-dec</code>', b: '<code>apt install libheif-examples</code>' }) : ''}</p>
       </section>`;
     const cdir = $('#cdir', el);
@@ -445,6 +507,7 @@
     $('#workers', el).oninput = (e) => { C.media.workers = Math.max(1, +e.target.value || 1); };
     const slowdec = $('#slowdec', el);
     if (slowdec) slowdec.oninput = (e) => { C.media.slow_decodes = Math.max(1, Math.min(8, +e.target.value || 1)); };
+    bindFields(el, (key) => { if (SIZES.includes(key)) $('#sizewarn', el).hidden = !sizesChanged(); });
     // the older single window becomes a rule for every day
     const B = (C.background ??= { from: '', to: '' });
     B.windows ||= [];
@@ -524,10 +587,21 @@
   }
 
   // --- step 3: faces --------------------------------------------------------------
+  // the thresholds of finding and grouping faces: key, label, help
+  const FACE_TUNING = [
+    ['faces.min_score', 'Gesicht erkennen ab', 'Wie sicher die Erkennung sein muss. Höher: weniger Fehltreffer, kleine oder unscharfe Gesichter fehlen eher. Gilt für Fotos, die danach nach Gesichtern durchsucht werden.'],
+    ['faces.cluster_threshold', 'Unbenannte Gruppe ab', 'Ähnlichkeit, ab der Gesichter eine Gruppe bilden. Höher: mehr, dafür reinere Gruppen (Geschwister sehen sich ähnlich).'],
+    ['faces.named_threshold', 'Benannte Person ab', 'Ähnlichkeit, ab der ein Gesicht zu einer Person mit Namen kommt. Niedriger: mehr Treffer, aber auch mehr falsche.'],
+    ['faces.same_photo_threshold', 'Zweimal im selben Bild ab', 'Eine Person ist in einem Bild einmal. Ein zweites Gesicht, das ihr ähnelt, kommt nur ab dieser Ähnlichkeit auch zu ihr (eine Collage), sonst zur nächstbesten Person.'],
+  ];
   function renderFaces(el) {
     const m = C.faces.mode;
     const tok = C.faces.token && C.faces.token !== '********' ? C.faces.token : '<TOKEN>';
     const host = location.hostname;
+    // the detection threshold is used here only with local Python (the container keeps its own)
+    const tuning = FACE_TUNING.filter(([k]) => k !== 'faces.min_score' || m === 'local');
+    const tuned = [...tuning.map(([k]) => k), 'faces.workers'].some((k) => getKey(k) !== getKey(k, S.defaults));
+    const minScore = (help) => numField('faces.min_score', t('Gesicht erkennen ab'), 0.05, 1, 0.01, `${help} ${defaultNote('faces.min_score')}`);
     el.innerHTML = `
       <section class="card">
         <h2>${t('Personen erkennen?')}</h2>
@@ -555,7 +629,36 @@
             <button class="btn" id="fgen" ${dis('faces.token')} title="${t('Neuen Token erzeugen')}">${t('Neu')}</button></div>${lockNote('faces.token')}</label>
         </div>
         <button class="btn primary" id="ftest">${t('Verbindung testen')}</button> <span id="fres"></span>
-      </section>` : ''}`;
+      </section>` : ''}
+      ${m === 'local' ? `<section class="card">
+        <h2>${t('Python auf diesem Rechner')}</h2>
+        <div class="row2">
+          ${textField('faces.python', t('Python mit OpenCV'), 'python3', t('leer: python3 aus dem Suchpfad'))}
+          ${textField('faces.models_dir', t('Ordner mit den Modellen'), '', t('YuNet und SFace als ONNX-Dateien'))}
+        </div>
+      </section>` : ''}
+      ${m !== 'off' ? `<section class="card">
+        <details class="more" ${tuned ? 'open' : ''}><summary>${t('Feinabstimmung')}</summary>
+          <p class="muted small">${t('Werte von 0 bis 1. Beim Speichern startet die Galerie neu und ordnet die Gesichter neu zu; was von Hand benannt ist, bleibt.')}</p>
+          <div class="row2">${tuning.map(([k, label, help]) => numField(k, t(label), 0.05, 1, 0.01, `${t(help)} ${defaultNote(k)}`)).join('')}</div>
+          <button class="btn" id="ftunedef" ${tuning.some(([k]) => locked(k)) ? 'disabled' : ''}>${t('Standardwerte')}</button>
+          ${numField('faces.workers', t('Fotos gleichzeitig untersuchen'), 1, 16, 1, `${t('Mehr ist schneller, braucht aber mehr Speicher, hier und im Container.')} ${defaultNote('faces.workers')}`)}
+        </details>
+      </section>` : ''}
+      <section class="card">
+        <details class="more"><summary>${t('Dieser Rechner als Gesichtserkennung für andere (schuhkarton worker)')}</summary>
+          <p class="muted small">${t('Statt des Containers kann {c} die Gesichter für eine andere Galerie erkennen. Diese Werte gelten beim nächsten Start des Workers.', { c: '<code>schuhkarton worker</code>' })}</p>
+          <div class="row2">
+            ${textField('worker.listen', t('Adresse'), '0.0.0.0:8089')}
+            ${textField('worker.token', 'Token', '', t('Die Galerie trägt denselben Token ein.'))}
+            ${numField('worker.workers', t('Fotos gleichzeitig'), 1, 64, 1, defaultNote('worker.workers'))}
+            ${m === 'local' ? '' : minScore(t('Wie sicher die Erkennung dieses Workers sein muss. Höher: weniger Fehltreffer, kleine oder unscharfe Gesichter fehlen eher.'))}
+          </div>
+        </details>
+      </section>`;
+    bindFields(el);
+    const tuneDef = $('#ftunedef', el);
+    if (tuneDef) tuneDef.onclick = () => { for (const [k] of tuning) setKey(k, getKey(k, S.defaults)); renderFaces(el); };
     for (const r of $$('input[name=fm]', el)) r.onchange = () => {
       C.faces.mode = r.value;
       if (r.value === 'remote' && !C.faces.token) C.faces.token = randomToken();
@@ -594,6 +697,9 @@
   let ocrTest = null; // last text recognition test
   let speechTest = null; // last speech recognition test
   let connTest = null; // last model list or connection error
+  // how long a failed file waits before it is tried again ('' = the built-in 72h)
+  const RETRY = [['', t('Standard: {v}', { v: t('{n} Tage', { n: 3 }) })], ['6h', t('{n} Stunden', { n: 6 })], ['12h', t('{n} Stunden', { n: 12 })],
+    ['24h', t('{n} Tag', { n: 1 })], ['72h', t('{n} Tage', { n: 3 })], ['168h', t('{n} Tage', { n: 7 })]];
   function renderAI(el) {
     const preset = aiPreset();
     if (aiKeyField === null) aiKeyField = C.ai.api_key_env ? `$${C.ai.api_key_env}` : (C.ai.api_key || '');
@@ -678,6 +784,18 @@
         <div class="stat" id="sres"></div>
         <p class="muted small">${t('Der Test schickt eine Sekunde Stille. Empfohlen: {m}.', { m: '<code>whisper-large-v3-turbo</code>' })}</p>`}
       </section>
+      <section class="card">
+        <details class="more"><summary>${t('Erweitert')}</summary>
+          <div class="row2">
+            ${numField('ai.image_size', t('Bildgröße für das Modell (lange Seite, Pixel)'), 256, 4096, 64, `${t('Größer: mehr Details, aber mehr Tokens und langsamer.')} ${defaultNote('ai.image_size')}`)}
+            <label class="field"><span>${t('Fehlgeschlagenes erneut versuchen nach')}</span><select id="aretry" ${dis('ai.retry_failed')}>
+              ${[...RETRY, ...(RETRY.some(([v]) => v === (C.ai.retry_failed || '')) ? [] : [[C.ai.retry_failed, C.ai.retry_failed]])].map(([v, l]) => `<option value="${esc(v)}" ${(C.ai.retry_failed || '') === v ? 'selected' : ''}>${esc(l)}</option>`).join('')}
+            </select>${lockNote('ai.retry_failed')}${fieldHelp(t('Gilt für Beschreibungen, Text- und Spracherkennung.'))}</label>
+          </div>
+          <label class="check"><input type="checkbox" id="athink" ${C.ai.thinking ? 'checked' : ''} ${dis('ai.thinking')}>
+            <span><b>${t('Modell erst nachdenken lassen')}</b><br><span class="muted">${t('Nur bei Modellen mit Denkmodus: langsamer und mehr Tokens, selten bessere Antworten.')}</span></span></label>${lockNote('ai.thinking')}
+        </details>
+      </section>
       ${S.mode === 'settings' ? `<section class="card" id="aprogcard" hidden><h2>${t('Fortschritt')}</h2><div id="aprog"></div></section>` : ''}`}`;
     for (const r of $$('input[name=aim]', el)) r.onchange = () => {
       if (r.value === 'off') {
@@ -704,6 +822,9 @@
     };
     if (preset === 'off') return;
     drawAIProgress(el);
+    bindFields(el);
+    $('#aretry', el).onchange = (e) => { C.ai.retry_failed = e.target.value; };
+    $('#athink', el).onchange = (e) => { C.ai.thinking = e.target.checked; };
     const keyHint = (r) => (r?.hasKey === false && preset === 'mittwald' ? `<div class="muted">${t('Kein API-Schlüssel angegeben.')}</div>` : '');
     // connection: models found, or why not
     const showConn = () => {
@@ -949,6 +1070,13 @@
           <label class="field"><span>${t('Port')}</span><input id="port" type="number" min="1" max="65535" value="${esc(port)}" ${dis('server.listen')}></label>
           <label class="field"><span>${t('Öffentliche Adresse (optional, z.B. hinter einem Reverse Proxy)')}</span><input id="purl" value="${esc(C.server.public_url || '')}" placeholder="https://fotos.example.org" ${dis('server.public_url')}></label>
         </div>
+        <details class="more" ${C.server.tls_cert ? 'open' : ''}><summary>${t('HTTPS direkt, ohne Reverse Proxy')}</summary>
+          <p class="muted small">${t('Zertifikat und Schlüssel als PEM-Dateien, z.B. von Let’s Encrypt. Hinter einem Reverse Proxy, der HTTPS übernimmt, leer lassen. Beim Speichern wird geprüft, ob beide zusammenpassen; danach beginnt die Adresse mit https://.')}</p>
+          <div class="row2">
+            ${textField('server.tls_cert', t('Zertifikat'), '/etc/letsencrypt/live/…/fullchain.pem')}
+            ${textField('server.tls_key', t('Schlüssel'), '/etc/letsencrypt/live/…/privkey.pem')}
+          </div>
+        </details>
         <label class="check"><input type="checkbox" id="prot" ${protect ? 'checked' : ''} ${dis('server.token')}>
           <span><b>${t('Mit Zugangsschlüssel schützen')}</b><br><span class="muted">${t('Gilt für Zuschauer ohne Konto: Geräte brauchen einmal einen Link mit Schlüssel, danach merkt sich der Browser ihn. Im Heimnetz empfohlen.')}</span></span></label>
         ${lockNote('server.token')}
@@ -974,6 +1102,10 @@
           <label class="field"><span>${t('Sprache für neue Geräte')}</span><select id="ulang" ${dis('ui.language')}>
             ${[['auto', t('wie der Browser')], ['de', 'Deutsch'], ['en', 'English']].map(([v, l]) => `<option value="${v}" ${(C.ui.language || 'auto') === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
         </div>
+        <details class="more" ${getKey('ui.map_tiles') !== getKey('ui.map_tiles', S.defaults) ? 'open' : ''}><summary>${t('Karte')}</summary>
+          ${textField('ui.map_tiles', t('Kartenkacheln (Adresse mit {z}, {x} und {y})'), getKey('ui.map_tiles', S.defaults), t('Leer: OpenStreetMap. Andere Anbieter brauchen oft einen Schlüssel in der Adresse.'))}
+          ${textField('ui.map_attribution', t('Quellenangabe unter der Karte'), getKey('ui.map_attribution', S.defaults))}
+        </details>
       </section>`;
     const setListen = () => {
       const k = $('input[name=acc]:checked', el)?.value || kind;
@@ -997,6 +1129,7 @@
     $('#ulang', el).onchange = (e) => { C.ui.language = e.target.value; };
     const ac = $('#acopy', el);
     if (ac) ac.onclick = () => navigator.clipboard?.writeText($('#alink', el).value).then(() => toast(t('Link kopiert')));
+    bindFields(el, () => validate());
   }
 
   // --- step 6a: first admin --------------------------------------------------------------
@@ -1160,13 +1293,16 @@
     if (!res.ok) { $('#progText').innerHTML = `<span class="bad">${esc(t(res.error || ''))}</span>`; btn.disabled = false; return; }
     const poll = async () => {
       let p;
-      try { p = await api('/api/setup/progress'); } catch { setTimeout(poll, 1000); return; }
+      // HTTPS on or off: the old address stops answering once the switch is done
+      // (503: still restarting, e.g. copying a cache; the switch comes after that)
+      try { p = await api('/api/setup/progress'); } catch (e) { if (tlsFlip() && e.status !== 503) followTLS('/'); else setTimeout(poll, 1000); return; }
       $('#prog .bar i').style.width = p.total ? `${(p.done / p.total) * 100}%` : p.finished ? '100%' : '30%';
       $('#progText').textContent = `${t(p.phase || '')}${p.total ? ` ${num(p.done)} / ${num(p.total)}` : ''}`;
       if (p.finished) {
         if (p.error) { $('#progText').innerHTML = `<span class="bad">${esc(t(p.error))}</span>`; btn.disabled = false; return; }
+        if (tlsFlip()) { followTLS('/'); return; }
         $('#progText').textContent = t('Fertig – die Galerie öffnet sich …');
-        setTimeout(() => { location.href = p.link || '/'; }, 900);
+        setTimeout(() => { location.href = homeLink(p.link); }, 900);
         return;
       }
       setTimeout(poll, 700);
@@ -1180,7 +1316,8 @@
   async function saveTabs() {
     const btn = $('#next'), hint = $('#hint');
     // the address as configured (S.listen is the socket, e.g. [::]:8088)
-    const stay = tokenMode === 'keep' && C.server.listen === S.config.server.listen;
+    const stay = tokenMode === 'keep' && C.server.listen === S.config.server.listen &&
+      (C.server.tls_cert || '') === (S.config.server.tls_cert || '') && (C.server.tls_key || '') === (S.config.server.tls_key || '');
     const lock = (on) => { saving = on; $('#step').inert = on; $('#steps').inert = on; };
     lock(true);
     btn.disabled = true;
@@ -1193,11 +1330,14 @@
     if (!res.ok) return fail(res.error);
     const poll = async () => {
       let p;
-      try { p = await api('/api/setup/progress'); } catch { setTimeout(poll, 1000); return; }
+      // HTTPS on or off: the old address stops answering once the switch is done
+      // (503: still restarting, e.g. copying a cache; the switch comes after that)
+      try { p = await api('/api/setup/progress'); } catch (e) { if (tlsFlip() && e.status !== 503) followTLS(`/setup${location.hash}`); else setTimeout(poll, 1000); return; }
       hint.textContent = `${t(p.phase || '')}${p.total ? ` ${num(p.done)} / ${num(p.total)}` : ''}`;
       if (!p.finished) { setTimeout(poll, 700); return; }
       if (p.error) return fail(p.error);
-      if (!stay || S.needAdmin) { location.href = p.link || '/'; return; }
+      if (tlsFlip()) { followTLS(`/setup${location.hash}`); return; }
+      if (!stay || S.needAdmin) { location.href = homeLink(p.link); return; }
       // the restarted gallery answers again: load what it uses now
       let fresh = null;
       for (let i = 0; i < 30 && !fresh; i++) {
@@ -1266,6 +1406,7 @@
       $('#title').textContent = t('Einstellungen');
       $('#subtitle').textContent = `Schuhkarton ${S.version} · ${S.os}`;
       $('#back').hidden = false;
+      $('#back').href = homeLink('');
       document.title = `Schuhkarton – ${t('Einstellungen')}`;
       backupStatus = await api('/api/backup').catch(() => null);
       if (S.needAdmin) $('#subtitle').textContent = t('Noch kein Admin-Konto: bitte jetzt anlegen.');

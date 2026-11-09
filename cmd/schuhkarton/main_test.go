@@ -30,3 +30,16 @@ func TestListenSamePortOtherInterface(t *testing.T) {
 	}
 	r.http.Close()
 }
+
+// With a certificate the printed links start with https.
+func TestPageURLsScheme(t *testing.T) {
+	if u := pageURLs("127.0.0.1:8088", "", true); len(u) != 1 || u[0] != "https://127.0.0.1:8088" {
+		t.Errorf("https: %v", u)
+	}
+	if u := pageURLs("127.0.0.1:8088", "", false); len(u) != 1 || u[0] != "http://127.0.0.1:8088" {
+		t.Errorf("http: %v", u)
+	}
+	if u := pageURLs("127.0.0.1:8088", "https://example.org/fotos/", true); len(u) != 1 || u[0] != "https://example.org/fotos" {
+		t.Errorf("public: %v", u)
+	}
+}

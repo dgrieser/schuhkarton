@@ -369,10 +369,10 @@ func runServe(cmd string, args []string) error {
 	if cfg.NeedsSetup() {
 		token := r.setupToken
 		r.sw.Set(server.NewSetup(server.SetupOptions{
-			Install: true, Token: token, Users: users, Config: r.config, Listen: r.addr, WebDir: r.webDir, Apply: r.apply, Progress: r.prog,
+			Install: true, Token: token, Users: users, Config: r.config, Listen: r.addr, WebDir: r.webDir, Apply: r.apply, Save: r.save, Progress: r.prog,
 		}).Handler())
 		fmt.Fprintf(os.Stderr, "\nSchuhkarton ist noch nicht eingerichtet. Diesen Link öffnen, um Ordner, Speicher und Gesichtserkennung festzulegen:\n\n")
-		for _, u := range pageURLs(r.addr(), cfg.Server.PublicURL) {
+		for _, u := range pageURLs(r.addr(), cfg.Server.PublicURL, cfg.Server.TLSCert != "") {
 			fmt.Fprintf(os.Stderr, "  %s/setup?token=%s\n", u, token)
 		}
 		fmt.Fprintf(os.Stderr, "\nDie Einstellungen landen in %s\n\n", cfg.Path())
@@ -381,7 +381,7 @@ func runServe(cmd string, args []string) error {
 	} else {
 		r.printLinks()
 		if *f.open {
-			if u := pageURLs(r.addr(), cfg.Server.PublicURL); len(u) > 0 {
+			if u := pageURLs(r.addr(), cfg.Server.PublicURL, cfg.Server.TLSCert != ""); len(u) > 0 {
 				exec.Command(openCmd(), u[0]).Start()
 			}
 		}
@@ -424,6 +424,65 @@ type runner struct {
 	cancel context.CancelFunc
 	token  string
 	ln     net.Listener
+	tls    [2]string // certificate and key the listener serves with
+
+	connMu sync.Mutex
+	gen    int                  // listener generation, one more per serve
+	conns  map[*trackedConn]int // open connections and the generation that accepted them
+}
+
+// trackedListener notes the connections it accepts, so the ones of an
+// older listener can be closed when HTTPS goes on or off: no one keeps
+// talking the old way over a kept-alive connection.
+type trackedListener struct {
+	net.Listener
+	r   *runner
+	gen int
+}
+
+func (l trackedListener) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	tc := &trackedConn{Conn: c, r: l.r}
+	l.r.connMu.Lock()
+	if l.r.conns == nil {
+		l.r.conns = map[*trackedConn]int{}
+	}
+	l.r.conns[tc] = l.gen
+	l.r.connMu.Unlock()
+	return tc, nil
+}
+
+type trackedConn struct {
+	net.Conn
+	r    *runner
+	once sync.Once
+}
+
+func (c *trackedConn) Close() error {
+	c.once.Do(func() {
+		c.r.connMu.Lock()
+		delete(c.r.conns, c)
+		c.r.connMu.Unlock()
+	})
+	return c.Conn.Close()
+}
+
+// dropOldConns closes the connections accepted by earlier listeners.
+func (r *runner) dropOldConns() {
+	r.connMu.Lock()
+	var old []*trackedConn
+	for c, g := range r.conns {
+		if g < r.gen {
+			old = append(old, c)
+		}
+	}
+	r.connMu.Unlock()
+	for _, c := range old {
+		c.Close()
+	}
 }
 
 // dropPastOnce removes one-time background windows from the settings file
@@ -482,7 +541,7 @@ func (r *runner) addr() string {
 // listen (re)binds the server; the old listener closes once the new one runs.
 func (r *runner) listen(addr string, cfg *config.Config) error {
 	r.mu.Lock()
-	old := r.ln
+	old, prevTLS := r.ln, r.tls
 	r.mu.Unlock()
 	// same port on another interface (127.0.0.1:8088 -> 0.0.0.0:8088): free it first
 	if old != nil && samePort(old.Addr().String(), addr) {
@@ -492,9 +551,11 @@ func (r *runner) listen(addr string, cfg *config.Config) error {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		if r.ln != nil && old == nil {
-			// back to the previous address
+			// back to the previous address, as it was (HTTP or HTTPS)
 			if back, berr := net.Listen("tcp", r.ln.Addr().String()); berr == nil {
-				r.serve(back, cfg)
+				was := cfg.Clone()
+				was.Server.TLSCert, was.Server.TLSKey = prevTLS[0], prevTLS[1]
+				r.serve(back, was)
 			}
 		}
 		return err
@@ -510,8 +571,13 @@ func (r *runner) listen(addr string, cfg *config.Config) error {
 }
 
 func (r *runner) serve(ln net.Listener, cfg *config.Config) {
+	r.connMu.Lock()
+	r.gen++
+	ln = trackedListener{Listener: ln, r: r, gen: r.gen}
+	r.connMu.Unlock()
 	r.mu.Lock()
 	r.ln = ln
+	r.tls = [2]string{cfg.Server.TLSCert, cfg.Server.TLSKey}
 	r.mu.Unlock()
 	go func() {
 		var err error
@@ -558,7 +624,7 @@ func (r *runner) start(cfg *config.Config) error {
 			log.Printf("favorites: %v", err)
 		}
 	}
-	settings := server.NewSetup(server.SetupOptions{Config: r.config, Listen: r.addr, WebDir: r.webDir, Apply: r.apply,
+	settings := server.NewSetup(server.SetupOptions{Config: r.config, Listen: r.addr, WebDir: r.webDir, Apply: r.apply, Save: r.save,
 		AccessLink: r.accessLink, Progress: r.prog, Users: r.users, Token: r.setupToken}).Handler()
 	h := server.New(ctx, server.Options{Lib: lib, Config: cfg, Token: token, WebDir: r.webDir, Setup: settings, Backup: br, Users: r.users})
 	r.mu.Lock()
@@ -579,6 +645,13 @@ func (r *runner) stop() {
 	if lib != nil {
 		lib.Close()
 	}
+}
+
+// save writes the settings file; one writer at a time (dropPastOnce, apply).
+func (r *runner) save(cfg *config.Config) error {
+	r.saveMu.Lock()
+	defer r.saveMu.Unlock()
+	return cfg.Save()
 }
 
 // apply saves new settings and restarts the gallery with them.
@@ -613,9 +686,17 @@ func (r *runner) apply(ctx context.Context, p server.Plan, progress func(server.
 		}
 	}
 	old := r.addr()
-	if cfg.Server.Listen != r.cfgListen() && cfg.Locked("server.listen") == "" {
+	r.mu.Lock()
+	tlsChanged := r.tls != [2]string{cfg.Server.TLSCert, cfg.Server.TLSKey}
+	r.mu.Unlock()
+	// another address, or HTTPS on or off or another certificate: bind again
+	var listenErr error
+	if (cfg.Server.Listen != r.cfgListen() && cfg.Locked("server.listen") == "") || tlsChanged {
 		if err := r.listen(cfg.Server.Listen, cfg); err != nil {
 			log.Printf("neue Adresse %s: %v (bleibe bei %s)", cfg.Server.Listen, err, old)
+			listenErr = err
+		} else if tlsChanged {
+			r.dropOldConns() // kept-alive connections of the old protocol
 		}
 	}
 	progress(server.Progress{Phase: "Galerie starten"})
@@ -628,10 +709,14 @@ func (r *runner) apply(ctx context.Context, p server.Plan, progress func(server.
 	if t := r.token; t != "" {
 		link = "/?t=" + t
 	}
-	if cfg.Server.Listen != "" && r.addr() != old {
-		if u := pageURLs(r.addr(), cfg.Server.PublicURL); len(u) > 0 {
+	if cfg.Server.Listen != "" && (r.addr() != old || tlsChanged) {
+		if u := pageURLs(r.addr(), cfg.Server.PublicURL, cfg.Server.TLSCert != ""); len(u) > 0 {
 			link = u[0] + link
 		}
+	}
+	if listenErr != nil {
+		// saved, but the page must not go to an address that does not answer
+		return link, fmt.Errorf("Gespeichert, aber %s ließ sich nicht öffnen (%v); Schuhkarton bleibt unter der bisherigen Adresse", cfg.Server.Listen, listenErr)
 	}
 	return link, nil
 }
@@ -650,7 +735,7 @@ func (r *runner) accessLink() string {
 	r.mu.Lock()
 	cfg, token := r.cfg, r.token
 	r.mu.Unlock()
-	u := pageURLs(r.addr(), cfg.Server.PublicURL)
+	u := pageURLs(r.addr(), cfg.Server.PublicURL, cfg.Server.TLSCert != "")
 	if len(u) == 0 {
 		return ""
 	}
@@ -668,13 +753,13 @@ func (r *runner) printLinks() {
 	if token != "" {
 		q = "/?t=" + token
 	}
-	for _, u := range pageURLs(r.addr(), cfg.Server.PublicURL) {
+	for _, u := range pageURLs(r.addr(), cfg.Server.PublicURL, cfg.Server.TLSCert != "") {
 		log.Printf("Schuhkarton: %s%s", u, q)
 	}
 	log.Printf("Einstellungen: %s", cfg.Path())
 	if !r.users.HasAdmin() {
 		log.Printf("Noch kein Admin-Konto. Anlegen unter (oder mit \"schuhkarton user add NAME admin\"):")
-		for _, u := range pageURLs(r.addr(), cfg.Server.PublicURL) {
+		for _, u := range pageURLs(r.addr(), cfg.Server.PublicURL, cfg.Server.TLSCert != "") {
 			log.Printf("  %s/setup?token=%s", u, r.setupToken)
 		}
 	}
@@ -737,9 +822,13 @@ func appToken(cfg *config.Config, addr string) string {
 	return cfg.Server.Token
 }
 
-func pageURLs(addr, public string) []string {
+func pageURLs(addr, public string, https bool) []string {
 	if public != "" {
 		return []string{strings.TrimRight(public, "/")}
+	}
+	scheme := "http://"
+	if https {
+		scheme = "https://"
 	}
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
@@ -747,7 +836,7 @@ func pageURLs(addr, public string) []string {
 	}
 	ip := net.ParseIP(host)
 	if ip != nil && !ip.IsUnspecified() {
-		return []string{"http://" + net.JoinHostPort(host, port)}
+		return []string{scheme + net.JoinHostPort(host, port)}
 	}
 	var out []string
 	addrs, _ := net.InterfaceAddrs()
@@ -756,9 +845,9 @@ func pageURLs(addr, public string) []string {
 		if !ok || ipn.IP.To4() == nil || ipn.IP.IsLoopback() {
 			continue
 		}
-		out = append(out, "http://"+net.JoinHostPort(ipn.IP.String(), port))
+		out = append(out, scheme+net.JoinHostPort(ipn.IP.String(), port))
 	}
-	return append(out, "http://"+net.JoinHostPort("127.0.0.1", port))
+	return append(out, scheme+net.JoinHostPort("127.0.0.1", port))
 }
 
 // handlerSwitch serves whatever is current: the wizard, the gallery or a

@@ -66,6 +66,25 @@ func TestValidate(t *testing.T) {
 	if err := c.Validate(); err != nil || c.RetryFailed() != 24*time.Hour {
 		t.Errorf("ai.retry_failed 24h: %v %v", err, c.RetryFailed())
 	}
+	c.Faces.SamePhotoThreshold = 1.2
+	if c.Validate() == nil {
+		t.Error("a similarity above 1 must fail")
+	}
+	c.Faces.SamePhotoThreshold = 0.75
+	for _, bad := range []func(*Config){
+		func(c *Config) { c.Media.JPEGQuality = 150 },
+		func(c *Config) { c.Media.ThumbSize = 10 },
+		func(c *Config) { c.AI.ImageSize = 99999 },
+		func(c *Config) { c.Server.TLSCert = "/nonexistent/cert.pem" }, // without a key
+		func(c *Config) { c.Server.TLSCert, c.Server.TLSKey = "/nonexistent/c.pem", "/nonexistent/k.pem" },
+		func(c *Config) { c.UI.MapTiles = "tiles.example/{z}/{x}/{y}.png" },
+	} {
+		d := Defaults()
+		bad(d)
+		if d.Validate() == nil {
+			t.Errorf("must fail: %+v %+v %+v %+v", d.Media, d.AI.ImageSize, d.Server, d.UI.MapTiles)
+		}
+	}
 }
 
 func TestAIKey(t *testing.T) {

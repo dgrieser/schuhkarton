@@ -1,6 +1,7 @@
 package server
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
@@ -77,6 +78,8 @@ type SetupOptions struct {
 	// Apply saves the configuration, imports a cache and (re)starts the
 	// gallery. It reports progress through the callback.
 	Apply func(ctx context.Context, p Plan, progress func(Progress)) (link string, err error)
+	// Save writes the configuration file, one writer at a time (nil: Config.Save).
+	Save func(*config.Config) error
 }
 
 // Setup serves /setup and /api/setup/*.
@@ -205,7 +208,9 @@ func (s *Setup) state(w http.ResponseWriter, r *http.Request) {
 	if view.AI.APIKey != "" {
 		view.AI.APIKey = "********"
 	}
-	view.Worker.Token = ""
+	if view.Worker.Token != "" {
+		view.Worker.Token = "********" // saving keeps it (see save)
+	}
 	var known []string
 	for _, f := range c.Library.Folders {
 		known = append(known, f.Name)
@@ -227,6 +232,8 @@ func (s *Setup) state(w http.ResponseWriter, r *http.Request) {
 		"os":         runtime.GOOS + "/" + runtime.GOARCH,
 		"lan":        lanAddrs(),
 		"accessLink": s.accessLink(),
+		"home":       homePath(c.Server.PublicURL, r),
+		"proxied":    forwarded(r), // HTTPS on or off changes the browser's address only without a proxy
 		"needAdmin":  s.needAdmin(),
 		// whether a key is there (never the key), and well-known variables that hold one
 		"aiKey": map[string]any{"set": c.AI.Key() != "", "env": c.AI.APIKeyEnv,
@@ -365,6 +372,9 @@ func (s *Setup) save(w http.ResponseWriter, r *http.Request) {
 	if p.Config.Faces.Token == "********" {
 		next.Faces.Token = cur.Faces.Token
 	}
+	if p.Config.Worker.Token == "********" {
+		next.Worker.Token = cur.Worker.Token
+	}
 	if p.Config.AI.APIKey == "********" && cur.Locked("ai.api_key") == "" {
 		next.AI.APIKey = cur.AI.APIKey
 	}
@@ -408,6 +418,30 @@ func (s *Setup) save(w http.ResponseWriter, r *http.Request) {
 	}
 	s.prog.set(Progress{Running: true, Phase: "Speichern"})
 	p.Config = next
+	// direct HTTPS goes off: the browser would keep its HTTPS-only cookies and
+	// refuse plain ones of the same name, so signing in over HTTP would fail.
+	// The file is written first, so the cookies only go when the switch comes
+	// (a failed save is reported here, while the page can still ask).
+	if r.TLS != nil && cur.Server.TLSCert != "" && next.Server.TLSCert == "" {
+		save := s.o.Save
+		if save == nil {
+			save = (*config.Config).Save
+		}
+		if err := save(next); err != nil {
+			s.prog.set(Progress{})
+			writeJSON(w, r, map[string]any{"ok": false, "error": err.Error()})
+			return
+		}
+		for _, name := range []string{sessionCookie, cookieName} {
+			http.SetCookie(w, &http.Cookie{Name: name, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode})
+		}
+	}
+	// the answer goes out first: applying may close this connection (a
+	// switch between HTTP and HTTPS)
+	writeJSON(w, r, map[string]any{"ok": true})
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
 	go func() {
 		link, err := s.o.Apply(context.Background(), p, func(pr Progress) {
 			pr.Running = true
@@ -419,7 +453,6 @@ func (s *Setup) save(w http.ResponseWriter, r *http.Request) {
 		}
 		s.prog.set(done)
 	}()
-	writeJSON(w, r, map[string]any{"ok": true})
 }
 
 func (s *Setup) progress(w http.ResponseWriter, r *http.Request) {
@@ -461,13 +494,29 @@ func merge(cur, in *config.Config) *config.Config {
 	set("media.video_previews", func() { n.Media.VideoPreviews = in.Media.VideoPreviews })
 	set("media.transcode", func() { n.Media.Transcode = in.Media.Transcode })
 	set("media.slow_decodes", func() { n.Media.SlowDecodes = in.Media.SlowDecodes })
-	set("media.thumb_size", func() { n.Media.ThumbSize = in.Media.ThumbSize })
-	set("media.exiftool", func() { n.Media.ExifTool = in.Media.ExifTool })
-	set("media.ffmpeg", func() { n.Media.FFmpeg = in.Media.FFmpeg })
+	// numbers: 0 means the form did not send one
+	set("media.thumb_size", func() { n.Media.ThumbSize = cmp.Or(in.Media.ThumbSize, n.Media.ThumbSize) })
+	set("media.preview_size", func() { n.Media.PreviewSize = cmp.Or(in.Media.PreviewSize, n.Media.PreviewSize) })
+	set("media.jpeg_quality", func() { n.Media.JPEGQuality = cmp.Or(in.Media.JPEGQuality, n.Media.JPEGQuality) })
+	set("media.video_preview_size", func() { n.Media.VideoPreviewSize = cmp.Or(in.Media.VideoPreviewSize, n.Media.VideoPreviewSize) })
+	set("media.exiftool", func() { n.Media.ExifTool = strings.TrimSpace(in.Media.ExifTool) })
+	set("media.ffmpeg", func() { n.Media.FFmpeg = strings.TrimSpace(in.Media.FFmpeg) })
 	set("faces.mode", func() { n.Faces.Mode = in.Faces.Mode })
 	set("faces.url", func() { n.Faces.URL = strings.TrimSpace(in.Faces.URL) })
 	set("faces.token", func() { n.Faces.Token = strings.TrimSpace(in.Faces.Token) })
-	set("faces.workers", func() { n.Faces.Workers = in.Faces.Workers })
+	set("faces.workers", func() { n.Faces.Workers = cmp.Or(in.Faces.Workers, n.Faces.Workers) })
+	set("faces.python", func() { n.Faces.Python = strings.TrimSpace(in.Faces.Python) })
+	set("faces.models_dir", func() { n.Faces.ModelsDir = config.ExpandHome(strings.TrimSpace(in.Faces.ModelsDir)) })
+	set("worker.listen", func() { n.Worker.Listen = cmp.Or(strings.TrimSpace(in.Worker.Listen), n.Worker.Listen) })
+	set("worker.token", func() { n.Worker.Token = strings.TrimSpace(in.Worker.Token) })
+	set("worker.workers", func() { n.Worker.Workers = cmp.Or(in.Worker.Workers, n.Worker.Workers) })
+	// the thresholds (Feinabstimmung); 0 means the form did not send one
+	set("faces.min_score", func() { n.Faces.MinScore = cmp.Or(in.Faces.MinScore, n.Faces.MinScore) })
+	set("faces.cluster_threshold", func() { n.Faces.ClusterThreshold = cmp.Or(in.Faces.ClusterThreshold, n.Faces.ClusterThreshold) })
+	set("faces.named_threshold", func() { n.Faces.NamedThreshold = cmp.Or(in.Faces.NamedThreshold, n.Faces.NamedThreshold) })
+	set("faces.same_photo_threshold", func() {
+		n.Faces.SamePhotoThreshold = cmp.Or(in.Faces.SamePhotoThreshold, n.Faces.SamePhotoThreshold)
+	})
 	set("dupes.mode", func() {
 		if in.Dupes.Mode != "" {
 			n.Dupes.Mode = in.Dupes.Mode
@@ -488,6 +537,9 @@ func merge(cur, in *config.Config) *config.Config {
 	set("ai.model", func() { n.AI.Model = strings.TrimSpace(in.AI.Model) })
 	set("ai.workers", func() { n.AI.Workers = in.AI.Workers })
 	set("ai.languages", func() { n.AI.Languages = in.AI.Languages })
+	set("ai.image_size", func() { n.AI.ImageSize = cmp.Or(in.AI.ImageSize, n.AI.ImageSize) })
+	set("ai.thinking", func() { n.AI.Thinking = in.AI.Thinking })
+	set("ai.retry_failed", func() { n.AI.RetryFailed = strings.TrimSpace(in.AI.RetryFailed) })
 	set("ai.ocr", func() {
 		if in.AI.OCR != "" {
 			n.AI.OCR = in.AI.OCR
@@ -519,6 +571,10 @@ func merge(cur, in *config.Config) *config.Config {
 	}
 	set("server.listen", func() { n.Server.Listen = strings.TrimSpace(in.Server.Listen) })
 	set("server.public_url", func() { n.Server.PublicURL = strings.TrimRight(strings.TrimSpace(in.Server.PublicURL), "/") })
+	set("server.tls_cert", func() { n.Server.TLSCert = config.ExpandHome(strings.TrimSpace(in.Server.TLSCert)) })
+	set("server.tls_key", func() { n.Server.TLSKey = config.ExpandHome(strings.TrimSpace(in.Server.TLSKey)) })
+	set("ui.map_tiles", func() { n.UI.MapTiles = cmp.Or(strings.TrimSpace(in.UI.MapTiles), config.Defaults().UI.MapTiles) }) // empty: the default map
+	set("ui.map_attribution", func() { n.UI.MapAttribution = strings.TrimSpace(in.UI.MapAttribution) })
 	set("backup.dir", func() { n.Backup.Dir = config.ExpandHome(strings.TrimSpace(in.Backup.Dir)) })
 	set("backup.interval", func() { n.Backup.Interval = in.Backup.Interval })
 	set("backup.originals", func() { n.Backup.Originals = in.Backup.Originals })
