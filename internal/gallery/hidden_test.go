@@ -21,7 +21,7 @@ func TestHideAndShowPerson(t *testing.T) {
 		{id: "i5", taken: 5, faces: []Face{face(c)}},
 	}
 	path := filepath.Join(t.TempDir(), "people.json")
-	s := newPeopleStore(path, 0.48, 0.42)
+	s := newPeopleStore(path, 0.48, 0.42, 0.75)
 	s.labels["i1:0"] = "Anna"
 	s.labels["i2:1"] = "!Anna"     // remembered "not Anna", must survive hide and show
 	s.labels["i5:0"] = labelHidden // hidden before groups were remembered
@@ -50,7 +50,7 @@ func TestHideAndShowPerson(t *testing.T) {
 	if err := s.save(); err != nil {
 		t.Fatal(err)
 	}
-	s = newPeopleStore(path, 0.48, 0.42)
+	s = newPeopleStore(path, 0.48, 0.42, 0.75)
 	if err := s.show(snap, hid); err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestShowHiddenWhilePhotoAway(t *testing.T) {
 	a := normalize([]float32{1, 0, 0, 0})
 	face := Face{Emb: a, Score: 0.9, W: .2, H: .2}
 	snap := []faceSnap{{id: "i1", faces: []Face{face}}, {id: "i2", faces: []Face{face}}, {id: "i3", faces: []Face{face}}}
-	s := newPeopleStore("", 0.48, 0.42)
+	s := newPeopleStore("", 0.48, 0.42, 0.75)
 	s.labels["i1:0"] = "Anna"
 	s.labels["i3:0"] = "Anna"
 	s.cluster(snap)
@@ -106,7 +106,7 @@ func TestShowOldHiddenGroup(t *testing.T) {
 	a := normalize([]float32{1, 0, 0, 0})
 	face := Face{Emb: a, Score: 0.9, W: .2, H: .2}
 	snap := []faceSnap{{id: "i1", faces: []Face{face}}, {id: "i2", faces: []Face{face}}, {id: "i3", faces: []Face{face}}}
-	s := newPeopleStore("", 0.48, 0.42)
+	s := newPeopleStore("", 0.48, 0.42, 0.75)
 	for _, k := range []string{"i1:0", "i2:0", "i3:0"} {
 		s.labels[k] = labelHidden
 	}
@@ -135,7 +135,7 @@ func TestNoFaceLeavesPeopleAndHiddenList(t *testing.T) {
 	for i := range 4 {
 		snap = append(snap, faceSnap{id: "i" + string(rune('1'+i)), taken: int64(i), faces: []Face{face(a), face(b)}})
 	}
-	s := newPeopleStore(filepath.Join(t.TempDir(), "people.json"), 0.48, 0.42)
+	s := newPeopleStore(filepath.Join(t.TempDir(), "people.json"), 0.48, 0.42, 0.75)
 	s.cluster(snap)
 	toy := s.byFace["i1:1"]
 	if toy == "" {

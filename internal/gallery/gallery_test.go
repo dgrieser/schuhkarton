@@ -87,7 +87,7 @@ func TestClusterNamed(t *testing.T) {
 	a := normalize([]float32{1, 0, 0, 0})
 	a2 := normalize([]float32{0.95, 0.1, 0, 0})
 	b := normalize([]float32{0, 1, 0, 0})
-	s := newPeopleStore("", 0.48, 0.42)
+	s := newPeopleStore("", 0.48, 0.42, 0.75)
 	s.labels["i1:0"] = "Anna"
 	snap := []faceSnap{
 		{id: "i1", faces: []Face{{Emb: a, Score: 0.9, W: .2, H: .2}}},
@@ -144,7 +144,7 @@ func TestLocalizeQuery(t *testing.T) {
 
 func TestSearchOrWithinField(t *testing.T) {
 	l := &Library{opt: Options{Roots: []Root{{Name: "B", Path: "/x"}}}, byID: map[string]*Item{}, favs: map[string]map[string]bool{}}
-	l.people = newPeopleStore("", 0.48, 0.42)
+	l.people = newPeopleStore("", 0.48, 0.42, 0.75)
 	mk := func(id, rel string, y int) *Item {
 		it := &Item{ID: id, Rel: rel, Kind: Photo, MetaTaken: time.Date(y, 6, 1, 10, 0, 0, 0, time.UTC).Unix()}
 		l.finishItem(it)
