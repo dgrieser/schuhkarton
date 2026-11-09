@@ -172,7 +172,7 @@ func TestAccessKeyOnlyForAnonymous(t *testing.T) {
 
 func TestSafeNext(t *testing.T) {
 	for in, want := range map[string]string{"/#/fotos": "/#/fotos", "//evil.example": "/", "https://evil": "/", "/login?x": "/", "/\\evil": "/"} {
-		if got := safeNext(in); got != want {
+		if got := safeNext(in, "/"); got != want {
 			t.Errorf("safeNext(%q) = %q, want %q", in, got, want)
 		}
 	}
@@ -213,5 +213,57 @@ func TestSetupClaimsRegisteredAccount(t *testing.T) {
 	<-applied
 	if u, _ := users.Get("Eva"); !u.IsAdmin() {
 		t.Fatalf("Eva is not admin: %+v", u)
+	}
+}
+
+// Behind a reverse proxy under a path of the public address, the start page
+// is that path; reached directly, it is "/".
+func TestHomePath(t *testing.T) {
+	req := func(host string, hdr ...string) *http.Request {
+		r := httptest.NewRequest("GET", "/", nil)
+		r.Host = host
+		for i := 0; i+1 < len(hdr); i += 2 {
+			r.Header.Set(hdr[i], hdr[i+1])
+		}
+		return r
+	}
+	const pub = "https://home.example.org/schuhkarton"
+	for _, c := range []struct {
+		pub  string
+		r    *http.Request
+		want string
+	}{
+		{"", req("pi:8088"), "/"},
+		{pub, req("192.168.1.5:8088"), "/"},
+		{pub, req("home.example.org"), "/schuhkarton/"},
+		{pub, req("127.0.0.1:8088", "X-Forwarded-For", "203.0.113.9"), "/schuhkarton/"},
+		{pub, req("127.0.0.1:8088", "X-Forwarded-Host", "home.example.org"), "/schuhkarton/"},
+		{"https://fotos.example.org", req("fotos.example.org"), "/"},
+	} {
+		if got := homePath(c.pub, c.r); got != c.want {
+			t.Errorf("homePath(%q, %s) = %q, want %q", c.pub, c.r.Host, got, c.want)
+		}
+	}
+	if got := safeNext("", "/schuhkarton/"); got != "/schuhkarton/" {
+		t.Errorf("no next: %q", got)
+	}
+}
+
+// Not signed in behind the proxy: the login page leads back to the gallery
+// under its path, and so does /api/me's home for the login page.
+func TestLoginNextBehindProxy(t *testing.T) {
+	f := newFixture(t, "", false)
+	f.cfg.Server.PublicURL = "https://home.example.org/schuhkarton"
+	w := f.do("GET", "/", "", "", "X-Forwarded-For", "203.0.113.9")
+	if loc := w.Header().Get("Location"); w.Code != http.StatusFound || loc != "/login?next=%2Fschuhkarton%2F" {
+		t.Errorf("proxied: %d %q", w.Code, loc)
+	}
+	if loc := f.do("GET", "/", "", "").Header().Get("Location"); loc != "/login?next=%2F" {
+		t.Errorf("direct: %q", loc)
+	}
+	var me struct{ Home string }
+	json.Unmarshal(f.do("GET", "/api/me", "", "", "X-Forwarded-For", "203.0.113.9").Body.Bytes(), &me)
+	if me.Home != "/schuhkarton/" {
+		t.Errorf("me.home %q", me.Home)
 	}
 }

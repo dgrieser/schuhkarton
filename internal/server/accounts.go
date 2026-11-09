@@ -112,7 +112,8 @@ func (s *Server) gate(next http.Handler) http.Handler {
 			http.Error(w, "Bitte anmelden", http.StatusUnauthorized)
 			return
 		}
-		http.Redirect(w, r, "/login?next="+url.QueryEscape(r.URL.RequestURI()), http.StatusFound)
+		// back to this page afterwards, as the browser sees it (behind a proxy under its path)
+		http.Redirect(w, r, "/login?next="+url.QueryEscape(s.home(r)+strings.TrimPrefix(r.URL.RequestURI(), "/")), http.StatusFound)
 	})
 }
 
@@ -175,7 +176,7 @@ func (s *Server) accountRoutes(mux *http.ServeMux) {
 
 func (s *Server) loginPage(w http.ResponseWriter, r *http.Request) {
 	if identityOf(r).user != nil {
-		http.Redirect(w, r, safeNext(r.URL.Query().Get("next")), http.StatusFound)
+		http.Redirect(w, r, safeNext(r.URL.Query().Get("next"), s.home(r)), http.StatusFound)
 		return
 	}
 	b, err := fs.ReadFile(s.files, "login.html")
@@ -189,19 +190,63 @@ func (s *Server) loginPage(w http.ResponseWriter, r *http.Request) {
 	w.Write(b)
 }
 
-// safeNext keeps redirects on this site.
-func safeNext(n string) string {
+// safeNext keeps redirects on this site; anything else goes to home.
+func safeNext(n, home string) string {
 	if !strings.HasPrefix(n, "/") || strings.HasPrefix(n, "//") || strings.HasPrefix(n, "/\\") || strings.HasPrefix(n, "/login") {
-		return "/"
+		return home
 	}
 	return n
 }
+
+// homePath is the path of the gallery's start page as the browser sees it.
+// Behind a reverse proxy that serves the gallery under a path of the public
+// address (public_url https://example.org/fotos), that path ("/fotos/");
+// reached directly (in the home network) or without such a path, "/". A
+// request came through the proxy when it was for the public host or carries
+// the proxy's forwarding headers.
+func homePath(publicURL string, r *http.Request) string {
+	u, err := url.Parse(publicURL)
+	if publicURL == "" || err != nil || u.Host == "" || !viaProxy(publicURL, r) {
+		return "/"
+	}
+	return strings.TrimRight(u.Path, "/") + "/"
+}
+
+// viaProxy tells whether a request came by the public address: through a
+// reverse proxy, or for the public host.
+func viaProxy(publicURL string, r *http.Request) bool {
+	if forwarded(r) {
+		return true
+	}
+	u, err := url.Parse(publicURL)
+	if publicURL == "" || err != nil || u.Host == "" {
+		return false
+	}
+	host := r.Header.Get("X-Forwarded-Host")
+	if host == "" {
+		host = r.Host
+	}
+	return strings.EqualFold(host, u.Host)
+}
+
+// forwarded tells whether a reverse proxy passed the request on (its
+// forwarding headers); a direct request for the public host is not.
+func forwarded(r *http.Request) bool {
+	for _, h := range []string{"X-Forwarded-For", "Forwarded", "X-Forwarded-Host", "X-Forwarded-Proto"} {
+		if r.Header.Get(h) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Server) home(r *http.Request) string { return homePath(s.cfg.Server.PublicURL, r) }
 
 func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 	id := identityOf(r)
 	res := map[string]any{
 		"role": role(r), "anonymous": s.cfg.Access.Anonymous, "register": s.cfg.Access.Register,
-		"keyOK": id.keyOK, "title": s.cfg.UI.Title,
+		"keyOK": id.keyOK, "title": s.cfg.UI.Title, "home": s.home(r),
 	}
 	if id.user != nil {
 		res["name"] = id.user.Name

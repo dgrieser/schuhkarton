@@ -23,6 +23,7 @@ func TestSetupAIKey(t *testing.T) {
 	cfg.SetPath(filepath.Join(dir, "config.yaml"))
 	cfg.Library.Folders = []config.Folder{{Name: "B", Path: t.TempDir()}}
 	cfg.AI.Mode, cfg.AI.APIKey = "on", "very-secret-key"
+	cfg.Worker.Token = "worker-secret"
 	var saved *config.Config
 	applied := make(chan bool, 4)
 	h := NewSetup(SetupOptions{Install: true, Token: "tok", Users: users, Config: func() *config.Config { return cfg },
@@ -68,6 +69,10 @@ func TestSetupAIKey(t *testing.T) {
 	}
 	if c := save("********"); c.AI.APIKey != "very-secret-key" {
 		t.Fatalf("masked value must keep the key: %q", c.AI.APIKey)
+	}
+	// the worker's token is masked too and survives saving other settings
+	if state.Config.Worker.Token != "********" || saved.Worker.Token != "worker-secret" {
+		t.Fatalf("worker token: state %q saved %q", state.Config.Worker.Token, saved.Worker.Token)
 	}
 	if c := save("$MITTWALD_LLM_API_KEY"); c.AI.APIKey != "" || c.AI.APIKeyEnv != "MITTWALD_LLM_API_KEY" {
 		t.Fatalf("variable: key %q env %q", c.AI.APIKey, c.AI.APIKeyEnv)

@@ -6,10 +6,13 @@
   const t = window.skT || ((s) => s);
   window.skTranslate?.();
 
-  const next = (() => {
-    const n = new URLSearchParams(location.search).get('next') || '/';
-    return n.startsWith('/') && !n.startsWith('//') && !n.startsWith('/login') ? n : '/';
+  // where to go afterwards: the page asked for, else the start page (the
+  // server tells it: behind a reverse proxy it can be under a path)
+  const asked = (() => {
+    const n = new URLSearchParams(location.search).get('next') || '';
+    return n.startsWith('/') && !n.startsWith('//') && !n.startsWith('/login') ? n : '';
   })();
+  let next = asked || '/';
   let tab = 'login', me = {};
 
   const post = async (path, body) => {
@@ -60,6 +63,7 @@
 
   (async () => {
     me = await fetch('/api/me').then((r) => r.json()).catch(() => ({}));
+    if (!asked && me.home) next = me.home;
     if (me.title) { $('#title').textContent = me.title; document.title = `${me.title} – ${t('Anmelden')}`; }
     if (me.role && me.role !== 'anon') { location.href = next; return; }
     const alt = $('#alt');

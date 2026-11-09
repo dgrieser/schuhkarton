@@ -35,7 +35,9 @@ or another one.
   face from a group. A person is in a picture once: of two faces in one photo
   that look like the same person the more alike one gets that person, the
   other the next best one, unless both are very alike (a collage,
-  `faces.same_photo_threshold`). Faces named by hand always keep their name. A face that was not found can be framed by hand: with the
+  `faces.same_photo_threshold`). Faces named by hand always keep their name.
+  The thresholds are under *Einstellungen → Gesichter → Feinabstimmung*. A
+  face that was not found can be framed by hand: with the
   face boxes shown, a long press (right click) on the photo opens a menu with
   *Gesicht hinzufügen*; the frame can be moved and resized (− and +, the mouse
   wheel or the keys) before it gets a name.
@@ -567,7 +569,9 @@ differ. To gather an existing installation, copy `config.yaml` and
 `users.json` into the folder, the cache into `cache/`, and remove `cache.dir`
 from `config.yaml` (or set it to `cache`).
 
-Every key can also
+The settings page (*Einstellungen*) edits every key; the filing rules have
+their own page (*Ablage*). Sizes and quality of the previews apply to
+previews made afterwards; existing ones keep theirs. Every key can also
 be set as an environment variable (`faces.url` → `SCHUHKARTON_FACES_URL`;
 folders as `Name=/path,/other/path`) or with a flag (`schuhkarton -h`).
 Settings fixed by the environment or a flag show as locked on the settings
@@ -578,7 +582,9 @@ page. `schuhkarton config` prints the effective configuration, and
 server:
   listen: 127.0.0.1:8088      # 0.0.0.0:8088 for the home network
   token: auto                 # viewers without an account: auto (key needed only on a network address), off, or the key itself
-  public_url: ""              # e.g. https://fotos.example.org behind a reverse proxy
+  public_url: ""              # e.g. https://fotos.example.org behind a reverse proxy; with a path
+                              # (https://example.org/fotos), pages reached through the proxy lead
+                              # back to that path (start page, after signing in)
   tls_cert: ""                # with tls_key: serve HTTPS directly
   tls_key: ""
 access:

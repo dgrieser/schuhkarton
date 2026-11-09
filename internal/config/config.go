@@ -6,6 +6,7 @@ package config
 
 import (
 	"bytes"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -715,6 +716,40 @@ func (c *Config) Validate() error {
 		}
 	default:
 		errs = append(errs, fmt.Sprintf("faces.mode %q: off, remote oder local", c.Faces.Mode))
+	}
+	for _, r := range []struct {
+		key      string
+		v        int
+		min, max int
+	}{
+		{"media.thumb_size", c.Media.ThumbSize, 64, 2000}, {"media.preview_size", c.Media.PreviewSize, 256, 8192},
+		{"media.jpeg_quality", c.Media.JPEGQuality, 1, 100}, {"media.video_preview_size", c.Media.VideoPreviewSize, 64, 1080},
+		{"ai.image_size", c.AI.ImageSize, 256, 4096}, {"dupes.similar_minutes", c.Dupes.SimilarMinutes, 1, 1440},
+	} {
+		if r.v != 0 && (r.v < r.min || r.v > r.max) { // 0: the default
+			errs = append(errs, fmt.Sprintf("%s %d: zwischen %d und %d", r.key, r.v, r.min, r.max))
+		}
+	}
+	if (c.Server.TLSCert == "") != (c.Server.TLSKey == "") {
+		errs = append(errs, "server.tls_cert und server.tls_key gehören zusammen")
+	} else if c.Server.TLSCert != "" {
+		if _, err := tls.LoadX509KeyPair(c.Server.TLSCert, c.Server.TLSKey); err != nil {
+			errs = append(errs, fmt.Sprintf("HTTPS-Zertifikat: %v", err))
+		}
+	}
+	if t := c.UI.MapTiles; t != "" && (!strings.HasPrefix(t, "https://") && !strings.HasPrefix(t, "http://") || !strings.Contains(t, "{z}")) {
+		errs = append(errs, fmt.Sprintf("ui.map_tiles %q: Adresse mit {z}, {x} und {y} erwartet", t))
+	}
+	for _, th := range []struct {
+		key string
+		v   float64
+	}{
+		{"faces.min_score", c.Faces.MinScore}, {"faces.cluster_threshold", c.Faces.ClusterThreshold},
+		{"faces.named_threshold", c.Faces.NamedThreshold}, {"faces.same_photo_threshold", c.Faces.SamePhotoThreshold},
+	} {
+		if th.v > 1 {
+			errs = append(errs, fmt.Sprintf("%s %g: zwischen 0 und 1", th.key, th.v))
+		}
 	}
 	if !pathtpl.Supported(c.Library.Rules.Locale) {
 		errs = append(errs, fmt.Sprintf("library.rules.locale %q: %s", c.Library.Rules.Locale, strings.Join(pathtpl.LocaleCodes, ", ")))
