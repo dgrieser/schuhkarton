@@ -199,3 +199,64 @@ func TestDecodeSlotsReserveAndGiveUp(t *testing.T) {
 	}
 	r()
 }
+
+// A wait for the slow path gives up with its context (a closed window, a
+// viewer that left), instead of queueing behind a decode of minutes.
+func TestSlowSlotGivesUp(t *testing.T) {
+	defer setSlowDecodes(1)
+	setSlowDecodes(1)
+	busy := slowSlot()
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if release, err := waitSlowSlot(ctx); err == nil {
+		release()
+		t.Fatal("got a slot that was taken")
+	}
+	busy()
+	release, err := waitSlowSlot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	release()
+}
+
+// Faces do not take the slow path: a HEIC the native tool cannot read is
+// sent as its large preview, while somebody else holds the slow slot.
+func TestFaceImageSkipsSlowPath(t *testing.T) {
+	compiled, tool := wasmCompiled, heifTool
+	wasmCompiled, heifTool = false, func() string { return "" }
+	defer func() { wasmCompiled, heifTool = compiled, tool; setSlowDecodes(1) }()
+	setSlowDecodes(1)
+	root := t.TempDir()
+	heic := filepath.Join(root, "2020/IMG_0001.HEIC")
+	os.MkdirAll(filepath.Dir(heic), 0o755)
+	os.WriteFile(heic, append([]byte("\x00\x00\x00\x18ftypheic\x00\x00\x00\x00mif1heic"), make([]byte, 64)...), 0o644)
+	l, err := Open(Options{Roots: []Root{{Name: "B", Path: root}}, CacheDir: t.TempDir(), Workers: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(l.Close)
+	if err := l.Scan(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	it := l.Items()[0]
+	p := l.CachePath(it, VarLarge)
+	os.MkdirAll(filepath.Dir(p), 0o755)
+	saveJPEG(t, p, picture(3, 320, 240, 0), 90)
+	busy := slowSlot()
+	defer busy()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	start := time.Now()
+	b, name, err := l.faceImage(ctx, it)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := time.Since(start); d > 2*time.Second {
+		t.Errorf("waited %s for the slow path", d)
+	}
+	want, _ := os.ReadFile(p)
+	if name != "face.jpg" || string(b) != string(want) {
+		t.Errorf("not the preview: %s, %d bytes", name, len(b))
+	}
+}

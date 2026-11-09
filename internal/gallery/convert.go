@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 )
 
 // The expensive picture work (decoding a photo, HEIC and RAW previews
@@ -33,6 +34,9 @@ type ConvertRequest struct {
 	Slow     bool            `json:"slow,omitempty"`   // the slow HEIC/AVIF path is allowed
 	Nice     int             `json:"nice,omitempty"`   // lower CPU priority (background work)
 	Outputs  []ConvertOutput `json:"outputs"`
+	// NoSlow (for the parent only): a photo that needs the slow path is
+	// not decoded; convert returns errNeedSlow
+	NoSlow bool `json:"-"`
 }
 
 // ConvertOutput is one JPEG made from the photo. Long fits it into Long x
@@ -161,7 +165,14 @@ func (l *Library) convert(ctx context.Context, req ConvertRequest, background bo
 	}
 	res, err := run(req)
 	if err == nil && res.NeedSlow {
-		defer slowSlot()()
+		if req.NoSlow {
+			return res, errNeedSlow
+		}
+		release, serr := waitSlowSlot(ctx)
+		if serr != nil {
+			return ConvertResult{}, serr
+		}
+		defer release()
 		req.Slow = true
 		res, err = l.runConvert(ctx, req)
 	}
@@ -173,9 +184,25 @@ func (l *Library) convert(ctx context.Context, req ConvertRequest, background bo
 
 var convertMu sync.Mutex // ConvertCommand is set once at start; tests change it
 
+// How long one photo may take in the child before it is stopped (a
+// decoder that hangs, or a photo far too slow to wait for). Measured on a
+// Raspberry Pi with the 32-bit OS, at nice 10 next to other work, reading
+// from a network share: a 16 MP JPEG takes about 12 s, a 12 MP HEIC through
+// heif-convert about 6 s, a 24 MP HEIC that only the slow path reads
+// (interpreted WebAssembly) about 31 minutes. The limits leave room for
+// larger photos and a busy machine.
+var (
+	convertTimeout     = 5 * time.Minute
+	slowConvertTimeout = 60 * time.Minute
+)
+
 func (l *Library) runConvert(ctx context.Context, req ConvertRequest) (ConvertResult, error) {
 	convertMu.Lock()
 	cmdline := ConvertCommand
+	limit := convertTimeout
+	if req.Slow {
+		limit = slowConvertTimeout
+	}
 	convertMu.Unlock()
 	if len(cmdline) == 0 {
 		return convertNow(req), nil
@@ -184,13 +211,19 @@ func (l *Library) runConvert(ctx context.Context, req ConvertRequest) (ConvertRe
 	if err != nil {
 		return ConvertResult{}, err
 	}
-	cmd := exec.CommandContext(ctx, cmdline[0], cmdline[1:]...)
+	cctx, cancel := context.WithTimeout(ctx, limit)
+	defer cancel()
+	cmd := exec.CommandContext(cctx, cmdline[0], cmdline[1:]...)
+	cmd.WaitDelay = 5 * time.Second // a heif tool it started may keep the output open
 	cmd.Stdin = bytes.NewReader(body)
 	var out, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &stderr
 	if err := cmd.Run(); err != nil {
 		if ctx.Err() != nil {
 			return ConvertResult{}, ctx.Err()
+		}
+		if cctx.Err() != nil { // not a context error: the callers try other decoders then
+			return ConvertResult{}, fmt.Errorf("convert: no result after %s, stopped", limit)
 		}
 		// killed (out of memory) or crashed: tell what it said last
 		return ConvertResult{}, fmt.Errorf("convert: %v %s", err, lastLine(stderr.String()))
@@ -205,6 +238,12 @@ func (l *Library) runConvert(ctx context.Context, req ConvertRequest) (ConvertRe
 // originalJPEG returns a photo as a JPEG at most n pixels on the long edge
 // (0: full size), turned like in the viewer, made by the child.
 func (l *Library) originalJPEG(ctx context.Context, it *Item, n, quality int, background bool) ([]byte, error) {
+	return l.originalJPEGWith(ctx, it, n, quality, background, true)
+}
+
+// originalJPEGWith is originalJPEG; without slow it returns errNeedSlow for
+// a photo only the slow path reads.
+func (l *Library) originalJPEGWith(ctx context.Context, it *Item, n, quality int, background, slow bool) ([]byte, error) {
 	if err := l.unreadable(it); err != nil { // the share hangs on it
 		return nil, err
 	}
@@ -215,7 +254,8 @@ func (l *Library) originalJPEG(ctx context.Context, it *Item, n, quality int, ba
 	tmp.Close()
 	defer os.Remove(tmp.Name())
 	out := ConvertOutput{Path: tmp.Name(), Long: n, Quality: quality}
-	_, err = l.convert(ctx, ConvertRequest{Src: l.Path(it), Raw: rawExt[it.Ext()], Orient: l.displayOrient(it), Outputs: []ConvertOutput{out}}, background)
+	req := ConvertRequest{Src: l.Path(it), Raw: rawExt[it.Ext()], Orient: l.displayOrient(it), Outputs: []ConvertOutput{out}, NoSlow: !slow}
+	_, err = l.convert(ctx, req, background)
 	if err != nil {
 		return nil, err
 	}

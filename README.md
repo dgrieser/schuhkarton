@@ -94,7 +94,11 @@ Without exiftool, dates come from file and folder names. HEIC and AVIF photos
 are decoded by the binary itself; no extra tool is needed. On 32-bit ARM (a
 Raspberry Pi with the 32-bit OS) that decoder is very slow (minutes per
 photo); install `libheif-examples` there and `heif-dec`/`heif-convert` is used
-instead.
+instead. An older libheif cannot read some newer iPhone photos ("Metadata not
+correctly assigned to image"); those still take the slow decoder, about half
+an hour for a 24 MP photo on a Raspberry Pi. That happens once, for the
+thumbnail and the large preview; faces use that preview instead of decoding
+the photo again. A decode is stopped after 60 minutes (others after 5).
 
 ## First start
 

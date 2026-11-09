@@ -277,14 +277,20 @@ func (l *Library) faceImage(ctx context.Context, it *Item) ([]byte, string, erro
 	}
 	src := l.Path(it)
 	if !rawExt[it.Ext()] {
-		if b, err := l.originalJPEG(ctx, it, 1600, 90, true); err == nil {
+		// not on the slow path (a HEIC the native tool cannot read takes
+		// minutes on 32-bit ARM, each time): the large preview below then,
+		// made once and shared with the viewer
+		if b, err := l.originalJPEGWith(ctx, it, 1600, 90, true, false); err == nil {
 			return b, "face.jpg", nil
 		}
 	}
-	// large preview from the cache (RAW, odd formats)
+	// large preview from the cache (RAW, odd formats, the slow HEICs)
 	if p, err := l.ensureBG(ctx, it, VarLarge); err == nil {
 		b, err := os.ReadFile(p)
 		return b, "face.jpg", err
+	}
+	if ctx.Err() != nil {
+		return nil, "", ctx.Err()
 	}
 	b, err := os.ReadFile(src)
 	return b, filepath.Base(src), err

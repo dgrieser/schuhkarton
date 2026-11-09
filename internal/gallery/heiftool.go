@@ -50,14 +50,28 @@ func setSlowDecodes(n int) {
 
 // slowSlot waits for a slot on the slow path; call the result to give it back.
 func slowSlot() func() {
+	release, _ := waitSlowSlot(context.Background())
+	return release
+}
+
+// waitSlowSlot is slowSlot that gives up (nil, the error) when the wait
+// ends, like decodeSlot: one slow decode takes minutes, so a closed time
+// window or a viewer that left does not queue behind it.
+func waitSlowSlot(ctx context.Context) (func(), error) {
 	p := slowSlots.Load()
 	if p == nil {
 		setSlowDecodes(1)
 		p = slowSlots.Load()
 	}
 	ch := *p
-	ch <- struct{}{}
-	return func() { <-ch }
+	done, stop := waitDone(ctx)
+	defer stop()
+	select {
+	case ch <- struct{}{}:
+		return func() { <-ch }, nil
+	case <-done:
+		return nil, context.Cause(waitCtx(ctx))
+	}
 }
 
 // SlowHEIF tells whether HEIC/AVIF photos decode slowly here (no
