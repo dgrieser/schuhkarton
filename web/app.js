@@ -2354,6 +2354,27 @@
   let unreadArmed = 0;
   const unreadLabel = () => t(Date.now() < unreadArmed ? 'Wirklich? Noch einmal klicken' : 'Erneut versuchen');
   const unreadRelabel = () => { for (const b of $$('[data-unread-retry]')) b.textContent = unreadLabel(); };
+  // the background work panel: folded to one line by default, open or not is kept per device
+  let statusView = null; // what pollStatus found last: { rows, head, frac, bad }
+  let statusOpen = store.get('statusOpen', false); // kept here too: storage may be unavailable
+  function drawStatus() {
+    const v = statusView;
+    if (!v) return;
+    if (!v.head) { $('#status').innerHTML = v.rows.join(''); return; }
+    const open = statusOpen;
+    // drawn anew every few seconds: a focused toggle keeps the focus
+    const focused = document.activeElement?.matches?.('[data-status-toggle]');
+    $('#status').innerHTML = `<button class="status-head" data-status-toggle aria-expanded="${open}" title="${esc(t(open ? 'Einklappen' : 'Ausklappen'))}">
+        <span class="txt">${v.head}</span>${v.bad ? `<span class="bad n" title="${esc(t('Probleme, Details beim Ausklappen'))}">${icon('warn')}</span>` : ''}${icon('down', 'chev')}</button>
+      ${open ? v.rows.join('') : v.frac === null ? '' : `<span class="bar"><i style="width:${v.frac * 100}%"></i></span>`}`;
+    if (focused) $('[data-status-toggle]')?.focus();
+  }
+  $('#status').addEventListener('click', (e) => {
+    if (!e.target.closest('[data-status-toggle]')) return;
+    statusOpen = !statusOpen;
+    store.set('statusOpen', statusOpen);
+    drawStatus();
+  });
   $('#status').addEventListener('click', async (e) => {
     if (!e.target.closest('[data-unread-retry]')) return;
     if (Date.now() >= unreadArmed) {
@@ -2377,6 +2398,7 @@
       const rows = [];
       // files that cannot be read (broken videos …) count as done: from the server (…Fail), or when nothing moved for 90 s
       let missing = 0, noAI = 0, noOCR = 0, first = null; // first: share done of the first running job, for the ring in the narrow sidebar
+      let jobs = 0, fracSum = 0; // running jobs and their shares done, for the folded panel
       // steady: a slow job (descriptions) that is never taken for unreadable files; note: a line below the bar
       // outside the background window nothing moves: no bar counts as stuck
       const waiting = !!s.windowNext;
@@ -2400,6 +2422,8 @@
         else if (!steady && !scanning && now - st.t > 90000) { missing = Math.max(missing, b - a); return; }
         if (!jw) busy = true; // a kind of work waiting for its window: nothing to watch closely
         first ??= a / b;
+        jobs++;
+        fracSum += a / b;
         rows.push(`<div class="row"><span>${label} ${num(a)} / ${num(b)}</span><span class="bar"><i style="width:${(a / b) * 100}%"></i></span></div>`);
         if (note) rows.push(`<div class="row sub">${note}</div>`);
       };
@@ -2434,14 +2458,19 @@
         if (s.import.waiting) rows.push(`<div class="row"><span>${t('Import')}: ${pl(s.import.waiting, '{n} Datei wird noch geschrieben', '{n} Dateien werden noch geschrieben')}</span></div>`);
         if (s.import.error) rows.push(`<div class="row"><span class="bad" title="${esc(t(s.import.error))}">${t('Import')}: ${esc(t(s.import.error))}</span></div>`);
       }
+      let head = jobs ? esc(t('Hintergrundarbeit')) : '';
       if (waiting && rows.length) {
         const when = new Date(s.windowNext * 1000), loc = LANG === 'en' ? 'en-GB' : 'de-DE';
         // the next window may be on another day (weekly windows)
         const at = (when.toDateString() === new Date().toDateString() ? '' : when.toLocaleDateString(loc, { weekday: 'short' }) + ' ') +
           when.toLocaleTimeString(loc, { hour: '2-digit', minute: '2-digit' });
-        rows.unshift(`<div class="row"><span class="faint" title="${esc(t('Zeitfenster für Hintergrundarbeit: {w}', { w: s.window }))}">${t('Hintergrundarbeit ab {t}', { t: at })}</span></div>`);
+        const ab = t('Hintergrundarbeit ab {t}', { t: at });
+        const tip = esc(t('Zeitfenster für Hintergrundarbeit: {w}', { w: s.window }));
+        if (jobs) head = `<span title="${tip}">${esc(ab)}</span>`; // the head says it
+        else rows.unshift(`<div class="row"><span class="faint" title="${tip}">${ab}</span></div>`);
         busy = scanning; // nothing to watch closely until then
       }
+      if (head) head += ` <em class="cnt">${num(jobs)}</em>`;
       const bk = res.backup;
       if (bk?.running) { busy = true; rows.push(`<div class="row"><span>${t('Sicherung')}: ${esc(t(bk.phase || ''))} · ${t('{n} kopiert', { n: num(bk.copied) })}</span></div>`); }
       if (!rows.length) rows.push(`<div class="row"><span>${pl(s.photos, '{n} Foto', '{n} Fotos')} · ${pl(s.videos, '{n} Video', '{n} Videos')}${s.people ? ` · ${pl(s.people, '{n} Person', '{n} Personen')}` : ''}</span>${missing ? `<span class="faint" title="${t('Diese Dateien lassen sich nicht lesen')}">${num(missing)} ${t('ohne Vorschau')}</span>` : ''}${noAI ? `<span class="faint" title="${esc(t('Diese Dateien ließen sich nicht lesen; sie werden später noch einmal versucht.'))}">${num(noAI)} ${t('ohne Beschreibung')}</span>` : ''}${noOCR ? `<span class="faint" title="${esc(t('Diese Dateien ließen sich nicht lesen; sie werden später noch einmal versucht.'))}">${num(noOCR)} ${t('ohne Texterkennung')}</span>` : ''}</div>`);
@@ -2450,11 +2479,15 @@
         const list = s.unreadable.map((f) => f.name + (f.aside ? '' : ` (${t('wird später noch einmal versucht')})`)).join('\n');
         rows.push(`<div class="row"><span class="bad" title="${esc(t('Das Netzlaufwerk hängt beim Lesen dieser Dateien. Sie werden ausgelassen, bis sie sich ändern.') + '\n\n' + list)}">${t('Nicht lesbar')}: ${pl(s.unreadable.length, '{n} Datei', '{n} Dateien')}</span><button class="link" data-unread-retry title="${esc(t('Jeder Versuch kann das Netzlaufwerk für einige Minuten anhalten.'))}">${unreadLabel()}</button></div>`);
       }
-      $('#status').innerHTML = rows.join('');
+      // folded while work runs (one line, a bar for all of it); idle, the summary shows as it is
+      statusView = { rows, head, frac: jobs ? fracSum / jobs : null, bad: rows.filter((r) => r.includes('class="bad"')).length };
+      drawStatus();
       const mini = $('#statusMini');
       mini.hidden = first === null;
       mini.style.setProperty('--p', Math.round((first ?? 0) * 100));
-      mini.title = first === null ? '' : $$('#status .row').map((r) => [...r.children].map((c) => c.textContent).filter(Boolean).join(' · ')).join('\n');
+      const all = document.createElement('div');
+      all.innerHTML = rows.join('');
+      mini.title = first === null ? '' : $$('.row', all).map((r) => [...r.children].map((c) => c.textContent).filter(Boolean).join(' · ')).join('\n');
       if (s.version !== S.version) {
         const age = Date.now() - S.loadedAt;
         if (!S.items.length || age > (busy ? 30000 : 3000)) {
