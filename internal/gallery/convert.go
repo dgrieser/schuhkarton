@@ -30,9 +30,10 @@ type ConvertRequest struct {
 	Src      string          `json:"src"`
 	ExifTool string          `json:"exiftool,omitempty"` // RAW: the embedded JPEG through exiftool
 	Raw      bool            `json:"raw,omitempty"`
-	Orient   int             `json:"orient,omitempty"` // EXIF orientation applied to the outputs
-	Slow     bool            `json:"slow,omitempty"`   // the slow HEIC/AVIF path is allowed
-	Nice     int             `json:"nice,omitempty"`   // lower CPU priority (background work)
+	Orient   int             `json:"orient,omitempty"`   // EXIF orientation applied to the outputs
+	Slow     bool            `json:"slow,omitempty"`     // the slow HEIC/AVIF path is allowed
+	HEIFTool string          `json:"heifTool,omitempty"` // the heif tool (the parent unpacks the bundled one)
+	Nice     int             `json:"nice,omitempty"`     // lower CPU priority (background work)
 	Outputs  []ConvertOutput `json:"outputs"`
 	// NoSlow (for the parent only): a photo that needs the slow path is
 	// not decoded; convert returns errNeedSlow
@@ -85,7 +86,7 @@ func convertNow(req ConvertRequest) ConvertResult {
 			img, _, err = image.Decode(bytes.NewReader(b))
 		}
 	} else {
-		img, err = decodeForConvert(req.Src, req.Slow)
+		img, err = decodeForConvert(req.Src, req.Slow, req.HEIFTool)
 	}
 	if errors.Is(err, errNeedSlow) {
 		return ConvertResult{NeedSlow: true, Err: err.Error()}
@@ -119,29 +120,17 @@ func convertNow(req ConvertRequest) ConvertResult {
 }
 
 // decodeForConvert is decodeImage for the child: no slots (the parent
-// holds them); the slow path only when allowed.
-func decodeForConvert(p string, slow bool) (image.Image, error) {
+// holds them); the slow path only when allowed; tool is the heif tool.
+func decodeForConvert(p string, slow bool, tool string) (image.Image, error) {
 	f, err := os.Open(p)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
-	if !wasmCompiled && isHEIF(f) {
-		if heifTool() != "" {
-			if img, err := decodeHEIFTool(p); err == nil {
-				return img, nil
-			}
-		}
-		if !slow {
-			return nil, errNeedSlow
-		}
+	if isHEIF(f) {
+		return decodeHEIF(f, p, tool, slow)
 	}
 	img, _, err := image.Decode(f)
-	if err != nil && wasmCompiled && FindHEIFTool() != "" && rewind(f) && isHEIF(f) {
-		if img2, err2 := decodeHEIFToolWith(FindHEIFTool(), p); err2 == nil {
-			return img2, nil
-		}
-	}
 	return img, err
 }
 
@@ -154,6 +143,9 @@ func (l *Library) convert(ctx context.Context, req ConvertRequest, background bo
 	}
 	if req.ExifTool == "" {
 		req.ExifTool = l.opt.ExifTool
+	}
+	if req.HEIFTool == "" && !req.Raw {
+		req.HEIFTool = heifTool()
 	}
 	run := func(r ConvertRequest) (ConvertResult, error) {
 		release, err := decodeSlot(ctx, background)

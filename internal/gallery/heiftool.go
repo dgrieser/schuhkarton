@@ -1,11 +1,15 @@
 package gallery
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"image"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,23 +17,127 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/gen2brain/avif"
+	h265heic "github.com/gen2brain/h265/heic"
+	wasmheic "github.com/gen2brain/heic"
 )
 
-// The built-in HEIC/AVIF decoders run libheif compiled to WebAssembly. On
-// amd64 and arm64 wazero compiles it to machine code; elsewhere (32-bit ARM,
-// e.g. a Raspberry Pi with the 32-bit OS) it interprets it, and one photo
-// takes minutes. There a native heif-dec / heif-convert (libheif) is used
-// when it is installed. Like the built-in decoder it applies the rotation
-// stored in the container (see needsOrient).
+// HEIC/HEIF and AVIF photos go through three decoders (decodeHEIF):
+//
+//  1. HEIC in pure Go (gen2brain/h265): seconds, also on a Raspberry Pi
+//     with the 32-bit OS (a 24 MP iPhone photo in about 5 s there).
+//  2. heif-dec (libheif): the static one the Linux release builds carry
+//     (heifdec_*.go, built by deploy/heif-dec), else one installed.
+//  3. libheif and libavif compiled to WebAssembly (gen2brain/heic, /avif).
+//     On amd64 and arm64 wazero compiles them to machine code; elsewhere
+//     (32-bit ARM) it interprets them, and one photo takes half an hour:
+//     there only on the slow path, one at a time (slowSlot).
+//
+// All of them apply the rotation stored in the container (see needsOrient).
 
 var wasmCompiled = runtime.GOARCH == "amd64" || runtime.GOARCH == "arm64"
 
-var heifTool = sync.OnceValue(func() string {
-	if wasmCompiled {
+// heifTool returns the heif-dec to use: the bundled one, else one on the
+// PATH, else "" (decodeHEIF also tries the one on the PATH after the
+// bundled one).
+var heifTool = func() string {
+	if p := bundledHEIFDec(); p != "" {
+		return p
+	}
+	return pathHEIFTool()
+}
+
+var pathHEIFTool = sync.OnceValue(FindHEIFTool)
+
+// bundledHEIFGz is the gzipped static heif-dec of this build (empty: none;
+// see heifdec_*.go). It is unpacked into the cache folder when first needed.
+var bundle struct {
+	sync.Mutex
+	dir  string // the folder to unpack into; empty: the user's cache folder
+	path string // where it was unpacked
+	err  error  // unpacking failed: not tried again
+}
+
+// setToolDir sets where the bundled tools are unpacked (the cache folder).
+func setToolDir(dir string) {
+	bundle.Lock()
+	defer bundle.Unlock()
+	if bundle.path == "" {
+		bundle.dir, bundle.err = dir, nil
+	}
+}
+
+// HasBundledHEIFDec tells whether this build carries its own heif-dec.
+func HasBundledHEIFDec() bool { return len(bundledHEIFGz) > 0 }
+
+// bundledHEIFDec returns the bundled heif-dec, unpacked, or "".
+func bundledHEIFDec() string {
+	if len(bundledHEIFGz) == 0 {
 		return ""
 	}
-	return FindHEIFTool()
-})
+	bundle.Lock()
+	defer bundle.Unlock()
+	if bundle.path != "" || bundle.err != nil {
+		return bundle.path
+	}
+	dir := bundle.dir
+	if dir == "" {
+		d, err := os.UserCacheDir()
+		if err != nil {
+			bundle.err = err
+			return ""
+		}
+		dir = filepath.Join(d, "schuhkarton")
+	}
+	sum := sha256.Sum256(bundledHEIFGz)
+	p := filepath.Join(dir, "tools", fmt.Sprintf("heif-dec-%x", sum[:6]))
+	if _, err := os.Stat(p); err != nil {
+		if err := unpackGzip(p, bundledHEIFGz); err != nil {
+			bundle.err = err
+			log.Printf("heif-dec: not unpacked: %v", err)
+			return ""
+		}
+		// the ones of earlier versions
+		old, _ := filepath.Glob(filepath.Join(dir, "tools", "heif-dec-*"))
+		for _, o := range old {
+			if o != p {
+				os.Remove(o)
+			}
+		}
+	}
+	bundle.path = p
+	return p
+}
+
+// unpackGzip writes gzipped data as an executable to p; another process
+// unpacking the same at the same time does no harm.
+func unpackGzip(p string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		return err
+	}
+	zr, err := gzip.NewReader(bytes.NewReader(data))
+	if err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(p), ".unpack-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := io.Copy(tmp, zr); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(0o755); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), p)
+}
 
 // Decoding a photo holds tens of MB (a 12 MP picture, then its scaled
 // copies), a HEIC in interpreted WebAssembly some hundred MB for minutes.
@@ -167,15 +275,66 @@ func rewind(f io.Seeker) bool {
 
 // isHEIF tells by its content whether f is a HEIC/HEIF or AVIF image (also
 // one with a .jpeg name) and rewinds it.
-func isHEIF(f io.ReadSeeker) bool {
+func isHEIF(f io.ReadSeeker) bool { return heifKind(f) != "" }
+
+// heifKind is ".heic" or ".avif" for such an image, else ""; it rewinds f.
+func heifKind(f io.ReadSeeker) string {
 	head := make([]byte, 64)
 	n, _ := io.ReadFull(f, head)
 	f.Seek(0, io.SeekStart)
-	switch sniffExt(head[:n]) {
+	switch ext := sniffExt(head[:n]); ext {
 	case ".heic", ".avif":
-		return true
+		return ext
 	}
-	return false
+	return ""
+}
+
+// decodeHEIF decodes a HEIC/HEIF or AVIF photo (see the top of this file):
+// HEIC in Go, then with the heif tool, then in WebAssembly; on a machine
+// where that is slow only when slow is allowed, else errNeedSlow.
+func decodeHEIF(f io.ReadSeeker, p, tool string, slow bool) (image.Image, error) {
+	kind := heifKind(f)
+	var errs []error
+	if kind == ".heic" {
+		img, err := h265heic.Decode(f, h265heic.Options{AutoRotate: true})
+		if err == nil {
+			return img, nil
+		}
+		errs = append(errs, fmt.Errorf("heic: %w", err))
+		if !rewind(f) {
+			return nil, errors.Join(errs...)
+		}
+	}
+	// the bundled heif-dec reads only HEVC: an installed one, which may
+	// read AV1 too, goes first for AVIF, else after it
+	tools := []string{tool, pathHEIFTool()}
+	if kind == ".avif" {
+		tools[0], tools[1] = tools[1], tools[0]
+	}
+	for i, t := range tools {
+		if t == "" || (i == 1 && t == tools[0]) {
+			continue
+		}
+		img, err := decodeHEIFToolWith(t, p)
+		if err == nil {
+			return img, nil
+		}
+		errs = append(errs, err)
+	}
+	if !wasmCompiled && !slow {
+		return nil, errNeedSlow
+	}
+	var img image.Image
+	var err error
+	if kind == ".avif" {
+		img, err = avif.Decode(f)
+	} else {
+		img, err = wasmheic.Decode(f)
+	}
+	if err == nil {
+		return img, nil
+	}
+	return nil, errors.Join(append(errs, err)...)
 }
 
 // decodeHEIFTool decodes with the native tool, or says why it could not.

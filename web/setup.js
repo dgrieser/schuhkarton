@@ -446,7 +446,7 @@
           <label class="field"><span>${t('Gleichzeitige Jobs')}</span><input type="number" id="workers" min="1" max="64" value="${C.media.workers}" ${dis('media.workers')}></label>
         </div>
         ${S.slowHEIF ? `<label class="field"><span>${t('HEIC/AVIF gleichzeitig auf dem langsamen Weg')}</span><input type="number" id="slowdec" min="1" max="8" value="${C.media.slow_decodes || 1}" ${dis('media.slow_decodes')}>${lockNote('media.slow_decodes')}
-          <span class="muted small">${t('Auf diesem Prozessor braucht der eingebaute HEIC/AVIF-Decoder Minuten und einige hundert MB pro Foto. Er springt nur ein, wo heif-dec fehlt oder ein Foto nicht lesen kann. Weitere Fotos warten, statt den Speicher zu füllen.')}</span></label>` : ''}
+          <span class="muted small">${t('Auf diesem Prozessor braucht der eingebaute WebAssembly-Decoder für HEIC/AVIF Minuten und einige hundert MB pro Foto. Er springt nur ein, wo weder der Go-Decoder noch heif-dec ein Foto lesen können, bei AVIF ohne heif-dec also immer. Weitere Fotos warten, statt den Speicher zu füllen.')}</span></label>` : ''}
         <details class="more" ${sizesChanged() ? 'open' : ''}><summary>${t('Größe und Qualität der Vorschauen')}</summary>
           <div class="row2">
             ${numField('media.thumb_size', t('Vorschaubilder im Raster (kurze Seite, Pixel)'), 64, 2000, 10, defaultNote('media.thumb_size'))}
