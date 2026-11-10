@@ -22,6 +22,10 @@ EnvironmentFile=-/etc/default/schuhkarton
 ExecStart=/usr/bin/schuhkarton serve
 Restart=on-failure
 RestartSec=5s
+# stopping signals Schuhkarton only: it lets a running metadata write
+# finish and ends its helpers itself (exiftool killed mid-write leaves a
+# temporary file beside the photo); what is left after it exits is killed
+KillMode=mixed
 StateDirectory=schuhkarton
 StateDirectoryMode=0750
 

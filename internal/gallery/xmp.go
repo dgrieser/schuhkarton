@@ -858,6 +858,10 @@ func (l *Library) xmpTool() (*exifTool, error) {
 }
 
 func (l *Library) putXMPTool(et *exifTool) {
+	if et.dead { // the next file gets a new one
+		et.close()
+		return
+	}
 	l.xmpMu.Lock()
 	defer l.xmpMu.Unlock()
 	l.xmpIdle = append(l.xmpIdle, et)
@@ -891,15 +895,68 @@ func (e *exifTool) readOne(path string, tags []string) (map[string]any, error) {
 }
 
 // write applies assignments (escaped for -E) to one file, keeping its time.
-// An exiftool that was stopped mid-write (Schuhkarton restarted) leaves
-// "<file>_exiftool_tmp" behind, and exiftool then refuses the file; such a
-// leftover that nobody writes to any more goes, and the write is tried again.
 func (e *exifTool) write(path string, args []string) error {
-	err := e.writeOnce(path, args)
-	if err != nil && strings.Contains(err.Error(), "Temporary file already exists") && removeStaleTmp(path+"_exiftool_tmp") {
-		err = e.writeOnce(path, args)
+	return writeExif(path, func() error { return e.writeOnce(path, args) })
+}
+
+// errExifToolGone: exiftool ended in the middle of a command (killed, e.g.
+// when Schuhkarton is stopped).
+var errExifToolGone = errors.New("exiftool stopped")
+
+// writeExif runs one exiftool write of the file p (once) and keeps the
+// temporary file exiftool writes beside it, "<p>_exiftool_tmp", from
+// blocking the file: exiftool refuses a file while that exists. When the
+// exiftool of this write dies, its temporary file goes at once. A leftover of
+// an earlier write goes once nobody writes to it any more, and the write is
+// tried again. Writes of one file wait for each other (admin edits and the
+// metadata job), so a temporary file that appears during a write is its own.
+func writeExif(p string, once func() error) error {
+	defer lockExifWrite(p)()
+	tmp := p + "_exiftool_tmp"
+	_, err := os.Stat(tmp)
+	ours := errors.Is(err, fs.ErrNotExist) // a temporary file appearing now is this write's
+	err = once()
+	if err != nil && strings.Contains(err.Error(), "Temporary file already exists") && removeStaleTmp(tmp) {
+		ours = true
+		err = once()
+	}
+	if ours && errors.Is(err, errExifToolGone) {
+		os.Remove(tmp)
 	}
 	return err
+}
+
+// exifWrites: the files being written by exiftool, each with its lock and
+// the number of writes holding or waiting for it.
+var exifWrites = struct {
+	sync.Mutex
+	m map[string]*exifWriteLock
+}{m: map[string]*exifWriteLock{}}
+
+type exifWriteLock struct {
+	sync.Mutex
+	n int
+}
+
+// lockExifWrite waits until no other write of p runs and returns the unlock.
+func lockExifWrite(p string) func() {
+	exifWrites.Lock()
+	l := exifWrites.m[p]
+	if l == nil {
+		l = &exifWriteLock{}
+		exifWrites.m[p] = l
+	}
+	l.n++
+	exifWrites.Unlock()
+	l.Lock()
+	return func() {
+		l.Unlock()
+		exifWrites.Lock()
+		if l.n--; l.n == 0 {
+			delete(exifWrites.m, p)
+		}
+		exifWrites.Unlock()
+	}
 }
 
 // staleTmpAge: a temporary file not written to for this long is a leftover
@@ -950,13 +1007,15 @@ func (e *exifTool) run(args []string) (stdout, stderr string, err error) {
 	b.WriteString("-execute\n")
 	e.errBuf.reset()
 	if _, err := e.in.Write(b.Bytes()); err != nil {
+		e.dead = true // gone before it read the command
 		return "", "", err
 	}
 	var out strings.Builder
 	for {
 		line, err := e.out.ReadString('\n')
 		if err != nil {
-			return out.String(), e.errBuf.take(), err
+			e.dead = true
+			return out.String(), e.errBuf.take(), fmt.Errorf("%w (%v)", errExifToolGone, err)
 		}
 		if strings.HasPrefix(line, "{ready}") {
 			break
