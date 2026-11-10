@@ -425,6 +425,9 @@ body.has-scrubber .view { padding-right: 64px; }
   background: rgba(0, 0, 0, .72); padding: 2px 8px; border-radius: 6px; font-size: 12px; font-weight: 600;
 }
 .v-face.unknown { border-style: dashed; border-color: rgba(255, 255, 255, .6); }
+/* "Im Bild zeigen": the face blinks twice */
+.v-face.flash { z-index: 1; animation: face-flash .7s ease 2; }
+@keyframes face-flash { 50% { border-color: var(--accent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 45%, transparent), 0 0 0 9999px rgba(0, 0, 0, .35); } }
 /* marking a face by hand */
 .viewer.marking .v-top, .viewer.marking .v-strip, .viewer.marking .v-nav, .viewer.marking .v-faces { opacity: 0; pointer-events: none; }
 .v-mark { position: absolute; inset: 0; z-index: 4; cursor: crosshair; touch-action: none; background: rgba(0, 0, 0, .18); }
@@ -461,7 +464,9 @@ body.has-scrubber .view { padding-right: 64px; }
   border-radius: 10px; padding: 10px 12px; max-height: 320px; overflow: auto; color: #d6d8dc;
 }
 .v-info .faces { display: flex; flex-wrap: wrap; gap: 10px; }
-.v-info .faces a { display: grid; justify-items: center; gap: 4px; width: 64px; font-size: 11.5px; text-align: center; color: #c9ccd1; }
+.v-info .faces a { display: grid; justify-items: center; gap: 4px; width: 64px; font-size: 11.5px; text-align: center; color: #c9ccd1;
+  -webkit-touch-callout: none; user-select: none; -webkit-user-select: none; } /* a long press opens the face's menu */
+.v-info .faces img { -webkit-user-drag: none; }
 .v-info .faces img { width: 52px; height: 52px; border-radius: 50%; object-fit: cover; background: #222; }
 .v-info .faces .face-t { display: inline-flex; align-items: center; gap: 3px; margin-top: -2px; padding: 2px 6px; border-radius: 999px; background: rgba(255, 255, 255, 0.1); color: #e6e8eb; font-size: 10.5px; font-variant-numeric: tabular-nums; cursor: pointer; }
 .v-info .faces .face-t:hover { background: rgba(255, 255, 255, 0.2); }
@@ -511,6 +516,24 @@ body.has-scrubber .view { padding-right: 64px; }
 .name-pop.touch .np-list { flex: 0 1 auto; min-height: 88px; max-height: none; }
 .name-pop.adding :is(.np-recent, .np-search, .np-add, .np-acts) { display: none; }
 .name-pop.adding .np-list { max-height: 140px; }
+.name-pop .np-head { display: flex; align-items: center; gap: 10px; }
+.name-pop .np-head img { flex: none; width: 36px; height: 36px; border-radius: 50%; object-fit: cover; background: #33363c; }
+/* narrow screens: a bottom sheet like the details. The picture keeps the room above it, the
+   head is the grip (drag: height, flick down: away), the list fills the rest and scrolls. */
+.pop.name-pop.sheet {
+  position: absolute; left: 0; right: 0; top: auto; bottom: 0; z-index: 10; width: auto;
+  display: flex; flex-direction: column; overflow: hidden;
+  padding: 0 16px calc(12px + env(safe-area-inset-bottom)); border: 0; border-top: 1px solid #222; border-radius: 18px 18px 0 0;
+  box-shadow: 0 -12px 40px rgba(0, 0, 0, .5); animation: sheet .2s var(--ease);
+}
+.name-pop.sheet > * { flex: none; }
+.name-pop.sheet .np-list { flex: 1 1 auto; min-height: 0; max-height: none; }
+.name-pop.sheet.adding .np-list { flex: 0 1 auto; max-height: 140px; }
+.name-pop.sheet .np-head { position: relative; margin: 0 -16px; padding: 24px 16px 4px; touch-action: none; cursor: ns-resize; user-select: none; -webkit-user-select: none; }
+.name-pop.sheet .np-head::before { content: ""; position: absolute; left: 50%; top: 10px; width: 44px; height: 5px; margin-left: -22px; border-radius: 3px; background: #555; transition: background .15s; }
+.name-pop.sheet .np-head:hover::before, .viewer.sheet-drag .name-pop.sheet .np-head::before { background: #888; }
+.viewer:has(> .name-pop.sheet) .v-stage { bottom: var(--nsheet, 50dvh); }
+.viewer:has(> .name-pop.sheet) :is(.v-info, .v-grip) { visibility: hidden; }
 
 /* --- selection bar / toast ------------------------------------------------------------------ */
 .selbar {

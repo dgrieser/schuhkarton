@@ -90,6 +90,38 @@
   const isTouch = matchMedia('(hover: none)').matches;
   // a popup that knows how to place itself moves when the keyboard comes or goes
   window.visualViewport?.addEventListener('resize', () => $('#pop')?.position?.());
+  // the grip of a bottom sheet: dragging sets the height (set), end(height, start height, speed)
+  // follows on release (speed in px per ms, positive = down)
+  const gripDrag = (grip, get, set, end) => {
+    let drag = null;
+    const viewer = () => grip.closest('.viewer');
+    grip.addEventListener('pointerdown', (e) => {
+      if (e.button) return;
+      e.preventDefault();
+      grip.setPointerCapture(e.pointerId);
+      drag = { y: e.clientY, h: get(), ly: e.clientY, lt: e.timeStamp, v: 0 };
+      viewer()?.classList.add('sheet-drag');
+    });
+    grip.addEventListener('pointermove', (e) => {
+      if (!drag) return;
+      const dt = e.timeStamp - drag.lt;
+      if (dt > 0) drag.v = (e.clientY - drag.ly) / dt;
+      drag.ly = e.clientY;
+      drag.lt = e.timeStamp;
+      set(drag.h - (e.clientY - drag.y));
+    });
+    const up = () => {
+      if (!drag) return;
+      const { h, v } = drag;
+      drag = null;
+      viewer()?.classList.remove('sheet-drag');
+      end(get(), h, v);
+    };
+    grip.addEventListener('pointerup', up);
+    grip.addEventListener('pointercancel', up);
+  };
+  // a sheet dragged this low or flicked down closes
+  const sheetGone = (now, h, v) => now < 110 || (v > 1.2 && now < h);
 
   const thumbURL = (it) => `/t/${it.id}/s.jpg?v=${it.v}`;
   const largeURL = (it) => `/t/${it.id}/m.jpg?v=${it.v}`;
@@ -912,9 +944,26 @@
       $('[data-reocr]', p)?.addEventListener('click', () => window.SK?.rerecognize?.([it.id]));
       $('[data-respeech]', p)?.addEventListener('click', () => window.SK?.retranscribe?.([it.id]));
       $('[data-print]', p)?.addEventListener('click', (e) => { e.preventDefault(); printItem(it, d); });
+      // a person: a tap opens the person (no person yet: asks for the name); a long press or
+      // a right click opens the face's menu
       for (const a of $$('[data-face]', p)) {
+        const f = d.faces.find((x) => x.idx === +a.dataset.face);
+        let longT = 0, press = null, held = false;
+        a.onpointerdown = (e) => {
+          held = false;
+          if (e.pointerType === 'mouse') return;
+          press = { x: e.clientX, y: e.clientY };
+          clearTimeout(longT);
+          longT = setTimeout(() => { held = true; press = null; this.faceInfoMenu(a, f, e.clientX, e.clientY, true); }, 450);
+        };
+        a.onpointermove = (e) => { if (press && Math.abs(e.clientX - press.x) + Math.abs(e.clientY - press.y) > 8) { clearTimeout(longT); press = null; } };
+        a.onpointerup = a.onpointercancel = () => { clearTimeout(longT); press = null; };
+        a.oncontextmenu = (e) => {
+          e.preventDefault();
+          if (!press && !held) this.faceInfoMenu(a, f, e.clientX, e.clientY, false); // a mouse; a finger has the timer
+        };
         a.onclick = (e) => {
-          const f = d.faces.find((x) => x.idx === +a.dataset.face);
+          if (held) { e.preventDefault(); held = false; return; } // the finger lifting off after a long press
           if (e.target.closest('[data-seek]')) { e.preventDefault(); this.seekFace(f); return; }
           if (!f.person || e.altKey) { e.preventDefault(); this.namePop(a, f); }
           else this.close(true);
@@ -961,20 +1010,88 @@
       const r = this.media.getBoundingClientRect();
       if (x < r.left || x > r.right || y < r.top || y > r.bottom) return false;
       const at = { x: (x - r.left) / r.width, y: (y - r.top) / r.height };
+      this.ctxMenu(x, y, touch, [['face-plus', t('Gesicht hinzufügen'), () => this.markFace(at)]]);
+      return true;
+    },
+
+    // a small menu at a point, above a finger so it is not covered. entries: [icon, label, action]
+    ctxMenu(x, y, touch, entries) {
       $('#pop')?.remove();
       const menu = document.createElement('div');
       menu.className = 'pop v-ctx';
       menu.id = 'pop';
-      menu.innerHTML = `<button type="button" data-a="face">${icon('face-plus')}<span>${t('Gesicht hinzufügen')}</span></button>`;
+      menu.innerHTML = entries.map(([ic, label], i) => `<button type="button" data-i="${i}">${icon(ic)}<span>${esc(label)}</span></button>`).join('');
       document.body.appendChild(menu);
       menu.style.left = `${clamp(x, 8, innerWidth - menu.offsetWidth - 8)}px`;
       menu.style.top = `${clamp(touch ? y - menu.offsetHeight - 24 : y, 8, innerHeight - menu.offsetHeight - 8)}px`;
       const off = (e) => { if (!menu.contains(e.target)) close(); };
       const close = () => { menu.remove(); removeEventListener('pointerdown', off, true); };
       addEventListener('pointerdown', off, true);
-      menu.onclick = (e) => { if (e.target.closest('[data-a="face"]')) { close(); this.markFace(at); } };
+      menu.onclick = (e) => {
+        const b = e.target.closest('[data-i]');
+        if (!b) return;
+        close();
+        entries[+b.dataset.i][2]();
+      };
       navigator.vibrate?.(12);
-      return true;
+    },
+
+    // the menu of a person in the details (long press, right click)
+    faceInfoMenu(a, f, x, y, touch) {
+      const user = Account.can('user'), video = this.it?.k === 2;
+      this.ctxMenu(x, y, touch, [
+        f.person && ['people', f.name ? t('Fotos von {name}', { name: f.name }) : t('Fotos dieser Person'), () => { this.close(true); location.hash = `#/person/${encodeURIComponent(f.person)}`; }],
+        [video ? 'play' : 'face', video ? t('Im Video zeigen') : t('Im Bild zeigen'), () => this.showFace(f)],
+        user && ['user', f.name ? t('Name ändern …') : t('Benennen …'), () => this.namePop(a, f)],
+        user && ['eye-off', f.person ? t('Nicht diese Person') : t('Ausblenden'), () => this.saveFace(f, '')],
+        user && ['face-x', t('Kein Gesicht'), () => this.saveFace(f, '-')],
+      ].filter(Boolean));
+    },
+
+    // shows a face's box in the picture for a moment (a video: at the second it was found at)
+    showFace(f) {
+      if (this.it?.k === 2) { this.seekFace(f); return; }
+      this.resetZoom();
+      this.showFaces = true;
+      if (this.sheetMode.matches) this.setSheet(Math.min(this.sheetH(), innerHeight * 0.3)); // room for the picture
+      this.drawFaces();
+      const b = $(`.v-face[data-idx="${f.idx}"]`, this.media);
+      if (!b) return;
+      b.classList.remove('flash');
+      void b.offsetWidth; // restarts the animation
+      b.classList.add('flash');
+    },
+
+    // the photo's details again after a change of its faces
+    async refreshItem(it) {
+      await loadPeople();
+      const d = await api(`/api/item/${it.id}`);
+      if (this.it !== it) return;
+      this.detail = d;
+      this.renderInfo();
+      this.drawFaces();
+      scheduleReload();
+    },
+
+    // names a face: '' not this person (no person: hidden), '-' not a face (can be undone).
+    // An added face (face.add) is saved with its box.
+    async saveFace(face, name) {
+      const it = this.it;
+      if (name && name !== '-') store.set('recent-names', [name, ...store.get('recent-names', []).filter((n) => n !== name)].slice(0, 8));
+      if (face.add) {
+        const b = face.box;
+        toast(t('Wird gespeichert …'));
+        const res = await post(`/api/face/${it.id}/add`, { X: b.x, Y: b.y, W: b.w, H: b.h, t: face.t || 0, name }).catch((e) => ({ error: e.message }));
+        if (res.error) { toast(t('Fehler: {e}', { e: String(res.error).replace(/^\d{3} /, '') })); return; }
+        toast(name ? t('Als {name} gespeichert', { name }) : t('Gesicht markiert'));
+        await this.refreshItem(it);
+        return;
+      }
+      const res = await post(`/api/face/${it.id}/${face.idx}`, { name });
+      if (name === '-') {
+        toast(t('Kein Gesicht'), t('Rückgängig'), async () => { await post('/api/faces/labels', { labels: res.undo }); await this.refreshItem(it); });
+      } else toast(name ? t('Als {name} gespeichert', { name }) : t('Entfernt'));
+      await this.refreshItem(it);
     },
 
     // draws a box around a face by hand (a paused video: on its frame). The box can then be
@@ -1064,7 +1181,7 @@
       const ok = () => {
         if (!b) return;
         tools.remove();
-        this.namePop(box, { add: true, box: b, t: time }, done);
+        this.namePop(box, { add: true, box: b, t: time, back: () => adjusting(true) }, done);
       };
       const mark = (this.mark = {
         end: done,
@@ -1151,8 +1268,10 @@
 
     // asks who a face is. A tap on a person saves; a new name is typed only after "Neue
     // Person" (so on a phone the keyboard comes up only then; there is no search there, the
-    // list scrolls instead). face.add: a box marked by hand (face.box, face.t); onClose:
-    // called when the question goes away.
+    // list scrolls instead). On a narrow screen a bottom sheet like the details: its grip sets
+    // the height (the picture stays whole above it), a flick down closes it. face.add: a box
+    // marked by hand (face.box, face.t, face.back: back to adjusting the box); onClose: called
+    // when the question goes away.
     namePop(anchor, face, onClose) {
       if (!Account.need('user')) return;
       $('#pop')?.remove();
@@ -1163,10 +1282,11 @@
       const recent = store.get('recent-names', []).filter((n) => people.has(n)).slice(0, 4);
       const img = (n) => { const c = people.get(n).cover; return c ? `<img src="${faceURL(c.item, c.idx)}" alt="" loading="lazy">` : '<i></i>'; };
       const person = (n) => `<button type="button" data-name="${esc(n)}"${n === face.name ? ' class="cur"' : ''}>${img(n)}<span>${esc(n)}</span>${n === face.name ? icon('check') : ''}</button>`;
+      const sheet = this.sheetMode.matches;
       const pop = document.createElement('div');
-      pop.className = `pop name-pop${isTouch ? ' touch' : ''}`;
+      pop.className = `pop name-pop${isTouch ? ' touch' : ''}${sheet ? ' sheet' : ''}`;
       pop.id = 'pop';
-      pop.innerHTML = `<b>${t('Wer ist das?')}</b>
+      pop.innerHTML = `<div class="np-head"${sheet ? ` title="${t('Ziehen: Höhe ändern')}"` : ''}>${face.add ? '' : `<img src="${faceURL(this.it.id, face.idx)}" alt="">`}<b>${t('Wer ist das?')}</b></div>
         ${recent.length ? `<div class="np-recent">${recent.map((n) => `<button type="button" data-name="${esc(n)}">${img(n)}<span>${esc(n)}</span></button>`).join('')}</div>` : ''}
         ${names.length && !isTouch ? `<input type="search" class="np-search" placeholder="${t('Person suchen')}" autocomplete="off" enterkeyhint="done">` : ''}
         ${names.length ? `<div class="np-list">${names.map(person).join('')}<button type="button" class="np-typed" data-a="typed" hidden>${icon('plus')}<span></span></button></div>` : ''}
@@ -1176,16 +1296,29 @@
         ${face.add ? `<div class="row np-acts"><button type="button" data-a="noname">${t('Ohne Namen speichern')}</button><button type="button" data-a="cancel">${t('Abbrechen')}</button></div>`
           : `<div class="row np-acts"><button type="button" data-a="not">${face.person ? t('Nicht diese Person') : t('Ausblenden')}</button>
             <button type="button" data-a="noface" title="${t('Falsch erkannt: kein Gesicht. Wird nicht mehr gezeigt, andere Gesichter bleiben.')}">${icon('face-x')}<span>${t('Kein Gesicht')}</span></button></div>`}`;
-      document.body.appendChild(pop);
+      (sheet ? this.el : document.body).appendChild(pop);
       const search = $('.np-search', pop), list = $('.np-list', pop), typed = $('.np-typed', pop), recentEl = $('.np-recent', pop);
       const form = $('.np-form', pop), nameIn = $('.np-name', pop);
       const adding = () => pop.classList.contains('adding');
+      // the sheet's height, remembered per device class like the details'
+      const sheetKey = `name-sheet-${devClass()}`;
+      let sheetH = innerHeight * clamp(+store.get(sheetKey, 0.55) || 0.55, 0.2, 0.92);
       // below the face; no room: above it, else beside it; above the keyboard while it is up.
       // On a touch screen as tall as the larger room above or below the face allows, the list
-      // scrolling inside (too little room: the whole screen).
+      // scrolling inside (too little room: the whole screen). The sheet: its height, above the
+      // keyboard; the picture gets the room above it.
       const position = () => {
         if (!pop.isConnected) return;
-        const r = anchor.getBoundingClientRect(), vv = window.visualViewport;
+        const vv = window.visualViewport;
+        if (sheet) {
+          const kb = vv ? Math.max(0, innerHeight - vv.height - vv.offsetTop) : 0;
+          const h = Math.round(clamp(sheetH, 0, innerHeight - kb - 56));
+          pop.style.height = `${h}px`;
+          pop.style.bottom = `${kb}px`;
+          this.el.style.setProperty('--nsheet', `${h + kb}px`);
+          return;
+        }
+        const r = anchor.getBoundingClientRect();
         const top0 = vv ? vv.offsetTop : 0, h = vv ? vv.height : innerHeight, pw = pop.offsetWidth;
         const below = top0 + h - 8 - (r.bottom + 8), above = r.top - 8 - (top0 + 8);
         if (isTouch) {
@@ -1204,6 +1337,14 @@
       };
       pop.position = position;
       position();
+      if (sheet) {
+        gripDrag($('.np-head', pop), () => pop.offsetHeight, (h) => { sheetH = h; position(); }, (now, h, v) => {
+          if (sheetGone(now, h, v)) { dismiss(); return; }
+          sheetH = Math.max(now, 200); // a lower one would hide the list
+          position();
+          store.set(sheetKey, Math.round((sheetH / innerHeight) * 1000) / 1000);
+        });
+      }
       // the people of the list whose name contains q. While a new name is typed: only those,
       // as a hint (none: no list); in the search: also the typed name as a new person.
       const filter = (q) => {
@@ -1241,35 +1382,10 @@
         if (!on && search && !isTouch) search.focus();
       };
       if (search && !isTouch) search.focus();
-      const it = this.it;
-      const refresh = async () => {
-        await loadPeople();
-        const d = await api(`/api/item/${it.id}`);
-        if (this.it !== it) return;
-        this.detail = d;
-        this.renderInfo();
-        this.drawFaces();
-        scheduleReload();
-      };
       const close = () => { pop.remove(); onClose?.(); };
-      const save = async (name) => {
-        close();
-        if (name && name !== '-') store.set('recent-names', [name, ...store.get('recent-names', []).filter((n) => n !== name)].slice(0, 8));
-        if (face.add) {
-          const b = face.box;
-          toast(t('Wird gespeichert …'));
-          const res = await post(`/api/face/${it.id}/add`, { X: b.x, Y: b.y, W: b.w, H: b.h, t: face.t || 0, name }).catch((e) => ({ error: e.message }));
-          if (res.error) { toast(t('Fehler: {e}', { e: String(res.error).replace(/^\d{3} /, '') })); return; }
-          toast(name ? t('Als {name} gespeichert', { name }) : t('Gesicht markiert'));
-          await refresh();
-          return;
-        }
-        const res = await post(`/api/face/${it.id}/${face.idx}`, { name });
-        if (name === '-') {
-          toast(t('Kein Gesicht'), t('Rückgängig'), async () => { await post('/api/faces/labels', { labels: res.undo }); await refresh(); });
-        } else toast(name ? t('Als {name} gespeichert', { name }) : t('Entfernt'));
-        await refresh();
-      };
+      // swiped away: a box marked by hand can still be adjusted
+      const dismiss = () => { if (face.back) { pop.remove(); face.back(); } else close(); };
+      const save = (name) => { close(); this.saveFace(face, name); };
       // the people shown and the new-person entry, for the arrow keys
       const choices = () => $$('[data-name], .np-typed', pop).filter((b) => !b.hidden && !b.closest('[hidden]'));
       if (search) {
@@ -1422,42 +1538,17 @@
     addEventListener('resize', () => { if (V.sheetMode.matches && V.showInfo) V.setSheet(V.sheetH()); });
 
     // sheet grip: drag to any height; a short sheet or a quick flick down closes the details
-    {
-      const grip = $('#vGrip');
-      let drag = null;
-      grip.addEventListener('pointerdown', (e) => {
-        e.preventDefault();
-        grip.setPointerCapture(e.pointerId);
-        drag = { y: e.clientY, h: V.sheetH(), ly: e.clientY, lt: e.timeStamp, v: 0 };
-        V.el.classList.add('sheet-drag');
-      });
-      grip.addEventListener('pointermove', (e) => {
-        if (!drag) return;
-        const dt = e.timeStamp - drag.lt;
-        if (dt > 0) drag.v = (e.clientY - drag.ly) / dt; // px per ms, positive = down
-        drag.ly = e.clientY;
-        drag.lt = e.timeStamp;
-        V.setSheet(drag.h - (e.clientY - drag.y));
-      });
-      const up = () => {
-        if (!drag) return;
-        const { h, v } = drag;
-        drag = null;
-        V.el.classList.remove('sheet-drag');
-        const now = V.sheetH();
-        if (now < 110 || (v > 1.2 && now < h)) {
-          // closed: the next opening starts at the last kept height
-          V.setSheet(h);
-          V.showInfo = false;
-          store.set('info', false);
-          V.renderInfo();
-          return;
-        }
-        store.set(`sheet-${devClass()}`, Math.round((now / innerHeight) * 1000) / 1000);
-      };
-      grip.addEventListener('pointerup', up);
-      grip.addEventListener('pointercancel', up);
-    }
+    gripDrag($('#vGrip'), () => V.sheetH(), (h) => V.setSheet(h), (now, h, v) => {
+      if (sheetGone(now, h, v)) {
+        // closed: the next opening starts at the last kept height
+        V.setSheet(h);
+        V.showInfo = false;
+        store.set('info', false);
+        V.renderInfo();
+        return;
+      }
+      store.set(`sheet-${devClass()}`, Math.round((now / innerHeight) * 1000) / 1000);
+    });
 
     // idle: the mouse shows the controls and they fade after a while; on touch a tap toggles them
     V.el.addEventListener('pointermove', (e) => {
