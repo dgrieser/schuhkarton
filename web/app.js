@@ -88,6 +88,8 @@
   const saveSize = () => store.set(`size-${devClass()}`, S.size);
   const canHevc = (() => { const v = document.createElement('video'); return !!(v.canPlayType('video/mp4; codecs="hvc1.1.6.L93.B0"') || v.canPlayType('video/mp4; codecs="hev1.1.6.L93.B0"')); })();
   const isTouch = matchMedia('(hover: none)').matches;
+  // a popup that knows how to place itself moves when the keyboard comes or goes
+  window.visualViewport?.addEventListener('resize', () => $('#pop')?.position?.());
 
   const thumbURL = (it) => `/t/${it.id}/s.jpg?v=${it.v}`;
   const largeURL = (it) => `/t/${it.id}/m.jpg?v=${it.v}`;
@@ -1004,11 +1006,17 @@
         <button type="button" class="ok" data-k="ok" title="${t('Weiter')} (Enter)">${icon('check')}<span>${t('Weiter')}</span></button>`;
       this.el.classList.add('marking'); // bars out of the way
       let b = null, drag = null;
+      // the bar goes below the picture (no room: above it; a picture that fills the stage: at
+      // the stage's bottom edge), under the middle of the box, so a growing box does not run
+      // into it. It stays where it is while the box is resized: − and + can be tapped again
+      // and again at the same spot.
       const placeTools = () => {
         if (!tools.isConnected) return;
-        const r = box.getBoundingClientRect(), tw = tools.offsetWidth, th = tools.offsetHeight;
-        let top = r.bottom + 10;
-        if (top + th > innerHeight - 8) top = r.top - th - 10; // no room below: above
+        const p = ov.getBoundingClientRect(), s = this.stage.getBoundingClientRect(), tw = tools.offsetWidth, th = tools.offsetHeight;
+        const lo = Math.max(s.top, 0) + 8, hi = Math.min(s.bottom, innerHeight) - th - 8;
+        let top = p.bottom + 10;
+        if (top > hi) top = p.top - th - 10 >= lo ? p.top - th - 10 : hi;
+        const r = box.isConnected ? box.getBoundingClientRect() : p;
         tools.style.left = `${clamp(r.left + r.width / 2 - tw / 2, 8, innerWidth - tw - 8)}px`;
         tools.style.top = `${clamp(top, 8, innerHeight - th - 8)}px`;
       };
@@ -1030,12 +1038,13 @@
         document.body.appendChild(tools);
         placeTools();
       };
-      const place = (nb) => {
+      // keepTools: the bar stays (resizing)
+      const place = (nb, keepTools = false) => {
         const w = clamp(nb.w, 0, 1), h = clamp(nb.h, 0, 1);
         b = { x: clamp(nb.x, 0, 1 - w), y: clamp(nb.y, 0, 1 - h), w, h };
         if (!box.isConnected) ov.appendChild(box);
         Object.assign(box.style, { left: `${b.x * 100}%`, top: `${b.y * 100}%`, width: `${w * 100}%`, height: `${h * 100}%` });
-        placeTools();
+        if (!keepTools) placeTools();
       };
       // a square box around a point: given size (fractions), or a fifth of the picture's shorter side
       const around = (p, size) => {
@@ -1050,7 +1059,7 @@
         f = Math.min(f, 1 / b.w, 1 / b.h);
         if (f < 1 && Math.min(b.w * r.width, b.h * r.height) * f < 16) return;
         const w = b.w * f, h = b.h * f;
-        place({ x: b.x - (w - b.w) / 2, y: b.y - (h - b.h) / 2, w, h });
+        place({ x: b.x - (w - b.w) / 2, y: b.y - (h - b.h) / 2, w, h }, true);
       };
       const ok = () => {
         if (!b) return;
@@ -1140,25 +1149,98 @@
       adjusting(!!at);
     },
 
+    // asks who a face is. A tap on a person saves; a new name is typed only after "Neue
+    // Person" (so on a phone the keyboard comes up only then; there is no search there, the
+    // list scrolls instead). face.add: a box marked by hand (face.box, face.t); onClose:
+    // called when the question goes away.
     namePop(anchor, face, onClose) {
       if (!Account.need('user')) return;
       $('#pop')?.remove();
-      const r = anchor.getBoundingClientRect();
+      // one entry per name; the group with the most photos gives the picture
+      const people = new Map();
+      for (const p of S.people) if (p.name && !(people.get(p.name)?.count >= p.count)) people.set(p.name, p);
+      const names = [...people.keys()].sort((a, b) => a.localeCompare(b));
+      const recent = store.get('recent-names', []).filter((n) => people.has(n)).slice(0, 4);
+      const img = (n) => { const c = people.get(n).cover; return c ? `<img src="${faceURL(c.item, c.idx)}" alt="" loading="lazy">` : '<i></i>'; };
+      const person = (n) => `<button type="button" data-name="${esc(n)}"${n === face.name ? ' class="cur"' : ''}>${img(n)}<span>${esc(n)}</span>${n === face.name ? icon('check') : ''}</button>`;
       const pop = document.createElement('div');
-      pop.className = 'pop';
+      pop.className = `pop name-pop${isTouch ? ' touch' : ''}`;
       pop.id = 'pop';
-      const names = [...new Set(S.people.filter((p) => p.name).map((p) => p.name))].sort();
       pop.innerHTML = `<b>${t('Wer ist das?')}</b>
-        <input list="pnames" value="${esc(face.name || '')}" placeholder="${t('Name eingeben')}">
-        <datalist id="pnames">${names.map((n) => `<option value="${esc(n)}">`).join('')}</datalist>
-        ${face.add ? `<div class="row"><button class="primary" data-a="save">${t('Speichern')}</button><button data-a="cancel">${t('Abbrechen')}</button></div>`
-          : `<div class="row"><button class="primary" data-a="save">${t('Speichern')}</button><button data-a="not">${face.person ? t('Nicht diese Person') : t('Ausblenden')}</button></div>
-        <button class="ghost" data-a="noface" title="${t('Falsch erkannt: kein Gesicht. Wird nicht mehr gezeigt, andere Gesichter bleiben.')}">${icon('face-x')}<span>${t('Kein Gesicht')}</span></button>`}`;
+        ${recent.length ? `<div class="np-recent">${recent.map((n) => `<button type="button" data-name="${esc(n)}">${img(n)}<span>${esc(n)}</span></button>`).join('')}</div>` : ''}
+        ${names.length && !isTouch ? `<input type="search" class="np-search" placeholder="${t('Person suchen')}" autocomplete="off" enterkeyhint="done">` : ''}
+        ${names.length ? `<div class="np-list">${names.map(person).join('')}<button type="button" class="np-typed" data-a="typed" hidden>${icon('plus')}<span></span></button></div>` : ''}
+        <button type="button" class="np-add" data-a="new">${icon('plus')}<span>${t('Neue Person …')}</span></button>
+        <form class="np-form" hidden><input class="np-name" placeholder="${t('Name der neuen Person')}" autocomplete="off" enterkeyhint="done">
+          <div class="row"><button class="primary">${t('Speichern')}</button><button type="button" data-a="back">${t('Zurück')}</button></div></form>
+        ${face.add ? `<div class="row np-acts"><button type="button" data-a="noname">${t('Ohne Namen speichern')}</button><button type="button" data-a="cancel">${t('Abbrechen')}</button></div>`
+          : `<div class="row np-acts"><button type="button" data-a="not">${face.person ? t('Nicht diese Person') : t('Ausblenden')}</button>
+            <button type="button" data-a="noface" title="${t('Falsch erkannt: kein Gesicht. Wird nicht mehr gezeigt, andere Gesichter bleiben.')}">${icon('face-x')}<span>${t('Kein Gesicht')}</span></button></div>`}`;
       document.body.appendChild(pop);
-      pop.style.left = `${clamp(r.left, 8, innerWidth - pop.offsetWidth - 8)}px`;
-      pop.style.top = `${clamp(r.bottom + 8, 8, innerHeight - pop.offsetHeight - 8)}px`;
-      const inp = $('input', pop);
-      inp.focus();
+      const search = $('.np-search', pop), list = $('.np-list', pop), typed = $('.np-typed', pop), recentEl = $('.np-recent', pop);
+      const form = $('.np-form', pop), nameIn = $('.np-name', pop);
+      const adding = () => pop.classList.contains('adding');
+      // below the face; no room: above it, else beside it; above the keyboard while it is up.
+      // On a touch screen as tall as the larger room above or below the face allows, the list
+      // scrolling inside (too little room: the whole screen).
+      const position = () => {
+        if (!pop.isConnected) return;
+        const r = anchor.getBoundingClientRect(), vv = window.visualViewport;
+        const top0 = vv ? vv.offsetTop : 0, h = vv ? vv.height : innerHeight, pw = pop.offsetWidth;
+        const below = top0 + h - 8 - (r.bottom + 8), above = r.top - 8 - (top0 + 8);
+        if (isTouch) {
+          const room = Math.max(below, above);
+          pop.style.maxHeight = `${room >= 260 ? room : h - 16}px`;
+        }
+        const ph = pop.offsetHeight;
+        let top = r.bottom + 8, left = r.left + r.width / 2 - pw / 2;
+        if (ph > below) {
+          if (ph <= above) top = r.top - 8 - ph;
+          else if (r.right + 8 + pw <= innerWidth - 8) [left, top] = [r.right + 8, r.top];
+          else if (r.left - 8 - pw >= 8) [left, top] = [r.left - 8 - pw, r.top];
+        }
+        pop.style.left = `${clamp(left, 8, innerWidth - pw - 8)}px`;
+        pop.style.top = `${clamp(top, top0 + 8, top0 + h - ph - 8)}px`;
+      };
+      pop.position = position;
+      position();
+      // the people of the list whose name contains q. While a new name is typed: only those,
+      // as a hint (none: no list); in the search: also the typed name as a new person.
+      const filter = (q) => {
+        const ql = q.toLowerCase();
+        let any = false, exact = false;
+        for (const b of list ? $$('[data-name]', list) : []) {
+          const n = b.dataset.name.toLowerCase();
+          b.hidden = !n.includes(ql);
+          any ||= !b.hidden;
+          exact ||= n === ql;
+        }
+        // the person Enter in the search takes, marked so the choice is never a surprise:
+        // the exact name, else the first match
+        const shown = list ? $$('[data-name]', list).filter((b) => !b.hidden) : [];
+        const hit = q && search && !adding() ? shown.find((b) => b.dataset.name.toLowerCase() === ql) || shown[0] : null;
+        for (const b of shown) b.classList.toggle('hit', b === hit);
+        hit?.scrollIntoView({ block: 'nearest' });
+        if (typed) {
+          typed.hidden = !q || exact || adding();
+          $('span', typed).textContent = t('„{name}“ als neue Person', { name: q });
+        }
+        if (list) list.hidden = adding() && (!q || !any);
+        if (recentEl) recentEl.hidden = !!q;
+        if (adding()) position();
+      };
+      const setAdding = (on) => {
+        pop.classList.toggle('adding', on);
+        form.hidden = !on;
+        if (on) {
+          nameIn.value = search?.value.trim() || '';
+          nameIn.focus();
+        }
+        filter(on ? nameIn.value.trim() : search?.value.trim() || '');
+        position();
+        if (!on && search && !isTouch) search.focus();
+      };
+      if (search && !isTouch) search.focus();
       const it = this.it;
       const refresh = async () => {
         await loadPeople();
@@ -1172,6 +1254,7 @@
       const close = () => { pop.remove(); onClose?.(); };
       const save = async (name) => {
         close();
+        if (name && name !== '-') store.set('recent-names', [name, ...store.get('recent-names', []).filter((n) => n !== name)].slice(0, 8));
         if (face.add) {
           const b = face.box;
           toast(t('Wird gespeichert …'));
@@ -1187,16 +1270,49 @@
         } else toast(name ? t('Als {name} gespeichert', { name }) : t('Entfernt'));
         await refresh();
       };
-      inp.onkeydown = (e) => {
-        if (e.key === 'Enter' && (inp.value.trim() || face.add)) save(inp.value.trim());
-        if (e.key === 'Escape') close();
+      // the people shown and the new-person entry, for the arrow keys
+      const choices = () => $$('[data-name], .np-typed', pop).filter((b) => !b.hidden && !b.closest('[hidden]'));
+      if (search) {
+        search.oninput = () => filter(search.value.trim());
+        search.onkeydown = (e) => {
+          e.stopPropagation();
+          if (e.key === 'Escape') close();
+          if (e.key === 'ArrowDown') { e.preventDefault(); choices().find((b) => b.parentNode === list)?.focus(); }
+          if (e.key === 'Enter') {
+            const q = search.value.trim(), hit = $('[data-name].hit:not([hidden])', list);
+            if (q) save(hit ? hit.dataset.name : q);
+          }
+        };
+      }
+      nameIn.oninput = () => filter(nameIn.value.trim());
+      nameIn.onkeydown = (e) => {
         e.stopPropagation();
+        if (e.key === 'Escape') setAdding(false);
+      };
+      form.onsubmit = (e) => {
+        e.preventDefault();
+        const name = nameIn.value.trim();
+        if (name) save(name);
+        else nameIn.focus();
+      };
+      pop.onkeydown = (e) => {
+        if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+        const bs = choices(), i = bs.indexOf(document.activeElement);
+        if (i < 0) return;
+        e.preventDefault();
+        e.stopPropagation();
+        if (i === 0 && e.key === 'ArrowUp' && search) search.focus();
+        else bs[clamp(i + (e.key === 'ArrowDown' ? 1 : -1), 0, bs.length - 1)].focus();
       };
       pop.onclick = (e) => {
+        const n = e.target.closest('[data-name]')?.dataset.name;
+        if (n) { save(n); return; }
         const a = e.target.closest('[data-a]')?.dataset.a;
-        if (a === 'save' && (inp.value.trim() || face.add)) save(inp.value.trim());
+        if (a === 'new') setAdding(true);
+        if (a === 'back') setAdding(false);
+        if (a === 'typed') save(search.value.trim());
+        if (a === 'noname' || a === 'not') save('');
         if (a === 'cancel') close();
-        if (a === 'not') save('');
         if (a === 'noface') save('-');
       };
     },
