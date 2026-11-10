@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"sort"
@@ -402,7 +403,7 @@ func (l *Library) writeTags(it *Item, args []string) error {
 	}
 	full = append(full, args...)
 	return l.withRealName(it, l.Path(it), func(p string) error {
-		return exifToolWrite(l.opt.ExifTool, append(full, p))
+		return writeExif(p, func() error { return exifToolWrite(l.opt.ExifTool, append(full, p)) })
 	})
 }
 
@@ -411,6 +412,10 @@ func exifToolWrite(bin string, full []string) error {
 	out, err := exifToolCmd(bin, full...).CombinedOutput()
 	if strings.Contains(string(out), "1 image files updated") || strings.Contains(string(out), "1 image files unchanged") {
 		return nil
+	}
+	var ee *exec.ExitError
+	if errors.As(err, &ee) && !ee.Exited() { // killed
+		return fmt.Errorf("%w (%v)", errExifToolGone, err)
 	}
 	msg := firstLine(out)
 	for _, line := range strings.Split(string(out), "\n") {

@@ -5,11 +5,13 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/gob"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -256,6 +258,81 @@ func TestExifToolStaleTmp(t *testing.T) {
 	os.Chtimes(tmp, old, old)
 	if err := tool.write(p, []string{"-XMP-dc:Description=alt"}); err != nil || exists(tmp) {
 		t.Errorf("leftover not removed: %v", err)
+	}
+}
+
+// An exiftool that dies mid-write (Schuhkarton stopped) leaves no temporary
+// file behind that would block the file; one that was there before stays.
+// Neither the dead process is used again.
+func TestExifToolDiesMidWrite(t *testing.T) {
+	dir := t.TempDir()
+	// stands in for exiftool: starts the write of the last file named and dies
+	stayOpen := filepath.Join(dir, "stay-open")
+	os.WriteFile(stayOpen, []byte("#!/bin/sh\nwhile read -r a; do [ \"$a\" = -execute ] && break; f=$a; done\n: >\"${f}_exiftool_tmp\"\nkill -KILL $$\n"), 0o755)
+	once := filepath.Join(dir, "once")
+	os.WriteFile(once, []byte("#!/bin/sh\nfor f; do :; done\n: >\"${f}_exiftool_tmp\"\nkill -TERM $$\n"), 0o755)
+
+	p := filepath.Join(dir, "a.jpg")
+	tmp := p + "_exiftool_tmp"
+	os.WriteFile(p, []byte("jpeg"), 0o644)
+	l := &Library{}
+	for _, earlier := range []bool{false, true} {
+		os.Remove(tmp)
+		if earlier {
+			os.WriteFile(tmp, []byte("someone else's"), 0o644)
+		}
+		et, err := startExifTool(stayOpen, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := et.write(p, []string{"-XMP-dc:Description=x"}); !errors.Is(err, errExifToolGone) || exists(tmp) != earlier {
+			t.Errorf("stay_open, earlier %v: %v, temporary file there: %v", earlier, err, exists(tmp))
+		}
+		l.putXMPTool(et)
+		if len(l.xmpIdle) != 0 {
+			t.Error("the dead exiftool is used again")
+		}
+		err = writeExif(p, func() error { return exifToolWrite(once, []string{"-m", p}) })
+		if !errors.Is(err, errExifToolGone) || exists(tmp) != earlier {
+			t.Errorf("once, earlier %v: %v, temporary file there: %v", earlier, err, exists(tmp))
+		}
+	}
+}
+
+// Writes of one file wait for each other; writes of other files do not.
+func TestExifWritesOfOneFileWait(t *testing.T) {
+	var wg sync.WaitGroup
+	write := func(p string, once func() error) { wg.Go(func() { writeExif(p, once) }) }
+	inside := make(chan struct{})
+	release := make(chan struct{})
+	write("/x/a.jpg", func() error { close(inside); <-release; return nil })
+	<-inside
+	other := make(chan struct{})
+	write("/x/b.jpg", func() error { close(other); return nil })
+	select {
+	case <-other:
+	case <-time.After(2 * time.Second):
+		t.Fatal("a write of another file waited")
+	}
+	same := make(chan struct{})
+	write("/x/a.jpg", func() error { close(same); return nil })
+	select {
+	case <-same:
+		t.Fatal("two writes of one file at once")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-same:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the second write of the file never ran")
+	}
+	wg.Wait()
+	exifWrites.Lock()
+	n := len(exifWrites.m)
+	exifWrites.Unlock()
+	if n != 0 {
+		t.Errorf("%d locks left", n)
 	}
 }
 

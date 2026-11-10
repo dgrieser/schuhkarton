@@ -22,6 +22,7 @@ type exifTool struct {
 	in     io.WriteCloser
 	out    *bufio.Reader
 	errBuf *syncBuffer
+	dead   bool // ended mid-command; set and read by whoever holds the tool
 }
 
 // FindExifTool returns a usable exiftool path or "".
