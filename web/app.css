@@ -482,6 +482,35 @@ body.has-scrubber .view { padding-right: 64px; }
 .pop > button.ghost .i { width: 16px; height: 16px; }
 .pop .row button { flex: 1 1 auto; min-height: 34px; padding: 6px 10px; border-radius: 8px; border: 1px solid #3a3d44; background: #23262b; font-size: 13px; line-height: 1.2; white-space: nowrap; }
 .pop .row button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 650; }
+/* who is this: people to tap; a new name is typed only on request */
+.pop.name-pop { width: min(320px, calc(100vw - 16px)); }
+.name-pop .np-recent { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; }
+.name-pop .np-recent button { flex: none; display: inline-flex; align-items: center; gap: 6px; height: 38px; padding: 0 12px 0 4px; border: 1px solid #3a3d44; border-radius: 999px;
+  background: #23262b; font-size: 13px; font-weight: 600; touch-action: manipulation; }
+.name-pop :is(.np-recent, .np-list) :is(img, i) { flex: none; width: 30px; height: 30px; border-radius: 50%; object-fit: cover; background: #33363c; }
+.name-pop .np-list { display: grid; max-height: min(300px, 42vh); overflow-y: auto; overscroll-behavior: contain; margin: 0 -4px; padding: 0 4px; }
+.name-pop .np-list button { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 4px 8px; border: 0; border-radius: 8px; background: none;
+  font-size: 14px; text-align: left; touch-action: manipulation; }
+.name-pop .np-list :is(img, i) { width: 34px; height: 34px; }
+.name-pop .np-list button:hover, .name-pop .np-list button:focus-visible, .name-pop .np-recent button:focus-visible { background: #2a2d33; outline: 0; }
+.name-pop .np-list button.hit { background: #2a2d33; box-shadow: inset 3px 0 var(--accent); }
+.name-pop .np-list button span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.name-pop .np-list button.cur { color: var(--accent); font-weight: 650; }
+.name-pop .np-list button.np-typed { color: var(--accent); font-weight: 600; }
+.name-pop .np-typed .i { width: 34px; height: 18px; }
+.name-pop .np-add { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 42px; border: 1px dashed #4a4e56; border-radius: 8px; background: none;
+  font-size: 14px; font-weight: 600; touch-action: manipulation; }
+.name-pop .np-add:hover { background: #23262b; }
+.name-pop .np-add .i { width: 18px; height: 18px; }
+.name-pop .np-form { display: grid; gap: 8px; }
+.name-pop .np-acts button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+.name-pop .np-acts .i { width: 16px; height: 16px; }
+/* touch: a column as tall as the room allows (max-height from the script), the list scrolls in it */
+.pop.name-pop.touch { display: flex; flex-direction: column; width: min(420px, calc(100vw - 16px)); }
+.name-pop.touch > * { flex: none; }
+.name-pop.touch .np-list { flex: 0 1 auto; min-height: 88px; max-height: none; }
+.name-pop.adding :is(.np-recent, .np-search, .np-add, .np-acts) { display: none; }
+.name-pop.adding .np-list { max-height: 140px; }
 
 /* --- selection bar / toast ------------------------------------------------------------------ */
 .selbar {
