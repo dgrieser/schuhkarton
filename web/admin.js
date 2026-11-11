@@ -34,6 +34,7 @@
     document.body.appendChild(el);
     const prev = document.activeElement;
     const close = () => { el.remove(); prev?.focus?.(); };
+    SK.sheetGrip?.($('.adm-box', el), { key: 'dlg', onClose: close });
     // keys stay in the dialog (the viewer listens on window)
     el.addEventListener('keydown', (e) => {
       e.stopPropagation();
@@ -64,10 +65,14 @@
     m.className = 'adm-menu';
     m.innerHTML = entries.map((e, i) => `<button type="button" data-i="${i}" class="${e.danger ? 'danger' : ''}">${icon(e.icon)}<span>${esc(e.label)}</span></button>`).join('');
     document.body.appendChild(m);
-    const r = anchor.getBoundingClientRect();
-    const w = m.offsetWidth, h = m.offsetHeight;
-    m.style.left = `${SK.clamp(r.right - w, 8, innerWidth - w - 8)}px`;
-    m.style.top = `${r.bottom + 6 + h > innerHeight - 8 ? Math.max(8, r.top - h - 6) : r.bottom + 6}px`;
+    // a phone: a sheet at the bottom instead of next to the button
+    SK.sheetGrip?.(m, { onClose: () => { m.remove(); removeEventListener('pointerdown', off, true); }, min: 0 });
+    if (!phone()) {
+      const r = anchor.getBoundingClientRect();
+      const w = m.offsetWidth, h = m.offsetHeight;
+      m.style.left = `${SK.clamp(r.right - w, 8, innerWidth - w - 8)}px`;
+      m.style.top = `${r.bottom + 6 + h > innerHeight - 8 ? Math.max(8, r.top - h - 6) : r.bottom + 6}px`;
+    }
     const off = (e) => { if (!m.contains(e.target)) { m.remove(); removeEventListener('pointerdown', off, true); } };
     setTimeout(() => addEventListener('pointerdown', off, true));
     m.onclick = (e) => {
@@ -79,22 +84,8 @@
     };
   }
 
-  let snackT = 0;
-  function snack(msg, action, onAction, ms = 6000) {
-    let el = $('#admSnack');
-    if (!el) {
-      el = document.createElement('div');
-      el.id = 'admSnack';
-      el.className = 'adm-snack';
-      document.body.appendChild(el);
-    }
-    el.innerHTML = `<span>${esc(msg)}</span>${action ? `<button type="button" class="btn ghost">${esc(action)}</button>` : ''}`;
-    el.classList.add('on');
-    clearTimeout(snackT);
-    snackT = setTimeout(() => el.classList.remove('on'), ms);
-    const b = $('button', el);
-    if (b) b.onclick = () => { el.classList.remove('on'); onAction(); };
-  }
+  // a message with an optional button: the app's toast, so every message looks the same
+  const snack = (msg, action, onAction, ms = 6000) => toast(msg, action, onAction, ms);
 
   async function call(path, body) {
     try {
@@ -480,11 +471,12 @@
   // ---------------------------------------------------------------------------
   // viewer buttons
   // ---------------------------------------------------------------------------
+  // one button for all changes of the photo, on every screen: its menu (the keys E, R and Entf
+  // still act directly)
   $('#vInfo')?.insertAdjacentHTML('beforebegin', `
-    <button class="vbtn" id="vEdit" data-need="admin" title="${esc(t('Bearbeiten (E)'))}">${icon('edit')}</button>
-    <button class="vbtn hide-m" id="vRot" data-need="admin" title="${esc(t('Drehen (R, Umschalt+R: links)'))}">${icon('rotate')}</button>
-    <button class="vbtn hide-m" id="vDel" data-need="admin" title="${esc(t('In den Papierkorb (Entf)'))}">${icon('trash')}</button>`);
+    <button class="vbtn" id="vEdit" data-need="admin" title="${esc(t('Bearbeiten'))}" aria-haspopup="menu">${icon('edit')}</button>`);
   const cur = () => (V.it ? [V.it.id] : []);
+  const marked = () => !!(V.detail?.marked ?? SK.S.byId.get(V.it?.id)?.mk);
   const vMenu = (anchor) => menu(anchor, [
     { icon: 'edit', label: t('Datum, Ort, Text …'), run: () => editDialog(cur()) },
     ...(V.it?.k === 1 ? [
@@ -495,12 +487,11 @@
     ...(aiOn() ? [{ icon: 'spark', label: t('Neu beschreiben (KI)'), run: () => redescribe(cur()) }] : []),
     ...(ocrOn() && V.it?.k === 1 ? [{ icon: 'file', label: t('Text neu erkennen'), run: () => rerecognize(cur()) }] : []),
     ...(speechOn() && (V.it?.k === 2 || V.it?.lv) ? [{ icon: 'spark', label: t('Sprache neu erkennen'), run: () => retranscribe(cur()) }] : []),
+    ...($('#vMark') ? [marked() ? { icon: 'unmark', label: t('Nicht mehr vormerken'), run: () => $('#vMark').click() }
+      : { icon: 'mark', label: t('Zum Löschen vormerken'), run: () => $('#vMark').click() }] : []),
     { icon: 'trash', label: t('In den Papierkorb'), danger: true, run: () => remove(cur()) },
   ]);
-  $('#vEdit').onclick = (e) => (phone() ? vMenu(e.currentTarget) : editDialog(cur()));
-  $('#vRot').onclick = () => { if (V.it?.k === 1) rotate(cur(), 90); else toast(t('Videos lassen sich nicht drehen')); };
-  $('#vRot').oncontextmenu = (e) => { e.preventDefault(); rotateMenu(e.currentTarget, cur()); };
-  $('#vDel').onclick = () => remove(cur());
+  $('#vEdit').onclick = (e) => vMenu(e.currentTarget);
 
   // ---------------------------------------------------------------------------
   // selection bar
@@ -530,7 +521,7 @@
   // keys: E edit, R rotate (Shift+R left), Del delete — in the viewer and for a selection
   // ---------------------------------------------------------------------------
   addEventListener('keydown', (e) => {
-    if (!admin() || e.ctrlKey || e.metaKey || e.altKey || e.target.matches('input, textarea, select') || $('.adm-dlg')) return;
+    if (!admin() || e.ctrlKey || e.metaKey || e.altKey || SK.isTyping(e.target) || $('.adm-dlg')) return;
     const ids = V.open_ ? cur() : selected();
     if (!ids.length) return;
     if (e.key === 'e' || e.key === 'E') editDialog(ids);

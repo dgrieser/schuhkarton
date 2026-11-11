@@ -74,6 +74,8 @@ func New(ctx context.Context, o Options) http.Handler {
 	mux.HandleFunc("POST /api/people/hidden/{id}/show", s.requireUser(s.showHidden))
 	mux.HandleFunc("POST /api/face/{id}/{idx}", s.requireUser(s.labelFace))
 	mux.HandleFunc("POST /api/faces/labels", s.requireUser(s.restoreFaceLabels))
+	mux.HandleFunc("POST /api/items/people", s.itemsPeople)
+	mux.HandleFunc("POST /api/items/people/{id}", s.requireUser(s.labelPersonIn))
 	mux.HandleFunc("POST /api/face/{id}/add", s.requireUser(s.addFace))
 	mux.HandleFunc("POST /api/fav", s.requireUser(s.fav))
 	mux.HandleFunc("POST /api/rescan", s.requireAdmin(s.rescan))
@@ -466,6 +468,38 @@ func (s *Server) addFace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, r, map[string]any{"ok": true, "idx": idx})
+}
+
+// itemsPeople lists the people in a selection of items, with the number of
+// their faces and items in it.
+func (s *Server) itemsPeople(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		IDs []string `json:"ids"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, r, map[string]any{"people": s.lib.PeopleIn(req.IDs)})
+}
+
+// labelPersonIn names the faces of one person in a selection of items at once
+// (a name, "" not this person, "-" no face), with the labels before for undo.
+func (s *Server) labelPersonIn(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		IDs  []string `json:"ids"`
+		Name string   `json:"name"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	undo, err := s.lib.LabelPersonIn(req.IDs, r.PathValue("id"), req.Name)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, r, map[string]any{"ok": true, "n": len(undo), "undo": undo})
 }
 
 // restoreFaceLabels sets face labels back (undo of "no face").

@@ -168,7 +168,21 @@ func (l *Library) LabelFace(item string, idx int, name string) (string, error) {
 	k := FaceRef{item, idx}.key()
 	s.mu.Lock()
 	prev := s.labels[k]
-	name = strings.TrimSpace(name)
+	s.setLabel(k, strings.TrimSpace(name))
+	s.mu.Unlock()
+	if err := s.save(); err != nil {
+		return prev, err
+	}
+	l.recluster()
+	l.bump()
+	return prev, nil
+}
+
+// setLabel labels one face (see LabelFace); the caller holds s.mu. "Not
+// this person" remembers the name the face has now, so the next clustering
+// lets it join the next most alike person instead; a face without a named
+// person is hidden.
+func (s *peopleStore) setLabel(k, name string) {
 	switch {
 	case name == labelNoFace:
 		s.labels[k] = labelNoFace
@@ -188,12 +202,95 @@ func (l *Library) LabelFace(item string, idx int, name string) (string, error) {
 	default:
 		s.labels[k] = name
 	}
-	s.mu.Unlock()
-	if err := s.save(); err != nil {
+}
+
+// SelPerson is a person (or unnamed group) with faces in a set of items.
+type SelPerson struct {
+	ID    string  `json:"id"`
+	Name  string  `json:"name"`
+	Faces int     `json:"faces"` // faces of the person in the items
+	Items int     `json:"items"` // items the person is in
+	Cover FaceRef `json:"cover"`
+}
+
+// PeopleIn lists the people with faces in the given items: named ones
+// first, then by the number of items.
+func (l *Library) PeopleIn(ids []string) []SelPerson { return l.people.peopleIn(ids) }
+
+func (s *peopleStore) peopleIn(ids []string) []SelPerson {
+	in := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		in[id] = true
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := []SelPerson{}
+	for _, p := range s.people {
+		sp := SelPerson{ID: p.ID, Name: p.Name, Cover: p.Cover}
+		seen := map[string]bool{}
+		for _, r := range p.refs {
+			if !in[r.Item] {
+				continue
+			}
+			sp.Faces++
+			if !seen[r.Item] {
+				seen[r.Item] = true
+				sp.Items++
+			}
+		}
+		if sp.Faces > 0 {
+			out = append(out, sp)
+		}
+	}
+	sort.SliceStable(out, func(a, b int) bool {
+		if (out[a].Name == "") != (out[b].Name == "") {
+			return out[a].Name != ""
+		}
+		if out[a].Items != out[b].Items {
+			return out[a].Items > out[b].Items
+		}
+		return out[a].Name < out[b].Name
+	})
+	return out
+}
+
+// LabelPersonIn labels the faces of one person in the given items like
+// LabelFace: a name, "" not this person, "-" no face, "~" hidden. It
+// returns the labels the faces had before (for RestoreFaceLabels); their
+// number is the number of faces changed.
+func (l *Library) LabelPersonIn(ids []string, person, name string) (map[string]string, error) {
+	prev, err := l.people.labelPersonIn(ids, person, strings.TrimSpace(name))
+	if err != nil || len(prev) == 0 {
+		return prev, err
+	}
+	if err := l.people.save(); err != nil {
 		return prev, err
 	}
 	l.recluster()
 	l.bump()
+	return prev, nil
+}
+
+func (s *peopleStore) labelPersonIn(ids []string, person, name string) (map[string]string, error) {
+	in := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		in[id] = true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p := s.byID[person]
+	if p == nil {
+		return nil, fmt.Errorf("unknown person %q", person)
+	}
+	prev := map[string]string{}
+	for _, r := range p.refs {
+		if !in[r.Item] {
+			continue
+		}
+		k := r.key()
+		prev[k] = s.labels[k]
+		s.setLabel(k, name)
+	}
 	return prev, nil
 }
 
