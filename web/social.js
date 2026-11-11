@@ -130,13 +130,10 @@
     const res = await api('/api/admin/marks').catch(() => null);
     if (!res) { $('.sub', view).textContent = t('Nicht erreichbar'); return; }
     const list = (res.items || []).filter((m) => S.byId.has(m.id));
-    const pick = new Set();
     const when = (ts) => SK.fmtDay(local(ts));
     view.innerHTML = `<div class="head"><div><h1>${esc(t('Vorgemerkt'))}</h1><div class="sub">${esc(list.length ? SK.pl(list.length, '{n} Element von allen Konten zum Löschen vorgemerkt', '{n} Elemente von allen Konten zum Löschen vorgemerkt') : t('Niemand hat etwas vorgemerkt'))}</div></div>
       <div class="tools adm-ttools"${list.length ? '' : ' hidden'}>
         <button class="btn" data-all>${icon('select')}<span>${esc(t('Alle auswählen'))}</span></button>
-        <button class="btn" data-clear disabled>${icon('unmark')}<span>${esc(t('Vormerkung entfernen'))}</span></button>
-        <button class="btn adm-del" data-del disabled>${icon('trash')}<span>${esc(t('In den Papierkorb'))}</span></button>
       </div></div>${tabs}
       ${list.length ? `<div class="adm-trash mk-all">${list.map((m) => {
         const it = S.byId.get(m.id);
@@ -150,36 +147,33 @@
       }).join('')}</div>` : `<div class="empty">${icon('mark')}<h2>${esc(t('Nichts vorgemerkt'))}</h2><p>${esc(t('Wenn jemand Fotos zum Löschen vormerkt, entscheidest du hier.'))}</p></div>`}`;
     if (!list.length) return;
     const btn = (k) => $(`[data-${k}]`, view);
-    const sync = () => {
-      for (const c of $$('.mk-card', view)) c.classList.toggle('sel', pick.has(c.dataset.id));
-      const n = pick.size;
-      btn('clear').disabled = btn('del').disabled = !n;
-      $('span', btn('clear')).textContent = n ? t('Vormerkung entfernen ({n})', { n: num(n) }) : t('Vormerkung entfernen');
-      $('span', btn('del')).textContent = n ? t('In den Papierkorb ({n})', { n: num(n) }) : t('In den Papierkorb');
-      $('span', btn('all')).textContent = n === list.length ? t('Auswahl aufheben') : t('Alle auswählen');
-    };
+    // the selection bar, with the actions for marks: the check (or any click while picking) picks
+    const pick = S.sel;
     $('.mk-all', view).onclick = (e) => {
       const c = e.target.closest('.mk-card');
       if (!c) return;
       if (e.target.closest('[data-pick]') || pick.size) {
         pick.has(c.dataset.id) ? pick.delete(c.dataset.id) : pick.add(c.dataset.id);
-        sync();
+        S.selecting = true;
+        SK.selectionChanged();
         return;
       }
       const items = list.map((m) => S.byId.get(m.id));
       V.open(items, items.findIndex((it) => it.id === c.dataset.id));
     };
-    btn('all').onclick = () => { if (pick.size === list.length) pick.clear(); else for (const m of list) pick.add(m.id); sync(); };
-    btn('clear').onclick = async () => {
-      const r = await ui.call('/api/admin/marks/clear', { ids: [...pick] });
+    btn('all').onclick = () => {
+      if (pick.size === list.length) SK.endSelection();
+      else { for (const m of list) pick.add(m.id); S.selecting = true; SK.selectionChanged(); }
+    };
+    const clear = async (ids) => {
+      const r = await ui.call('/api/admin/marks/clear', { ids });
       if (!r) return;
       toast(t('{n} Vormerkungen entfernt', { n: num(r.changed) }));
       await SK.loadItems();
       markCount();
       SK.render();
     };
-    btn('del').onclick = async () => {
-      const ids = [...pick];
+    const del = async (ids) => {
       const ok = await ui.confirmDlg(t('{n} Elemente in den Papierkorb legen?', { n: num(ids.length) }),
         t('Im Papierkorb lässt sich alles wiederherstellen, bis er geleert wird.'), t('In den Papierkorb'), true);
       if (!ok) return;
@@ -194,7 +188,16 @@
       markCount();
       SK.render();
     };
-    sync();
+    SK.pageSelection({
+      actions: [
+        { icon: 'unmark', label: t('Vormerkung entfernen'), short: t('Entfernen'), run: clear },
+        { icon: 'trash', label: t('In den Papierkorb'), short: t('Löschen'), danger: true, run: del },
+      ],
+      sync: () => {
+        for (const c of $$('.mk-card', view)) c.classList.toggle('sel', pick.has(c.dataset.id));
+        $('span', btn('all')).textContent = pick.size === list.length ? t('Auswahl aufheben') : t('Alle auswählen');
+      },
+    });
   };
 
   // ---------------------------------------------------------------------------

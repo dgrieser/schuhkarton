@@ -8,7 +8,6 @@
   if (!SK) return;
   const { t, S, $, $$, esc, icon, api, post, toast, num } = SK;
   const admin = () => SK.Account.can('admin');
-  const phone = () => matchMedia('(max-width: 720px)').matches;
 
   // ---------------------------------------------------------------------------
   // icons
@@ -58,31 +57,8 @@
     });
   }
 
-  // menu: a small list of actions next to a button
-  function menu(anchor, entries) {
-    $('.adm-menu')?.remove();
-    const m = document.createElement('div');
-    m.className = 'adm-menu';
-    m.innerHTML = entries.map((e, i) => `<button type="button" data-i="${i}" class="${e.danger ? 'danger' : ''}">${icon(e.icon)}<span>${esc(e.label)}</span></button>`).join('');
-    document.body.appendChild(m);
-    // a phone: a sheet at the bottom instead of next to the button
-    SK.sheetGrip?.(m, { onClose: () => { m.remove(); removeEventListener('pointerdown', off, true); }, min: 0 });
-    if (!phone()) {
-      const r = anchor.getBoundingClientRect();
-      const w = m.offsetWidth, h = m.offsetHeight;
-      m.style.left = `${SK.clamp(r.right - w, 8, innerWidth - w - 8)}px`;
-      m.style.top = `${r.bottom + 6 + h > innerHeight - 8 ? Math.max(8, r.top - h - 6) : r.bottom + 6}px`;
-    }
-    const off = (e) => { if (!m.contains(e.target)) { m.remove(); removeEventListener('pointerdown', off, true); } };
-    setTimeout(() => addEventListener('pointerdown', off, true));
-    m.onclick = (e) => {
-      const b = e.target.closest('[data-i]');
-      if (!b) return;
-      m.remove();
-      removeEventListener('pointerdown', off, true);
-      entries[+b.dataset.i].run();
-    };
-  }
+  // menu: a small list of actions next to a button (app.js)
+  const menu = SK.menu;
 
   // a message with an optional button: the app's toast, so every message looks the same
   const snack = (msg, action, onAction, ms = 6000) => toast(msg, action, onAction, ms);
@@ -521,7 +497,7 @@
   // keys: E edit, R rotate (Shift+R left), Del delete — in the viewer and for a selection
   // ---------------------------------------------------------------------------
   addEventListener('keydown', (e) => {
-    if (!admin() || e.ctrlKey || e.metaKey || e.altKey || SK.isTyping(e.target) || $('.adm-dlg')) return;
+    if (!admin() || e.ctrlKey || e.metaKey || e.altKey || SK.isTyping(e.target) || $('.adm-dlg') || (!V.open_ && SK.pageSelActive())) return; // a trash selection holds no photos
     const ids = V.open_ ? cur() : selected();
     if (!ids.length) return;
     if (e.key === 'e' || e.key === 'E') editDialog(ids);
@@ -563,15 +539,12 @@
     if (!res) { $('.sub', view).textContent = t('Papierkorb nicht erreichbar'); return; }
     const list = res.entries;
     const days = res.days;
-    const pick = new Set();
     const sub = list.length
       ? `${t('{n} Elemente', { n: num(list.length) })} · ${days > 0 ? t('werden nach {d} Tagen endgültig gelöscht', { d: days }) : t('bleiben, bis der Papierkorb geleert wird')}`
       : t('Leer');
     view.innerHTML = `<div class="head"><div><h1>${esc(t('Papierkorb'))}</h1><div class="sub">${esc(sub)}</div></div>
       <div class="tools adm-ttools"${list.length ? '' : ' hidden'}>
         <button class="btn" data-all>${icon('select')}<span>${esc(t('Alle auswählen'))}</span></button>
-        <button class="btn" data-restore disabled>${icon('restore')}<span>${esc(t('Wiederherstellen'))}</span></button>
-        <button class="btn" data-kill disabled>${icon('trash')}<span>${esc(t('Endgültig löschen'))}</span></button>
         <button class="btn ghost" data-empty>${esc(t('Papierkorb leeren'))}</button>
       </div></div>
       ${list.length ? `<div class="adm-trash">${list.map((e) => {
@@ -584,24 +557,20 @@
           <small>${esc(ago(e.deleted))}${e.by ? ` · ${esc(e.by)}` : ''}${left !== null ? ` · ${esc(t('noch {n} Tage', { n: left }))}` : ''}</small></button>`;
       }).join('')}</div>` : `<div class="empty">${icon('trash')}<h2>${esc(t('Der Papierkorb ist leer'))}</h2><p>${esc(t('Gelöschte Fotos und Videos landen hier und lassen sich wiederherstellen.'))}</p></div>`}`;
     const btn = (k) => $(`[data-${k}]`, view);
-    const sync = () => {
-      for (const c of $$('.adm-card', view)) c.classList.toggle('sel', pick.has(c.dataset.id));
-      const n = pick.size;
-      btn('restore').disabled = btn('kill').disabled = !n;
-      $('span', btn('restore')).textContent = n ? t('Wiederherstellen ({n})', { n: num(n) }) : t('Wiederherstellen');
-      $('span', btn('kill')).textContent = n ? t('Endgültig löschen ({n})', { n: num(n) }) : t('Endgültig löschen');
-      $('span', btn('all')).textContent = n === list.length ? t('Auswahl aufheben') : t('Alle auswählen');
-    };
     if (!list.length) return;
+    // the selection bar, with the actions of the trash: a click on an entry picks it
+    const pick = S.sel;
+    const toggle = (id) => { pick.has(id) ? pick.delete(id) : pick.add(id); S.selecting = true; SK.selectionChanged(); };
     $('.adm-trash', view).onclick = (e) => {
       const c = e.target.closest('.adm-card');
-      if (!c) return;
-      pick.has(c.dataset.id) ? pick.delete(c.dataset.id) : pick.add(c.dataset.id);
-      sync();
+      if (c) toggle(c.dataset.id);
     };
-    btn('all').onclick = () => { if (pick.size === list.length) pick.clear(); else for (const e of list) pick.add(e.id); sync(); };
-    btn('restore').onclick = async () => {
-      const r = await call('/api/admin/trash/restore', { ids: [...pick] });
+    btn('all').onclick = () => {
+      if (pick.size === list.length) SK.endSelection();
+      else { for (const e of list) pick.add(e.id); S.selecting = true; SK.selectionChanged(); }
+    };
+    const restore = async (ids) => {
+      const r = await call('/api/admin/trash/restore', { ids });
       if (!r) return;
       report(r, t('{n} wiederhergestellt', { n: num(r.changed) }));
       await SK.loadItems();
@@ -617,8 +586,16 @@
       report(r, t('{n} endgültig gelöscht', { n: num(r.changed) }));
       SK.render();
     };
-    btn('kill').onclick = () => kill([...pick], false);
     btn('empty').onclick = () => kill([], true);
-    sync();
+    SK.pageSelection({
+      actions: [
+        { icon: 'restore', label: t('Wiederherstellen'), run: restore },
+        { icon: 'trash', label: t('Endgültig löschen'), short: t('Löschen'), danger: true, run: (ids) => kill(ids, false) },
+      ],
+      sync: () => {
+        for (const c of $$('.adm-card', view)) c.classList.toggle('sel', pick.has(c.dataset.id));
+        $('span', btn('all')).textContent = pick.size === list.length ? t('Auswahl aufheben') : t('Alle auswählen');
+      },
+    });
   };
 })();

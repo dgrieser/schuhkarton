@@ -149,6 +149,37 @@
     });
     return grip;
   }
+  // menu: a small list of actions next to a button (a phone: a sheet at the bottom). entries:
+  // { icon, label, run, danger }, or { head, sub } for a line on top that is not an action
+  function menu(anchor, entries) {
+    $('.adm-menu')?.remove();
+    const m = document.createElement('div');
+    m.className = 'adm-menu';
+    m.setAttribute('role', 'menu');
+    m.innerHTML = entries.map((e, i) => (e.head !== undefined ? `<div class="mh"><b>${esc(e.head)}</b>${e.sub ? `<small>${esc(e.sub)}</small>` : ''}</div>`
+      : `<button type="button" role="menuitem" data-i="${i}" class="${e.danger ? 'danger' : ''}">${icon(e.icon)}<span>${esc(e.label)}</span></button>`)).join('');
+    document.body.appendChild(m);
+    const off = (e) => { if (!m.contains(e.target)) { m.remove(); removeEventListener('pointerdown', off, true); } };
+    sheetGrip(m, { onClose: () => { m.remove(); removeEventListener('pointerdown', off, true); }, min: 0 });
+    if (!phoneMQ.matches) {
+      const r = anchor.getBoundingClientRect();
+      const w = m.offsetWidth, h = m.offsetHeight;
+      // under the button, right-aligned; a button in the left sidebar: left-aligned
+      const left = r.left < innerWidth / 3 ? r.left : r.right - w;
+      m.style.left = `${clamp(left, 8, innerWidth - w - 8)}px`;
+      m.style.top = `${r.bottom + 6 + h > innerHeight - 8 ? Math.max(8, r.top - h - 6) : r.bottom + 6}px`;
+    }
+    setTimeout(() => addEventListener('pointerdown', off, true));
+    m.onclick = (e) => {
+      const b = e.target.closest('[data-i]');
+      if (!b) return;
+      m.remove();
+      removeEventListener('pointerdown', off, true);
+      entries[+b.dataset.i].run();
+    };
+    m.onkeydown = (e) => { if (e.key === 'Escape') { e.stopPropagation(); m.remove(); removeEventListener('pointerdown', off, true); anchor.focus?.(); } };
+    $('[data-i]', m)?.focus({ preventScroll: true });
+  }
 
   const thumbURL = (it) => `/t/${it.id}/s.jpg?v=${it.v}`;
   const largeURL = (it) => `/t/${it.id}/m.jpg?v=${it.v}`;
@@ -191,6 +222,21 @@
     if (back && S.peopleById.has(back)) location.replace(`#/person/${encodeURIComponent(back)}`);
     return true;
   }
+  // people and places: cards in an order and a size of their own, remembered per page
+  const CARD = { people: { min: 88, max: 240, step: 8, def: 128 }, places: { min: 150, max: 420, step: 10, def: 210 } };
+  function cardTools(kind, sorts) {
+    const c = CARD[kind], sort = store.get(`sort-${kind}`, sorts[0][0]);
+    return `<select class="sel" data-sort title="${t('Sortieren')}">${sorts.map(([k, l]) => `<option value="${k}" ${k === sort ? 'selected' : ''}>${t(l)}</option>`).join('')}</select>
+      <label class="zoom" title="${t('Größe')}">${icon(kind === 'people' ? 'people' : 'photos')}<input type="range" min="${c.min}" max="${c.max}" step="${c.step}" value="${store.get(`csize-${kind}`, c.def)}" data-csize aria-label="${t('Größe')}"></label>`;
+  }
+  // the size goes to the cards in box; a new order draws them again
+  function bindCardTools(head, box, kind, redraw) {
+    const apply = (v) => box.style.setProperty('--cardw', `${v}px`);
+    apply(store.get(`csize-${kind}`, CARD[kind].def));
+    $('[data-csize]', head).oninput = (e) => { apply(+e.target.value); store.set(`csize-${kind}`, +e.target.value); };
+    $('[data-sort]', head).onchange = (e) => { store.set(`sort-${kind}`, e.target.value); redraw(); };
+  }
+
   // a hidden group with its "Wieder zeigen" button
   const hiddenCard = (h) => `<div class="hperson" data-hid="${esc(h.id)}">
     <span class="face"><img src="${faceURL(h.cover.item, h.cover.idx)}" alt="" loading="lazy"></span>
@@ -742,6 +788,23 @@
   // ---------------------------------------------------------------------------
   // selection
   // ---------------------------------------------------------------------------
+  // a page with its own things to select (the trash, everybody's marks) uses the selection bar
+  // too, with its actions instead of the ones for photos: { actions: [{ icon, label, short, danger,
+  // run(ids) }], sync() shows the selection on the page }. It ends with the page.
+  let pageSel = null;
+  function pageSelection(ps) {
+    pageSel = ps;
+    S.sel.clear();
+    S.selecting = false;
+    for (const b of $$('#selbar .pg')) b.remove();
+    if (ps) {
+      $('#selClose').insertAdjacentHTML('beforebegin', ps.actions.map((a, i) => `<button class="btn pg${a.danger ? ' adm-del' : ''}" data-pg="${i}">${icon(a.icon)}<span>${esc(a.label)}</span><span class="s">${esc(a.short || a.label)}</span></button>`).join(''));
+      for (const b of $$('#selbar .pg')) b.onclick = () => { const ids = [...S.sel]; if (ids.length) ps.actions[+b.dataset.pg].run(ids); };
+      cleanup.push(() => { if (pageSel === ps) pageSelection(null); });
+    }
+    $('#selbar').classList.toggle('page', !!ps);
+    selectionChanged();
+  }
   function selectionChanged() {
     const n = S.sel.size;
     $('#selbar').hidden = n === 0 && !S.selecting;
@@ -749,7 +812,8 @@
     document.body.classList.toggle('selecting', S.selecting || n > 0);
     S.gallery?.refreshTiles();
     for (const g of extraGalleries) g.refreshTiles();
-    if (n) SelPeople.load();
+    pageSel?.sync();
+    if (n && !pageSel) SelPeople.load();
     else SelPeople.clear();
   }
   function endSelection() { S.sel.clear(); S.selecting = false; selectionChanged(); }
@@ -2213,8 +2277,9 @@
     for (const r of $$('[data-size]')) if (r.value !== String(S.size)) r.value = S.size;
     for (const b of $$('[data-anim]')) b.classList.toggle('on', S.animate);
     for (const b of $$('[data-vmenu]')) b.innerHTML = icon(S.layout) + icon('down');
-    g.relayout();
-    if (what !== 'animate') Scrub.attach(g);
+    // every gallery of the page (memories have three); a gallery with a scrubber renews it in onLayout
+    g?.relayout();
+    for (const x of extraGalleries) if (x !== g) x.relayout();
   }
   function bindTools(root, g, onKind) {
     for (const b of $$('[data-lay]', root)) b.onclick = () => setView(g, 'layout', b.dataset.lay);
@@ -2351,7 +2416,7 @@
       week.sort((a, b) => b.t - a.t);
       const shuffled = S.items.filter((it) => it.k === 1).sort(() => Math.random() - 0.5).slice(0, 40).sort((a, b) => b.t - a.t);
       view.innerHTML = `<div class="head"><div><h1>${t('Erinnerungen')}</h1><div class="sub">${fmtLong(Date.UTC(today.getFullYear(), today.getMonth(), today.getDate()) / 1000)}</div></div>
-        <div class="tools"><button class="btn" id="shuffle">${icon('shuffle')}<span>${t('Neu mischen')}</span></button></div></div>
+        <div class="tools"><button class="btn" id="shuffle">${icon('shuffle')}<span>${t('Neu mischen')}</span></button>${galleryTools({ group: false })}</div></div>
         ${mem.length ? '' : `<div class="banner">${icon('cal')}<div>${t('Heute vor einem Jahr oder länger gibt es keine Fotos – unten die Woche drumherum und zufällige Momente.')}</div></div>`}
         <div id="memDay"></div><div class="head"><div><h1 style="font-size:20px">${t('Diese Woche in früheren Jahren')}</h1></div></div><div id="memWeek"></div>
         <div class="head"><div><h1 style="font-size:20px">${t('Zufällige Momente')}</h1></div></div><div id="memRand"></div>`;
@@ -2366,6 +2431,7 @@
       mk('#memRand', shuffled, 'none');
       S.gallery = extraGalleries[0] || null;
       extraGalleries.shift();
+      bindTools(view, S.gallery); // layout and size for all three
       $('#shuffle').onclick = () => rerender();
     },
 
@@ -2425,17 +2491,20 @@
         if (!p) m.set(it.p, (p = { name: it.p, items: [] }));
         p.items.push(it);
       }
-      const places = [...m.values()].sort((a, b) => b.items.length - a.items.length);
+      const order = { count: (a, b) => b.items.length - a.items.length, name: (a, b) => a.name.localeCompare(b.name), new: (a, b) => b.items[0].t - a.items[0].t };
+      const places = [...m.values()];
       view.innerHTML = `<div class="head"><div><h1>${t('Orte')}</h1><div class="sub">${pl(places.length, '{n} Ort', '{n} Orte')}</div></div>
-        <div class="tools grow"><input class="filter-in" id="pf" placeholder="${t('Ort filtern …')}" type="search"></div></div><div class="cards" id="pc"></div>`;
-      const draw = (f = '') => {
+        <div class="tools grow"><input class="filter-in" id="pf" placeholder="${t('Ort filtern …')}" type="search">${cardTools('places', [['count', 'Meiste Fotos'], ['new', 'Neueste'], ['name', 'Name']])}</div></div><div class="cards" id="pc"></div>`;
+      const draw = (f = $('#pf', view).value) => {
         const fl = f.toLowerCase();
+        places.sort(order[store.get('sort-places', 'count')] || order.count);
         $('#pc', view).innerHTML = places.filter((p) => !fl || p.name.toLowerCase().includes(fl)).map((p) => {
           const c = bestCover(p.items);
           return `<a class="card" href="#/ort/${encodeURIComponent(p.name)}"><div class="cv"><img src="${thumbURL(c)}" alt="" loading="lazy"><span class="n">${num(p.items.length)}</span></div>
             <b>${esc(p.name)}</b><span>${years(p.items[p.items.length - 1].t, p.items[0].t)}</span></a>`;
         }).join('') || `<div class="empty">${t('Keine Orte.')}</div>`;
       };
+      bindCardTools($('.head', view), $('#pc', view), 'places', () => draw());
       draw();
       $('#pf', view).oninput = (e) => draw(e.target.value);
     },
@@ -2477,7 +2546,7 @@
       const show = new Set(store.get('people-show', ['named', 'unnamed']).filter((k) => kinds.some(([x]) => x === k)));
       if (!show.size) show.add('named');
       view.innerHTML = `<div class="head"><div><h1>${t('Personen')}</h1><div class="sub">${t('{a} mit Namen · {b} ohne Namen', { a: pl(named.length, '{n} Person', '{n} Personen'), b: pl(unnamed.length, '{n} Gruppe', '{n} Gruppen') })}</div></div>
-        <div class="tools"><div class="kindset" role="group" aria-label="${t('Anzeigen')}">${kinds.map(([k, l, ic]) =>
+        <div class="tools">${cardTools('people', [['count', 'Meiste Fotos'], ['name', 'Name']])}<div class="kindset" role="group" aria-label="${t('Anzeigen')}">${kinds.map(([k, l, ic]) =>
           `<button data-pshow="${k}" class="${show.has(k) ? 'on' : ''}" aria-pressed="${show.has(k)}" title="${t('{x} zeigen oder ausblenden', { x: t(l) })}">${icon(ic)}<span>${t(l)}</span></button>`).join('')}</div></div></div>
         ${banner}<div data-psec></div>
         ${!S.people.length && info.recognition ? `<div class="empty">${icon('people')}<h2>${t('Noch keine Personen')}</h2><p>${t('Die Gesichtssuche läuft im Hintergrund.')}</p></div>` : ''}`;
@@ -2486,7 +2555,7 @@
       const draw = async () => {
         const part = (title, sub, html) => `<div class="head"><div><h1 style="font-size:20px">${title}</h1>${sub ? `<div class="sub">${sub}</div>` : ''}</div></div>${html}`;
         const parts = () => [
-          show.has('named') && named.length && `<div class="people">${named.map(card).join('')}</div>`,
+          show.has('named') && named.length && `<div class="people">${(store.get('sort-people', 'count') === 'name' ? [...named].sort((a, b) => a.name.localeCompare(b.name)) : named).map(card).join('')}</div>`,
           show.has('unnamed') && unnamed.length && part(t('Wer ist das?'), t('Namen vergeben, gleiche Namen werden zusammengeführt'), `<div class="people">${unnamed.map(card).join('')}</div>`),
           show.has('hidden') && part(t('Ausgeblendet'), hidden ? t('Die Gesichter bleiben erhalten und lassen sich wieder zeigen.') : t('wird geladen …'),
             hidden ? (hidden.length ? `<div class="hpeople">${hidden.map(hiddenCard).join('')}</div>` : `<div class="empty">${icon('eye')}<h2>${t('Nichts ausgeblendet')}</h2></div>`) : ''),
@@ -2499,6 +2568,7 @@
         }
         bindShowHidden(sec, rerender, true); // the group is back among the others
       };
+      bindCardTools($('.head', view), sec, 'people', () => draw());
       for (const b of $$('[data-pshow]', view)) {
         b.onclick = () => {
           const k = b.dataset.pshow;
@@ -2648,7 +2718,8 @@
 
     karte(view) {
       const gps = S.items.filter((it) => it.la !== undefined && shown(it));
-      view.innerHTML = `<div class="head"><div><h1>${t('Karte')}</h1><div class="sub">${t('{a} mit Ortsangabe', { a: pl(gps.length, '{n} Element', '{n} Elemente') })}</div></div></div>
+      view.innerHTML = `<div class="head"><div><h1>${t('Karte')}</h1><div class="sub">${t('{a} mit Ortsangabe', { a: pl(gps.length, '{n} Element', '{n} Elemente') })}</div></div>
+        <div class="tools">${galleryTools({ kinds: true, group: false })}</div></div>
         <div class="mapwrap"><div class="map" id="map"></div><div class="map-side"><header id="mapHead"></header><div class="list" id="mapList"></div></div></div>`;
       if (!window.L) { $('#map', view).innerHTML = `<div class="empty">${t('Karte konnte nicht geladen werden (keine Internetverbindung?).')}</div>`; return; }
       const map = L.map($('#map', view), { worldCopyJump: true, preferCanvas: true });
@@ -2675,8 +2746,10 @@
       map.addLayer(cluster);
       if (gps.length) map.fitBounds(L.latLngBounds(gps.map((it) => [it.la, it.lo])).pad(0.05));
       else map.setView([51, 10], 5);
-      const side = new Gallery($('#mapList', view), { group: 'none', small: true, scrollRoot: $('#mapList', view) });
+      // the list beside the map follows the layout and size of the toolbar; the kinds filter the map
+      const side = new Gallery($('#mapList', view), { group: 'none', scrollRoot: $('#mapList', view) });
       extraGalleries.push(side);
+      bindTools(view, side, () => rerender());
       const upd = debounce(() => {
         const b = map.getBounds();
         const inb = gps.filter((it) => b.contains([it.la, it.lo]));
@@ -2928,6 +3001,13 @@
   };
   Theme.apply();
   Theme.mq.addEventListener('change', () => { if (Theme.mode === 'system') Theme.apply(); });
+  // desktop: the sidebar folds to the icon rail of narrower screens, and stays so
+  const sideMini = (on) => {
+    document.body.classList.toggle('side-mini', on);
+    $('#sideToggle').title = on ? t('Seitenleiste ausklappen') : t('Seitenleiste einklappen');
+  };
+  sideMini(!!store.get('side-mini', false));
+  $('#sideToggle').onclick = () => { const on = !document.body.classList.contains('side-mini'); store.set('side-mini', on); sideMini(on); };
   $('#theme').onclick = () => Theme.cycle();
   $('#rescan').onclick = async () => { await post('/api/rescan', {}); toast(t('Ordner werden neu eingelesen')); pollStatus(); };
   $('#menu').onclick = () => $('#side').classList.toggle('open');
@@ -3004,12 +3084,14 @@
         return;
       }
       const role = t({ admin: 'Admin', user: 'Konto', pending: 'wartet auf Freigabe' }[m.role] || '');
-      el.innerHTML = `<div class="acc-me">${icon('user')}<span><b>${esc(m.name)}</b><small>${esc(role)}</small></span>
-        <button class="btn ghost icon" id="mypw" title="${t('Passwort ändern')}">${icon('key')}</button>
-        <button class="btn ghost icon" id="logout" title="${t('Abmelden')}">${icon('logout')}</button></div>
+      // the account: one button, its menu has the password and the logout
+      el.innerHTML = `<button type="button" class="acc-me" id="accBtn" aria-haspopup="menu" title="${esc(m.name)} · ${esc(role)}">${icon('user')}<span><b>${esc(m.name)}</b><small>${esc(role)}</small></span>${icon('down', 'acc-dn')}</button>
         ${m.pendingUsers ? `<a class="acc-pending" href="/setup#benutzer" data-n="${m.pendingUsers}">${pl(m.pendingUsers, '{n} Konto wartet auf Freigabe', '{n} Konten warten auf Freigabe')}</a>` : ''}`;
-      $('#logout').onclick = async () => { await post('/api/auth/logout', {}).catch(() => {}); location.reload(); };
-      $('#mypw').onclick = () => this.passwordDialog();
+      $('#accBtn').onclick = (e) => menu(e.currentTarget, [
+        { head: m.name, sub: role },
+        { icon: 'key', label: t('Passwort ändern'), run: () => this.passwordDialog() },
+        { icon: 'logout', label: t('Abmelden'), run: async () => { await post('/api/auth/logout', {}).catch(() => {}); location.reload(); } },
+      ]);
     },
   };
 
@@ -3018,7 +3100,7 @@
     t, LANG, S, VIEWS, Viewer, Gallery, Account, api, post, toast, esc, icon, $, $$, num, plural, pl, clamp, debounce,
     fmtLong, fmtTime, fmtMonth, thumbURL, largeURL, tileLayer, galleryView,
     route: () => route, render, rerender, loadItems, loadPeople, scheduleReload, selectionChanged, endSelection, updateCounts, sheetGrip, phoneMQ,
-    fmtSize, fmtDay, shown, isTyping,
+    fmtSize, fmtDay, shown, isTyping, menu, pageSelection, pageSelActive: () => !!pageSel,
   };
 
   // ---------------------------------------------------------------------------
