@@ -72,6 +72,28 @@ func (l *Library) Start(ctx context.Context) {
 	// also without a face service: it makes the crops of hand-marked faces again once
 	l.bg.Add(1)
 	go l.manualEmbLoop(ctx)
+	// what accounts asked for: right away, also what was left when Schuhkarton stopped
+	l.opsOn.Store(true)
+	l.bg.Add(1)
+	go l.opLoop(ctx)
+	// filing a stop interrupted goes on, once the folders are read again
+	l.bg.Add(1)
+	go func() {
+		defer l.bg.Done()
+		if l.waitFirstScan(ctx) {
+			l.resumeRules(ctx)
+		}
+	}()
+}
+
+// waitFirstScan waits until the first scan is through; false: ctx ended.
+func (l *Library) waitFirstScan(ctx context.Context) bool {
+	select {
+	case <-l.firstScan:
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }
 
 func (m *mediaGen) kick() {

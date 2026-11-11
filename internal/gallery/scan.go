@@ -308,6 +308,7 @@ func (l *Library) Scan(ctx context.Context) error {
 	l.recluster()
 	l.phase.Store("bereit")
 	l.scannedOnce.Store(true)
+	l.firstOnce.Do(func() { close(l.firstScan) })
 	l.media.kick()
 	l.kickAI()
 	l.ocrJob.kick()

@@ -38,7 +38,7 @@ func photoFixture(t *testing.T) (*fixture, string) {
 	users.Create("Cleo", "user-pass2", auth.RoleUser, false)
 	cfg := config.Defaults()
 	h := New(context.Background(), Options{Lib: lib, Config: cfg, Users: users})
-	return &fixture{t: t, h: h, cfg: cfg, users: users}, lib.Items()[0].ID
+	return &fixture{t: t, h: h, cfg: cfg, users: users, lib: lib}, lib.Items()[0].ID
 }
 
 func decode(t *testing.T, s string) map[string]any {
@@ -50,41 +50,58 @@ func decode(t *testing.T, s string) map[string]any {
 	return m
 }
 
-func TestMarksAPI(t *testing.T) {
+// Every account deletes into the trash and sees what it deleted; admins see
+// all. Emptying only hides: the file stays until the days are over.
+func TestTrashAPI(t *testing.T) {
 	f, id := photoFixture(t)
 	ben, cleo, anna := f.login("Ben", "user-pass"), f.login("Cleo", "user-pass2"), f.login("Anna", "admin-pass")
-	if got := f.do("POST", "/api/marks", `{"ids":["`+id+`"],"on":true}`, "").Code; got != 401 {
-		t.Errorf("anonymous mark: %d", got)
+	if got := f.do("POST", "/api/trash/delete", `{"ids":["`+id+`"]}`, "").Code; got != 401 {
+		t.Errorf("anonymous delete: %d", got)
 	}
-	if m := decode(t, f.do("POST", "/api/marks", `{"ids":["`+id+`"],"on":true}`, ben).Body.String()); m["ok"] != true {
-		t.Fatalf("mark: %v", m)
+	del := decode(t, f.do("POST", "/api/trash/delete", `{"ids":["`+id+`"]}`, ben).Body.String())
+	if del["ok"] != true {
+		t.Fatalf("delete: %v", del)
 	}
-	// hidden for Ben only
-	marked := func(session string) bool {
+	entry := del["entries"].([]any)[0].(string)
+	count := func(session string) int {
 		var res struct {
-			Items []struct {
+			Entries []struct {
 				ID string `json:"id"`
-				Mk bool   `json:"mk"`
-			} `json:"items"`
+				By string `json:"by"`
+			} `json:"entries"`
 		}
-		json.Unmarshal(f.do("GET", "/api/items", "", session).Body.Bytes(), &res)
-		return len(res.Items) == 1 && res.Items[0].Mk
+		json.Unmarshal(f.do("GET", "/api/trash", "", session).Body.Bytes(), &res)
+		return len(res.Entries)
 	}
-	if !marked(ben) || marked(cleo) || marked("") {
-		t.Error("the mark must only hide the photo for Ben")
+	if count(ben) != 1 || count(cleo) != 0 || count(anna) != 1 {
+		t.Fatalf("seen: ben %d cleo %d anna %d", count(ben), count(cleo), count(anna))
 	}
-	if got := f.do("GET", "/api/admin/marks", "", ben).Code; got != 403 {
-		t.Errorf("user sees all marks: %d", got)
+	if got := f.do("GET", "/api/trash/"+entry+"/thumb", "", cleo).Code; got != 404 {
+		t.Errorf("another account's thumbnail: %d", got)
 	}
-	all := f.do("GET", "/api/admin/marks", "", anna).Body.String()
-	if !strings.Contains(all, `"user":"Ben"`) {
-		t.Errorf("admin marks: %s", all)
+	if m := decode(t, f.do("POST", "/api/trash/restore", `{"ids":["`+entry+`"]}`, cleo).Body.String()); m["ok"] != false {
+		t.Errorf("Cleo restored Ben's photo: %v", m)
 	}
-	if m := decode(t, f.do("POST", "/api/admin/marks/clear", `{"ids":["`+id+`"]}`, anna).Body.String()); m["changed"] != float64(1) {
+	// emptying hides, for that account only
+	if m := decode(t, f.do("POST", "/api/trash/clear", `{}`, ben).Body.String()); m["changed"] != float64(1) {
 		t.Errorf("clear: %v", m)
 	}
-	if marked(ben) {
-		t.Error("still marked after the admin cleared it")
+	if count(ben) != 0 || count(anna) != 1 {
+		t.Errorf("after Ben emptied: ben %d anna %d", count(ben), count(anna))
+	}
+	f.do("POST", "/api/trash/clear", `{}`, anna)
+	if count(anna) != 0 {
+		t.Error("admin still sees it after emptying")
+	}
+	if f.lib.TrashEntryByID(entry) == nil {
+		t.Fatal("emptying deleted the file: it must stay until the days are over")
+	}
+	// the admin brings it back (through the history, also when hidden)
+	if m := decode(t, f.do("POST", "/api/trash/restore", `{"ids":["`+entry+`"]}`, anna).Body.String()); m["ok"] != true {
+		t.Errorf("admin restore: %v", m)
+	}
+	if len(f.lib.Items()) != 1 {
+		t.Error("not restored")
 	}
 }
 

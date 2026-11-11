@@ -1119,9 +1119,7 @@ select.sel, .setup .user select, .setup #nrole, .adm-shift select {
 .v-notes .nt-flag span { flex: 1; min-width: 160px; }
 .v-notes .nt-flag.adminflag { background: color-mix(in srgb, var(--accent) 12%, #1a1c1f); border-color: color-mix(in srgb, var(--accent) 35%, #26292e); color: #ecdfc6; }
 .v-notes .nt-flag.adminflag svg { color: var(--accent); }
-#vMark.on { color: var(--danger); }
 /* phones: admins mark nothing (they delete); users keep the flag in the bar */
-body[data-role="admin"] #vMark { display: none; } /* admins: in the menu of the edit button */
 
 /* --- marks for deletion -------------------------------------------------------------------- */
 .mk-tabs { display: inline-flex; margin: 0 0 14px; }
@@ -1395,3 +1393,4 @@ body.side-mini #sideToggle { position: static; margin: -6px auto 10px; }
   .hx-row > .btn { grid-column: 2; justify-self: start; }
   .hx-th { width: 44px; height: 44px; }
 }
+body[data-role="admin"] #vDel { display: none; } /* admins: in the menu of the edit button */

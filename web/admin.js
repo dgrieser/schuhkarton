@@ -63,15 +63,32 @@
   // a message with an optional button: the app's toast, so every message looks the same
   const snack = (msg, action, onAction, ms = 6000) => toast(msg, action, onAction, ms);
 
+  // call posts and returns the result; work that runs in the background queue is waited for
+  // (the page goes on meanwhile, and the work also when the page closes)
   async function call(path, body) {
     try {
-      const r = await post(path, body);
+      const r = await untilDone(await post(path, body));
       if (!r.ok) throw new Error(r.error || t('Fehler'));
       return r;
     } catch (e) {
       snack(t('Fehler: {e}', { e: t(String(e.message || e).replace(/^\d{3} /, '').trim()) }), '', null, 8000);
       return null;
     }
+  }
+
+  async function untilDone(r) {
+    while (r?.ok && r.pending) {
+      try {
+        r = await api(`/api/ops/${encodeURIComponent(r.op)}?wait=20`);
+      } catch (e) {
+        const m = String(e.message);
+        if (m.startsWith('404')) return { ok: false, error: t('Aufgabe unbekannt') };
+        // signed out or not allowed: asking again does not help (the work goes on)
+        if (/^4\d\d/.test(m)) return { ok: false, error: m.replace(/^\d{3} /, '').trim() || t('Fehler') };
+        await new Promise((res) => setTimeout(res, 2000)); // offline for a moment, or a restart: ask again
+      }
+    }
+    return r;
   }
 
   function report(r, msg) {
@@ -90,7 +107,7 @@
     close0(...a);
     if (dirty) { dirty = false; SK.rerender(); }
   };
-  const hashBase = () => (location.hash.slice(1) || '/fotos').split('|')[0];
+  const hashBase = () => (location.hash.slice(1) || '/fotos').split(/\||%7C/i)[0];
 
   async function refreshAfter(ids = {}, removed = []) {
     await SK.loadItems();
@@ -118,6 +135,30 @@
   // edit: date, place, category, position, text
   // ---------------------------------------------------------------------------
   const wall = (ts) => (ts ? new Date(ts * 1000).toISOString().slice(0, 16) : ''); // stored wall clock is UTC
+
+  // an edit shows on the page at once; the files are written behind
+  function showEdit(ids, body) {
+    const wallTs = (v) => { const ms = Date.parse(`${v}Z`); return Number.isNaN(ms) ? null : Math.floor(ms / 1000); };
+    for (const id of ids) {
+      const it = S.byId.get(id);
+      if (!it) continue;
+      if (body.place !== undefined) it.p = body.place;
+      if (body.category !== undefined) it.c = body.category;
+      if (body.taken) { const ts = wallTs(body.taken); if (ts !== null) it.t = ts; }
+      if (body.shift) it.t += body.shift;
+      if (V.open_ && V.it?.id === id && V.detail) {
+        const d = V.detail;
+        if (body.place !== undefined) d.place = body.place;
+        if (body.category !== undefined) d.category = body.category;
+        if (body.desc !== undefined) d.desc = body.desc;
+        d.taken = it.t;
+        if (body.clearGps) d.gps = false;
+        else if (body.lat !== undefined) Object.assign(d, { gps: true, lat: body.lat, lon: body.lon });
+      }
+    }
+    if (V.open_) V.renderInfo();
+    else SK.rerender();
+  }
 
   async function editDialog(ids) {
     if (!admin() || !ids.length) return;
@@ -257,19 +298,15 @@
       if (gps === null) body.clearGps = true;
       else if (gps) { body.lat = gps.lat; body.lon = gps.lon; }
       if (Object.keys(body).length === 1) { toast(t('Nichts geändert')); return; }
-      const btn = $('[data-save]', dlg.foot);
-      btn.disabled = true;
-      btn.textContent = t('Speichert …');
-      const r = await call('/api/admin/edit', body);
-      btn.disabled = false;
-      btn.textContent = t('Speichern');
-      if (!r) return;
       dlg.close();
+      if (!single) SK.endSelection();
+      showEdit(ids, body);
+      const r = await call('/api/admin/edit', body);
+      if (!r) { refreshAfter(); return; } // the old values come back
       let msg = single ? t('Gespeichert') : t('{n} Elemente geändert', { n: num(r.changed) });
       if (r.moved) msg += ` · ${t('nach den Regeln einsortiert')}`;
       else if (r.queued) msg += ` · ${t('{n} werden im Hintergrund einsortiert', { n: num(r.queued) })}`;
       report(r, msg);
-      if (!single) SK.endSelection();
       refreshAfter(r.ids || {});
     };
     $('[data-save]', dlg.foot).onclick = save;
@@ -281,16 +318,28 @@
   // ---------------------------------------------------------------------------
   // rotate, delete
   // ---------------------------------------------------------------------------
-  let rotating = false;
+  // rotate: turned on the page at once (the pictures turn by CSS until the new ones come)
+  const spin = new Map(); // id -> degrees turned, not done yet
+  const showSpin = () => {
+    for (const [id, d] of spin) {
+      for (const img of $$(`.tile[data-id="${CSS.escape(id)}"] img`)) img.style.rotate = `${d}deg`;
+      if (V.open_ && V.it?.id === id) for (const img of $$('img', V.media)) img.style.rotate = `${d}deg`;
+    }
+  };
   async function rotate(ids, deg) {
-    if (!admin() || rotating) return;
-    rotating = true;
-    const r = await call('/api/admin/rotate', { ids, deg });
-    rotating = false;
-    if (!r) return;
-    report(r, ids.length === 1 ? t('Gedreht') : t('{n} Fotos gedreht', { n: num(r.changed) }));
+    if (!admin() || !ids.length) return;
+    for (const id of ids) spin.set(id, (spin.get(id) || 0) + deg);
+    showSpin();
     if (ids.length > 1) SK.endSelection();
-    refreshAfter();
+    const r = await call('/api/admin/rotate', { ids, deg });
+    for (const id of ids) {
+      const left = (spin.get(id) || 0) - deg;
+      if (left) spin.set(id, left);
+      else spin.delete(id);
+    }
+    if (r) report(r, ids.length === 1 ? t('Gedreht') : t('{n} Fotos gedreht', { n: num(r.changed) }));
+    await refreshAfter();
+    showSpin(); // others still turning
   }
 
   // AI descriptions: forget them so the background job writes new ones
@@ -337,26 +386,51 @@
     ]);
   }
 
+  // the items leave the page at once; the server catches up behind (a failure brings them back)
+  function dropLocal(ids) {
+    const gone = new Set(ids);
+    S.items = S.items.filter((it) => !gone.has(it.id));
+    for (const id of ids) S.byId.delete(id);
+    SK.updateCounts();
+    if (!V.open_) { SK.rerender(); return; }
+    dirty = true;
+    const list = V.list.filter((o) => !gone.has(o.id));
+    if (!list.length) { V.close(); return; }
+    let i = list.findIndex((o) => o.id === V.it?.id);
+    if (i < 0) i = Math.min(V.i, list.length - 1);
+    V.list = list;
+    V.i = i;
+    history.replaceState({ viewer: true }, '', `#${hashBase()}|${list[i].id}`);
+    V.show();
+  }
+
+  // delete: every account, into the trash (kept for the days set, then deleted for good)
   async function remove(ids) {
-    if (!admin() || !ids.length) return;
+    if (!SK.Account.can('user') || !ids.length) return;
     const days = S.config.trashDays;
-    const ok = await confirmDlg(
-      ids.length === 1 ? t('In den Papierkorb legen?') : t('{n} Elemente in den Papierkorb legen?', { n: num(ids.length) }),
-      days > 0 ? t('Im Papierkorb lässt sich alles {d} Tage lang wiederherstellen; danach wird es endgültig gelöscht.', { d: days })
-        : t('Im Papierkorb lässt sich alles wiederherstellen, bis er geleert wird.'),
-      t('In den Papierkorb'), true);
-    if (!ok) return;
-    const r = await call('/api/admin/delete', { ids });
-    if (!r) return;
+    if (ids.length >= 10) { // a slip of the finger is undone at once; many are asked for
+      const ok = await confirmDlg(t('{n} Elemente in den Papierkorb legen?', { n: num(ids.length) }),
+        days > 0 ? t('Im Papierkorb lässt sich alles {d} Tage lang wiederherstellen; danach wird es endgültig gelöscht.', { d: days })
+          : t('Im Papierkorb lässt sich alles wiederherstellen.'),
+        t('In den Papierkorb'), true);
+      if (!ok) return;
+    }
     SK.endSelection();
-    const entries = r.entries || [];
-    snack(r.changed === 1 ? t('In den Papierkorb gelegt') : t('{n} Elemente in den Papierkorb gelegt', { n: num(r.changed) }), t('Rückgängig'), async () => {
-      const u = await call('/api/admin/trash/restore', { ids: entries });
+    dropLocal(ids);
+    showTrashCount(trashN + ids.length);
+    const pending = call('/api/trash/delete', { ids }).then((r) => {
+      if (!r) { refreshAfter(); trashCount(); return null; } // they come back
+      if (r.warnings?.length) report(r, t('Teilweise gelöscht'));
+      SK.scheduleReload();
+      trashCount();
+      return r.entries || [];
+    });
+    snack(ids.length === 1 ? t('In den Papierkorb gelegt') : t('{n} Elemente in den Papierkorb gelegt', { n: num(ids.length) }), t('Rückgängig'), async () => {
+      const entries = await pending; // also before the deletion arrived
+      if (!entries?.length) return;
+      const u = await call('/api/trash/restore', { ids: entries });
       if (u) { toast(t('Wiederhergestellt')); refreshAfter(); trashCount(); }
     });
-    if (r.warnings?.length) report(r, t('Teilweise gelöscht'));
-    refreshAfter({}, ids);
-    trashCount();
   }
 
   // ---------------------------------------------------------------------------
@@ -431,12 +505,13 @@
     go.onclick = async () => {
       const s = sub.value.trim().replace(/^\/+|\/+$/g, '');
       const dir = [sel.dir, s].filter(Boolean).join('/');
-      go.disabled = true;
-      const r = await call('/api/admin/move', { ids, root: sel.root, dir });
-      if (!r) { go.disabled = false; return; }
+      // the dialog closes at once; the files move behind (also when the page closes)
       dlg.close();
-      report(r, r.changed === 1 ? t('Verschoben nach {p}', { p: [sel.root, dir].filter(Boolean).join('/') }) : t('{n} Elemente verschoben', { n: num(r.changed) }));
       SK.endSelection();
+      toast(ids.length === 1 ? t('Wird verschoben …') : t('{n} werden verschoben …', { n: num(ids.length) }));
+      const r = await call('/api/admin/move', { ids, root: sel.root, dir });
+      if (!r) { refreshAfter(); return; }
+      report(r, r.changed === 1 ? t('Verschoben nach {p}', { p: [sel.root, dir].filter(Boolean).join('/') }) : t('{n} Elemente verschoben', { n: num(r.changed) }));
       refreshAfter(r.ids || {});
     };
     draw();
@@ -450,9 +525,9 @@
   // one button for all changes of the photo, on every screen: its menu (the keys E, R and Entf
   // still act directly)
   $('#vInfo')?.insertAdjacentHTML('beforebegin', `
-    <button class="vbtn" id="vEdit" data-need="admin" title="${esc(t('Bearbeiten'))}" aria-haspopup="menu">${icon('edit')}</button>`);
+    <button class="vbtn" id="vEdit" data-need="admin" title="${esc(t('Bearbeiten'))}" aria-haspopup="menu">${icon('edit')}</button>
+    <button class="vbtn" id="vDel" data-need="user" title="${esc(t('In den Papierkorb (Entf)'))}">${icon('trash')}</button>`);
   const cur = () => (V.it ? [V.it.id] : []);
-  const marked = () => !!(V.detail?.marked ?? SK.S.byId.get(V.it?.id)?.mk);
   const vMenu = (anchor) => menu(anchor, [
     { icon: 'edit', label: t('Datum, Ort, Text …'), run: () => editDialog(cur()) },
     ...(V.it?.k === 1 ? [
@@ -463,11 +538,10 @@
     ...(aiOn() ? [{ icon: 'spark', label: t('Neu beschreiben (KI)'), run: () => redescribe(cur()) }] : []),
     ...(ocrOn() && V.it?.k === 1 ? [{ icon: 'file', label: t('Text neu erkennen'), run: () => rerecognize(cur()) }] : []),
     ...(speechOn() && (V.it?.k === 2 || V.it?.lv) ? [{ icon: 'spark', label: t('Sprache neu erkennen'), run: () => retranscribe(cur()) }] : []),
-    ...($('#vMark') ? [marked() ? { icon: 'unmark', label: t('Nicht mehr vormerken'), run: () => $('#vMark').click() }
-      : { icon: 'mark', label: t('Zum Löschen vormerken'), run: () => $('#vMark').click() }] : []),
     { icon: 'trash', label: t('In den Papierkorb'), danger: true, run: () => remove(cur()) },
   ]);
   $('#vEdit').onclick = (e) => vMenu(e.currentTarget);
+  $('#vDel').onclick = () => remove(cur()); // accounts without the menu (admins have it there)
 
   // ---------------------------------------------------------------------------
   // selection bar
@@ -477,7 +551,7 @@
     <button class="btn" id="selRot" data-need="admin" title="${esc(t('Drehen'))}">${icon('rotate')}<span>${esc(t('Drehen'))}</span></button>
     <button class="btn" id="selMove" data-need="admin" title="${esc(t('In einen anderen Ordner'))}">${icon('move')}<span>${esc(t('Verschieben'))}</span></button>
     <button class="btn" id="selAI" data-need="admin" hidden title="${esc(t('Beschreibungen neu schreiben lassen (KI)'))}">${icon('spark')}<span>${esc(t('Beschreiben'))}</span></button>
-    <button class="btn adm-del" id="selDel" data-need="admin" title="${esc(t('In den Papierkorb'))}">${icon('trash')}<span>${esc(t('Löschen'))}</span></button>`);
+    <button class="btn adm-del" id="selDel" data-need="user" title="${esc(t('In den Papierkorb'))}">${icon('trash')}<span>${esc(t('Löschen'))}</span></button>`);
   // short labels for the phone toolbar
   const SHORT = { selFav: t('Favorit'), selZip: t('Laden'), selEdit: t('Ändern'), selRot: t('Drehen'), selMove: t('Ablegen'), selAI: t('KI'), selDel: t('Löschen') };
   for (const [id, label] of Object.entries(SHORT)) $(`#${id}`)?.insertAdjacentHTML('beforeend', `<span class="s">${esc(label)}</span>`);
@@ -497,7 +571,13 @@
   // keys: E edit, R rotate (Shift+R left), Del delete — in the viewer and for a selection
   // ---------------------------------------------------------------------------
   addEventListener('keydown', (e) => {
-    if (!admin() || e.ctrlKey || e.metaKey || e.altKey || SK.isTyping(e.target) || $('.adm-dlg') || (!V.open_ && SK.pageSelActive())) return; // a trash selection holds no photos
+    if (!SK.Account.can('user') || e.ctrlKey || e.metaKey || e.altKey || SK.isTyping(e.target) || $('.adm-dlg') || (!V.open_ && SK.pageSelActive())) return; // a trash selection holds no photos
+    if (e.key === 'Delete') { // every account
+      const ids = V.open_ ? cur() : selected();
+      if (ids.length) { e.preventDefault(); remove(ids); }
+      return;
+    }
+    if (!admin()) return;
     const ids = V.open_ ? cur() : selected();
     if (!ids.length) return;
     if (e.key === 'e' || e.key === 'E') editDialog(ids);
@@ -509,17 +589,24 @@
   });
 
   // ---------------------------------------------------------------------------
-  // trash view
+  // trash: every account sees what it deleted (admins everything) and brings it
+  // back. Emptying only hides: files are deleted for good after the days kept.
   // ---------------------------------------------------------------------------
   $('#nav a[data-v="favoriten"]')?.insertAdjacentHTML('afterend',
-    `<a href="#/papierkorb" data-v="papierkorb" data-need="admin">${icon('trash')}<span>${esc(t('Papierkorb'))}</span><em class="count" id="trashCount"></em></a>
+    `<a href="#/papierkorb" data-v="papierkorb" data-need="user">${icon('trash')}<span>${esc(t('Papierkorb'))}</span><em class="count" id="trashCount"></em></a>
      <a href="#/aenderungen" data-v="aenderungen" data-need="admin">${icon('restore')}<span>${esc(t('Änderungen'))}</span></a>`);
 
-  async function trashCount() {
-    if (!admin()) return;
-    const r = await api('/api/admin/trash').catch(() => null);
+  const user = () => SK.Account.can('user');
+  let trashN = 0;
+  const showTrashCount = (n) => {
+    trashN = Math.max(0, n);
     const el = $('#trashCount');
-    if (r && el) el.textContent = r.entries.length ? num(r.entries.length) : '';
+    if (el) el.textContent = trashN ? num(trashN) : '';
+  };
+  async function trashCount() {
+    if (!user()) return null;
+    const r = await api('/api/trash').catch(() => null);
+    if (r) showTrashCount(r.entries.length);
     return r;
   }
   // the role arrives after app.js asked /api/me
@@ -531,67 +618,89 @@
   };
 
   SK.VIEWS.papierkorb = async (view) => {
-    if (!admin()) {
-      view.innerHTML = `<div class="empty">${icon('trash')}<h2>${esc(t('Papierkorb'))}</h2><p>${esc(t('Nur für Admins.'))}</p></div>`;
+    if (!user()) {
+      view.innerHTML = `<div class="empty">${icon('trash')}<h2>${esc(t('Papierkorb'))}</h2><p>${esc(t('Löschen und wiederherstellen geht mit einem Konto.'))}</p>
+        <p><a class="btn primary" href="${esc(SK.Account.loginURL())}">${esc(t('Anmelden'))}</a></p></div>`;
       return;
     }
     view.innerHTML = `<div class="head"><div><h1>${esc(t('Papierkorb'))}</h1><div class="sub">${esc(t('Wird geladen …'))}</div></div></div>`;
     const res = await trashCount();
     if (!res) { $('.sub', view).textContent = t('Papierkorb nicht erreichbar'); return; }
-    const list = res.entries;
+    if (SK.route().view !== 'papierkorb') return;
+    let list = res.entries;
     const days = res.days;
-    const sub = list.length
-      ? `${t('{n} Elemente', { n: num(list.length) })} · ${days > 0 ? t('werden nach {d} Tagen endgültig gelöscht', { d: days }) : t('bleiben, bis der Papierkorb geleert wird')}`
-      : t('Leer');
-    view.innerHTML = `<div class="head"><div><h1>${esc(t('Papierkorb'))}</h1><div class="sub">${esc(sub)}</div></div>
+    const subText = () => (list.length
+      ? `${t(list.length === 1 ? '{n} Element' : '{n} Elemente', { n: num(list.length) })} · ${days > 0 ? t('werden nach {d} Tagen endgültig gelöscht', { d: days }) : t('bleiben, bis sie jemand wiederherstellt')}`
+      : t('Leer'));
+    const card = (e) => {
+      const name = e.rel.split('/').pop(), dir = e.rel.split('/').slice(0, -1).join('/');
+      const left = days > 0 ? Math.max(0, days - Math.floor((Date.now() / 1000 - e.deleted) / 86400)) : null;
+      return `<button class="adm-card" data-id="${esc(e.id)}" title="${esc(`${e.root}/${e.rel}`)}">
+        <span class="cv">${e.thumb ? `<img loading="lazy" alt="" src="/api/trash/${encodeURIComponent(e.id)}/thumb">` : icon(e.k === 2 ? 'video' : 'photos')}
+          ${e.k === 2 ? `<span class="badge br">${icon('play', 'fill')}</span>` : e.live ? `<span class="badge tr live">${icon('live')}</span>` : ''}<span class="check">${icon('check')}</span></span>
+        <b>${esc(name)}</b><small>${esc(`${e.root}${dir ? `/${dir}` : ''}`)}</small>
+        <small>${esc(ago(e.deleted))}${e.by && admin() ? ` · ${esc(e.by)}` : ''}${left !== null ? ` · ${esc(t('noch {n} Tage', { n: left }))}` : ''}</small></button>`;
+    };
+    const empty = `<div class="empty">${icon('trash')}<h2>${esc(t('Der Papierkorb ist leer'))}</h2><p>${esc(t('Gelöschte Fotos und Videos landen hier und lassen sich wiederherstellen.'))}</p></div>`;
+    view.innerHTML = `<div class="head"><div><h1>${esc(t('Papierkorb'))}</h1><div class="sub">${esc(subText())}</div></div>
       <div class="tools adm-ttools"${list.length ? '' : ' hidden'}>
         <button class="btn" data-all>${icon('select')}<span>${esc(t('Alle auswählen'))}</span></button>
-        <button class="btn ghost" data-empty>${esc(t('Papierkorb leeren'))}</button>
+        <button class="btn ghost" data-empty title="${esc(t('Blendet alles aus deinem Papierkorb aus; endgültig gelöscht wird erst nach der Frist.'))}">${esc(t('Papierkorb leeren'))}</button>
       </div></div>
-      ${list.length ? `<div class="adm-trash">${list.map((e) => {
-        const name = e.rel.split('/').pop(), dir = e.rel.split('/').slice(0, -1).join('/');
-        const left = days > 0 ? Math.max(0, days - Math.floor((Date.now() / 1000 - e.deleted) / 86400)) : null;
-        return `<button class="adm-card" data-id="${esc(e.id)}" title="${esc(`${e.root}/${e.rel}`)}">
-          <span class="cv">${e.thumb ? `<img loading="lazy" alt="" src="/api/admin/trash/${encodeURIComponent(e.id)}/thumb">` : icon(e.k === 2 ? 'video' : 'photos')}
-            ${e.k === 2 ? `<span class="badge br">${icon('play', 'fill')}</span>` : e.live ? `<span class="badge tr live">${icon('live')}</span>` : ''}<span class="check">${icon('check')}</span></span>
-          <b>${esc(name)}</b><small>${esc(`${e.root}${dir ? `/${dir}` : ''}`)}</small>
-          <small>${esc(ago(e.deleted))}${e.by ? ` · ${esc(e.by)}` : ''}${left !== null ? ` · ${esc(t('noch {n} Tage', { n: left }))}` : ''}</small></button>`;
-      }).join('')}</div>` : `<div class="empty">${icon('trash')}<h2>${esc(t('Der Papierkorb ist leer'))}</h2><p>${esc(t('Gelöschte Fotos und Videos landen hier und lassen sich wiederherstellen.'))}</p></div>`}`;
+      <div data-tb>${list.length ? `<div class="adm-trash">${list.map(card).join('')}</div>` : empty}</div>`;
     const btn = (k) => $(`[data-${k}]`, view);
-    if (!list.length) return;
-    // the selection bar, with the actions of the trash: a click on an entry picks it
     const pick = S.sel;
-    const toggle = (id) => { pick.has(id) ? pick.delete(id) : pick.add(id); S.selecting = true; SK.selectionChanged(); };
-    $('.adm-trash', view).onclick = (e) => {
+    // entries leave the page at once; the server catches up behind
+    const drop = (ids) => {
+      const gone = new Set(ids);
+      list = list.filter((e) => !gone.has(e.id));
+      for (const id of ids) $(`.adm-card[data-id="${CSS.escape(id)}"]`, view)?.remove();
+      for (const id of ids) pick.delete(id);
+      SK.selectionChanged();
+      $('.sub', view).textContent = subText();
+      showTrashCount(trashN - ids.length);
+      if (!list.length) { $('[data-tb]', view).innerHTML = empty; $('.adm-ttools', view).hidden = true; SK.endSelection(); }
+    };
+    const back = () => { if (SK.route().view === 'papierkorb') SK.rerender(); else trashCount(); };
+    if (!list.length) return;
+    $('[data-tb]', view).onclick = (e) => {
       const c = e.target.closest('.adm-card');
-      if (c) toggle(c.dataset.id);
+      if (!c) return;
+      pick.has(c.dataset.id) ? pick.delete(c.dataset.id) : pick.add(c.dataset.id);
+      S.selecting = true;
+      SK.selectionChanged();
     };
     btn('all').onclick = () => {
       if (pick.size === list.length) SK.endSelection();
       else { for (const e of list) pick.add(e.id); S.selecting = true; SK.selectionChanged(); }
     };
     const restore = async (ids) => {
-      const r = await call('/api/admin/trash/restore', { ids });
-      if (!r) return;
+      drop(ids);
+      toast(ids.length === 1 ? t('Wird wiederhergestellt …') : t('{n} werden wiederhergestellt …', { n: num(ids.length) }));
+      const r = await call('/api/trash/restore', { ids });
+      if (!r) { back(); return; }
       report(r, t('{n} wiederhergestellt', { n: num(r.changed) }));
-      await SK.loadItems();
-      SK.render();
+      if (Object.keys(r.ids || {}).length < ids.length) back(); // some stay in the trash: shown again
+      SK.loadItems().then(() => SK.updateCounts?.()).catch(() => {});
     };
-    const kill = async (ids, all) => {
-      const n = all ? list.length : ids.length;
-      const ok = await confirmDlg(all ? t('Papierkorb leeren?') : t('{n} Elemente endgültig löschen?', { n: num(n) }),
-        t('Die Dateien werden gelöscht. Das lässt sich nicht rückgängig machen.'), t('Endgültig löschen'), true);
-      if (!ok) return;
-      const r = await call('/api/admin/trash/empty', all ? { all: true } : { ids });
-      if (!r) return;
-      report(r, t('{n} endgültig gelöscht', { n: num(r.changed) }));
-      SK.render();
+    // emptying hides: gone from this trash, deleted for good only after the days kept
+    const hide = async (ids) => {
+      const all = !ids;
+      ids = ids || list.map((e) => e.id);
+      drop(ids);
+      const r = await call('/api/trash/clear', all ? {} : { ids });
+      if (!r) { back(); return; }
+      const hidden = r.entries || [];
+      if (hidden.length < ids.length) back(); // some were not removed (gone meanwhile, or not one's own)
+      snack(days > 0 ? t('{n} aus dem Papierkorb entfernt – endgültig gelöscht nach {d} Tagen', { n: num(hidden.length), d: days }) : t('{n} aus dem Papierkorb entfernt', { n: num(hidden.length) }), t('Rückgängig'), async () => {
+        if (await call('/api/trash/unhide', { ids: hidden })) back();
+      });
     };
-    btn('empty').onclick = () => kill([], true);
+    btn('empty').onclick = () => hide(null);
     SK.pageSelection({
       actions: [
         { icon: 'restore', label: t('Wiederherstellen'), run: restore },
-        { icon: 'trash', label: t('Endgültig löschen'), short: t('Löschen'), danger: true, run: (ids) => kill(ids, false) },
+        { icon: 'x', label: t('Aus dem Papierkorb entfernen'), short: t('Entfernen'), run: (ids) => hide(ids) },
       ],
       sync: () => {
         for (const c of $$('.adm-card', view)) c.classList.toggle('sel', pick.has(c.dataset.id));
@@ -604,12 +713,12 @@
   // changes: everything that changed in the last days, by whom, and undo
   // ---------------------------------------------------------------------------
   const KINDS = [
-    ['', 'Alle Änderungen'], ['edit', 'Bearbeitet'], ['rotate', 'Gedreht'], ['delete,restore,purge', 'Papierkorb'],
-    ['move', 'Verschoben'], ['faces,hide,show', 'Personen'], ['note', 'Notizen'], ['mark,unmarkall', 'Vorgemerkt'],
+    ['', 'Alle Änderungen'], ['edit', 'Bearbeitet'], ['rotate', 'Gedreht'], ['delete,restore,purge,binclear', 'Papierkorb'],
+    ['move', 'Verschoben'], ['faces,hide,show', 'Personen'], ['note', 'Notizen'],
     ['fav', 'Favoriten'], ['ai,ocr,speech', 'KI und Texterkennung'],
   ];
   const KIND_ICON = { edit: 'edit', rotate: 'rotate', delete: 'trash', restore: 'restore', purge: 'trash', move: 'move', faces: 'face',
-    hide: 'eye-off', show: 'eye', note: 'text', mark: 'mark', unmarkall: 'unmark', fav: 'heart', ai: 'spark', ocr: 'file', speech: 'spark' };
+    hide: 'eye-off', show: 'eye', note: 'text', mark: 'mark', unmarkall: 'unmark', binclear: 'x', fav: 'heart', ai: 'spark', ocr: 'file', speech: 'spark' };
   // a real time as the wall clock, which the date helpers show (they read UTC)
   const realLocal = (ts) => ts - new Date(ts * 1000).getTimezoneOffset() * 60;
   const FIELD = { taken: 'Datum', place: 'Ort', category: 'Kategorie', desc: 'Text', gps: 'Position' };
@@ -650,6 +759,7 @@
         return i.op === 'edit' ? t('Notiz geändert: „{text}“', { text: i.text }) : t('Notiz gelöscht: „{text}“', { text: i.text });
       case 'mark': return (i.on ? t('zum Löschen vorgemerkt') : t('Vormerkung entfernt')) + count;
       case 'unmarkall': return t('alle Vormerkungen entfernt') + count;
+      case 'binclear': return t('Papierkorb geleert (nur ausgeblendet)') + count;
       case 'fav': return (i.on ? t('als Favorit markiert') : t('aus den Favoriten genommen')) + count;
       case 'ai': return t('Beschreibung neu angefordert') + count;
       case 'ocr': return t('Text im Bild neu erkennen lassen') + count;
@@ -679,7 +789,7 @@
         if (out.length >= 8) break;
       }
       if (!out.length) {
-        for (const e of (c.trash || []).slice(0, 8)) out.push(`<span class="hx-th"><img loading="lazy" alt="" src="/api/admin/trash/${encodeURIComponent(e)}/thumb"></span>`);
+        for (const e of (c.trash || []).slice(0, 8)) out.push(`<span class="hx-th"><img loading="lazy" alt="" src="/api/trash/${encodeURIComponent(e)}/thumb"></span>`);
       }
       const total = Math.max(c.items?.length || 0, c.trash?.length || 0, c.names?.length || 0);
       if (!out.length && c.names?.length) return `<div class="hx-names">${c.names.slice(0, 6).map(esc).join(' · ')}${c.names.length > 6 ? ` · +${num(c.names.length - 6)}` : ''}</div>`;

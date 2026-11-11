@@ -39,19 +39,25 @@ type GPSEdit struct {
 
 // Edit is one admin change for one or more items; nil fields stay as they are.
 type Edit struct {
-	Taken    *int64 // exact capture time (wall clock as UTC)
-	Shift    int64  // or: move each capture time by this many seconds
-	Place    *string
-	Category *string
-	Desc     *string
-	GPS      *GPSEdit
-	By       string // account name, for the record
+	Taken    *int64   `json:"taken,omitempty"` // exact capture time (wall clock as UTC)
+	Shift    int64    `json:"shift,omitempty"` // or: move each capture time by this many seconds
+	Place    *string  `json:"place,omitempty"`
+	Category *string  `json:"category,omitempty"`
+	Desc     *string  `json:"desc,omitempty"`
+	GPS      *GPSEdit `json:"gps,omitempty"`
+	By       string   `json:"-"` // account name, for the record
 	// Record keeps the change in the history with this description, together
 	// with the values before (taken while the change is made).
-	Record map[string]any
+	Record map[string]any `json:"-"`
+	// Before, when set, are the values before for the history (an edit that
+	// goes on after a restart); OnBefore gets them when they are taken (an
+	// error stops the edit before it changes anything).
+	Before   []EditBefore               `json:"-"`
+	OnBefore func(b []EditBefore) error `json:"-"`
+	Op       string                     `json:"-"` // the queued work it is (the history keeps it once)
 	// Alone changes only these items, not their Live Photo videos too (undo
 	// puts each file back on its own).
-	Alone bool
+	Alone bool `json:"alone,omitempty"`
 }
 
 // EditResult reports what an admin operation did.
@@ -64,6 +70,7 @@ type EditResult struct {
 	Moved    int               `json:"moved,omitempty"`   // edit: files the rules moved right away
 	Queued   int               `json:"queued,omitempty"`  // edit: files the rules move in the background
 	Failed   int               `json:"failed,omitempty"`  // rules: files that could not be moved
+	Freed    int64             `json:"freed,omitempty"`   // duplicates: bytes the deleted copies took
 }
 
 func (r *EditResult) warn(format string, args ...any) {
@@ -231,7 +238,14 @@ func (l *Library) EditItems(ids []string, e Edit) (EditResult, error) {
 	var before []EditBefore
 	var names []string
 	if e.Record != nil {
-		before = l.editBefores(items, companion, e)
+		if before = e.Before; len(before) == 0 {
+			before = l.editBefores(items, companion, e)
+			if e.OnBefore != nil {
+				if err := e.OnBefore(before); err != nil {
+					return res, err
+				}
+			}
+		}
 		for _, it := range items {
 			names = append(names, path.Base(it.Rel))
 		}
@@ -251,6 +265,14 @@ func (l *Library) EditItems(ids []string, e Edit) (EditResult, error) {
 		tk   int64
 	}
 	var jobs []job
+	// a shift counts from the time before the edit: an edit done again after a
+	// restart does not move a photo twice
+	takenBefore := map[string]int64{}
+	for _, b := range before {
+		if b.Taken != nil {
+			takenBefore[b.ID] = *b.Taken
+		}
+	}
 	l.editMu.Lock()
 	for _, it := range items {
 		key := l.favKey(it)
@@ -264,7 +286,11 @@ func (l *Library) EditItems(ids []string, e Edit) (EditResult, error) {
 		case e.Taken != nil:
 			tk = *e.Taken
 		case e.Shift != 0:
-			tk = it.Taken + e.Shift
+			base, ok := takenBefore[it.ID]
+			if !ok {
+				base = it.Taken
+			}
+			tk = base + e.Shift
 		}
 		if tk != 0 {
 			o.Taken = &tk
@@ -346,7 +372,7 @@ func (l *Library) EditItems(ids []string, e Edit) (EditResult, error) {
 			changed = append(changed, it.ID)
 		}
 		// before the filing below: a move then takes the change along
-		l.Record(Change{By: e.By, Kind: ChEdit, Items: changed, Names: names, Info: e.Record}, before)
+		l.Record(Change{By: e.By, Kind: ChEdit, Items: changed, Names: names, Info: e.Record, Op: e.Op}, before)
 	}
 	// filing follows what the folders are made of: date, place, category
 	if e.Taken != nil || e.Shift != 0 || place != nil || cat != nil {

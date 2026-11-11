@@ -39,7 +39,7 @@ func TestJobFirst(t *testing.T) {
 			mu.Unlock()
 			return nil
 		},
-		save: func() {},
+		save: func() error { return nil },
 		first: func() func(*Item) bool {
 			return func(it *Item) bool { return it.Rel == "p01.jpg" || it.Rel == "p04.jpg" }
 		},

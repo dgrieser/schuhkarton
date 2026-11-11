@@ -2,16 +2,12 @@ package server
 
 import (
 	"net/http"
-	"path"
 
 	"github.com/dgrieser/schuhkarton/internal/gallery"
 )
 
-// socialRoutes: marks for deletion (each account its own, hidden for it)
-// and notes on photos (everybody reads, accounts write).
+// socialRoutes: notes on photos (everybody reads, accounts write).
 func (s *Server) socialRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/marks", s.requireUser(s.myMarks))
-	mux.HandleFunc("POST /api/marks", s.requireUser(s.setMarks))
 	mux.HandleFunc("POST /api/notes/{id}", s.requireUser(s.addNote))
 	mux.HandleFunc("POST /api/notes/{id}/{note}", s.requireUser(s.updateNote))
 	mux.HandleFunc("PATCH /api/notes/{id}/{note}", s.requireUser(s.updateNote))
@@ -32,57 +28,6 @@ func notesOut(ns []gallery.Note) []noteJSON {
 		out = append(out, noteJSON(n))
 	}
 	return out
-}
-
-func (s *Server) myMarks(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, r, map[string]any{"ids": s.lib.MarkedIDs(userName(r))})
-}
-
-func (s *Server) setMarks(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		IDs []string `json:"ids"`
-		On  bool     `json:"on"`
-	}
-	if err := readJSON(r, &req); err != nil {
-		http.Error(w, "ungültige Anfrage", http.StatusBadRequest)
-		return
-	}
-	user := userName(r)
-	changing := s.lib.Changing(req.IDs, req.On, func(it *gallery.Item) bool { return s.lib.IsMarked(user, it) })
-	n, err := s.lib.SetMarks(user, req.IDs, req.On)
-	if err != nil {
-		writeJSON(w, r, map[string]any{"ok": false, "error": err.Error()})
-		return
-	}
-	if len(changing) > 0 {
-		s.lib.Record(gallery.Change{By: user, Kind: gallery.ChMark, Items: changing, Names: s.lib.Names(changing), Info: map[string]any{"on": req.On, "n": len(changing)}},
-			gallery.ToggleUndo{User: user, On: req.On})
-	}
-	writeJSON(w, r, map[string]any{"ok": true, "changed": n})
-}
-
-func (s *Server) adminMarks(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, r, map[string]any{"items": s.lib.AllMarks()})
-}
-
-func (s *Server) adminClearMarks(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		IDs []string `json:"ids"`
-	}
-	if err := readJSON(r, &req); err != nil {
-		http.Error(w, "ungültige Anfrage", http.StatusBadRequest)
-		return
-	}
-	before := s.lib.MarksOf(req.IDs)
-	n, err := s.lib.ClearMarks(req.IDs)
-	if err != nil {
-		writeJSON(w, r, map[string]any{"ok": false, "error": err.Error()})
-		return
-	}
-	if n > 0 {
-		s.lib.Record(gallery.Change{By: userName(r), Kind: gallery.ChUnmarkAll, Items: req.IDs, Names: s.lib.Names(req.IDs), Info: map[string]any{"n": n}}, before)
-	}
-	writeJSON(w, r, map[string]any{"ok": true, "changed": n})
 }
 
 func (s *Server) noteText(w http.ResponseWriter, r *http.Request) (string, bool) {
@@ -167,26 +112,7 @@ func (s *Server) adminResolveDupes(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "ungültige Anfrage", http.StatusBadRequest)
 		return
 	}
-	res, freed, err := s.lib.ResolveDupes(req.Groups, userName(r))
-	if len(res.Entries) > 0 {
-		var names []string
-		pick := map[string]bool{}
-		for _, e := range res.Entries {
-			pick[e] = true
-		}
-		for _, e := range s.lib.TrashList() {
-			if pick[e.ID] {
-				names = append(names, path.Base(e.Rel))
-			}
-		}
-		s.lib.Record(gallery.Change{By: userName(r), Kind: gallery.ChDelete, Names: names, Info: map[string]any{"n": len(res.Entries), "dupes": true}}, res.Entries)
-	}
-	if err != nil {
-		writeJSON(w, r, map[string]any{"ok": false, "error": err.Error(), "warnings": res.Warnings})
-		return
-	}
-	writeJSON(w, r, map[string]any{"ok": true, "changed": res.Changed, "entries": res.Entries, "freed": freed,
-		"warnings": res.Warnings, "version": s.lib.Version()})
+	s.queue(w, r, gallery.OpDupes, gallery.DupesArgs{Groups: req.Groups})
 }
 
 func (s *Server) adminIgnoreDupes(w http.ResponseWriter, r *http.Request) {

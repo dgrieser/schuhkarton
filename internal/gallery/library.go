@@ -190,6 +190,7 @@ type Status struct {
 	// now while others may run, with the unix time it opens (0: no window
 	// ahead allows it)
 	WindowWait map[string]int64 `json:"windowWait,omitempty"`
+	Ops        int              `json:"ops,omitempty"` // work accounts asked for, not done yet
 	Photos     int              `json:"photos"`
 	Videos     int              `json:"videos"`
 	Meta       int64            `json:"meta"`
@@ -316,17 +317,21 @@ type Library struct {
 	freshEmb     sync.Map      // FaceRef keys of faces just marked: looked at outside the window too
 	cropsRedone  sync.Map      // FaceRef keys whose crop redoManualCrops made again in this run
 	scannedOnce  atomic.Bool   // the first scan is through
-	formatsKnown atomic.Bool   // every item's format was checked by its content (format.go)
-	aiSoon       atomic.Bool   // descriptions start again shortly (video.go)
-	offline      atomic.Value  // []string: library folders the last scan could not read
-	rootDev      rootDevices   // device each library folder had its files on
-	editGen      atomic.Int64  // counts metadata edits, so plans notice them
-	closing      atomic.Bool   // Close has begun: no new filing runs
+	firstScan    chan struct{} // closed when the first scan is through
+	firstOnce    sync.Once
+	formatsKnown atomic.Bool  // every item's format was checked by its content (format.go)
+	aiSoon       atomic.Bool  // descriptions start again shortly (video.go)
+	offline      atomic.Value // []string: library folders the last scan could not read
+	rootDev      rootDevices  // device each library folder had its files on
+	editGen      atomic.Int64 // counts metadata edits, so plans notice them
+	closing      atomic.Bool  // Close has begun: no new filing runs
 	// rulesChunkHook runs before each chunk of a filing run (tests only)
 	rulesChunkHook func(start int)
 	editMu         sync.Mutex           // guards edits
 	edits          map[string]*Override // root name + "/" + rel -> admin edits
 	hist           *history             // changes of the last days, to look at and undo
+	ops            *opQueue             // work accounts asked for, in the background (ops.go)
+	opsOn          atomic.Bool          // the queue runs (Start); else work is done right when asked
 	pins           recogPins            // results an undo put back (history.go)
 	recogPub       sync.Mutex           // a recognized result is stored and searched in one step (history.go)
 	trashMu        sync.Mutex
@@ -405,12 +410,14 @@ func Open(opt Options) (*Library, error) {
 	if opt.AI.Model != "" && opt.AI.URL != "" {
 		l.aiJob.client = newAIClient(opt.AI)
 		l.aiJob.wake = make(chan struct{}, 1)
+		l.aiJob.urgentWake = make(chan struct{}, 1)
 		l.aiJob.name, l.aiJob.kind = "descriptions", schedule.JobAI
 	}
 	l.loadOCR()
 	if o := opt.OCR; o.Model != "" && o.URL != "" && (o.Scope == "documents" || o.Scope == "all") {
 		l.ocrJob.client = newAIClient(AIOptions{URL: o.URL, Key: o.Key, Model: o.Model, Workers: o.Workers})
 		l.ocrJob.wake = make(chan struct{}, 1)
+		l.ocrJob.urgentWake = make(chan struct{}, 1)
 		l.ocrJob.name, l.ocrJob.kind = "text recognition", schedule.JobOCR
 		if o.Translate != "" {
 			l.ocrTr = newAIClient(AIOptions{URL: o.URL, Key: o.Key, Model: o.Translate, Languages: o.Languages})
@@ -425,6 +432,7 @@ func Open(opt Options) (*Library, error) {
 	if o := opt.Speech; o.Model != "" && o.URL != "" {
 		l.speechJob.client = newAIClient(AIOptions{URL: o.URL, Key: o.Key, Model: o.Model, Workers: o.Workers})
 		l.speechJob.wake = make(chan struct{}, 1)
+		l.speechJob.urgentWake = make(chan struct{}, 1)
 		l.speechJob.name, l.speechJob.kind = "speech recognition", schedule.JobSpeech
 	}
 	l.xmpFails = map[string]xmpFailure{}
@@ -447,6 +455,9 @@ func Open(opt Options) (*Library, error) {
 	}
 	l.loadTrash()
 	l.hist = newHistory(opt.CacheDir, opt.TrashDays)
+	l.ops = newOpQueue(opt.CacheDir)
+	l.firstScan = make(chan struct{})
+	l.loadUrgent() // asked for by hand before a restart: right away
 	l.loadDupes()
 	l.loadMarks()
 	l.loadNotes()
@@ -477,14 +488,14 @@ func (l *Library) Close() {
 		l.saveImportStems()
 	}
 	if err := l.saveSpeech(); err != nil {
-		l.logf("speech.json: %v", err)
+		l.logf("%v", err)
 	}
 	l.closeXMPTools()
 	if err := l.saveAI(); err != nil {
-		l.logf("ai.json: %v", err)
+		l.logf("%v", err)
 	}
 	if err := l.saveOCR(); err != nil {
-		l.logf("ocr.json: %v", err)
+		l.logf("%v", err)
 	}
 	if err := l.saveDupes(); err != nil {
 		l.logf("dupes.json: %v", err)
@@ -637,6 +648,7 @@ func (l *Library) Status() Status {
 	}
 	s.DupeDone, s.DupeTodo, s.DupeGroups = l.dupe.done.Load(), l.dupe.todo.Load(), l.dupe.nGrp.Load()
 	s.RulesRunning, s.RulesDone, s.RulesTodo = l.rulesJob.running.Load(), l.rulesJob.done.Load(), l.rulesJob.todo.Load()
+	s.Ops = l.OpsWaiting()
 	s.RulesFail = l.rulesJob.fail.Load()
 	s.Import = l.ImportInfo()
 	s.Offline, _ = l.offline.Load().([]string)

@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"image"
 	"image/color"
 	"image/draw"
@@ -73,10 +74,11 @@ const ocrImageSize = 2048
 // --- storage ------------------------------------------------------------------
 
 type ocrStore struct {
-	mu    sync.Mutex
-	items map[string]*OCRInfo
-	dirty atomic.Bool
-	ver   atomic.Int64 // changes with every new text (search index)
+	mu     sync.Mutex
+	items  map[string]*OCRInfo
+	dirty  atomic.Bool
+	saveMu sync.Mutex   // one save at a time: a second one waits for the one writing
+	ver    atomic.Int64 // changes with every new text (search index)
 }
 
 func (l *Library) loadOCR() {
@@ -94,6 +96,8 @@ func (l *Library) loadOCR() {
 }
 
 func (l *Library) saveOCR() error {
+	l.ocr.saveMu.Lock()
+	defer l.ocr.saveMu.Unlock()
 	if !l.ocr.dirty.Swap(false) {
 		return nil
 	}
@@ -103,7 +107,11 @@ func (l *Library) saveOCR() error {
 	if err != nil {
 		return err
 	}
-	return writeFileAtomic(filepath.Join(l.opt.CacheDir, "ocr.json"), b)
+	if err := writeFileAtomic(filepath.Join(l.opt.CacheDir, "ocr.json"), b); err != nil {
+		l.ocr.dirty.Store(true) // tried again at the next save
+		return fmt.Errorf("ocr.json: %w", err)
+	}
+	return nil
 }
 
 func (l *Library) markOCRDirty() {
@@ -112,7 +120,7 @@ func (l *Library) markOCRDirty() {
 	}
 	time.AfterFunc(30*time.Second, func() {
 		if err := l.saveOCR(); err != nil {
-			l.logf("ocr.json: %v", err)
+			l.logf("%v", err)
 		}
 	})
 }
@@ -239,12 +247,8 @@ func (l *Library) ocrTask() jobTask {
 			}
 			return false, false
 		},
-		one: l.recognizeOne,
-		save: func() {
-			if err := l.saveOCR(); err != nil {
-				l.logf("ocr.json: %v", err)
-			}
-		},
+		one:  l.recognizeOne,
+		save: l.saveOCR,
 		// texts read before only wait for their translation: no picture
 		// to read, so they go first and a file the share hangs on is no
 		// reason to leave them out

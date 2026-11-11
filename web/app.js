@@ -223,9 +223,7 @@
   async function loadItems() {
     const res = await api('/api/items');
     for (const it of res.items) it.dc = !!it.dc; // the server knows the document folders
-    // what this account marked for deletion is hidden everywhere but in "Vorgemerkt"
-    S.items = res.items.filter((it) => !it.mk);
-    S.marked = res.items.filter((it) => it.mk);
+    S.items = res.items;
     S.byId = new Map(res.items.map((it) => [it.id, it]));
     S.version = res.version;
     S.loadedAt = Date.now();
@@ -2484,7 +2482,7 @@
         let items = [];
         for (const h of res.hits || []) {
           const it = S.byId.get(h.id);
-          if (!it || it.mk) continue;
+          if (!it) continue;
           items.push(it);
           if (h.snip) snips.set(h.id, h.snip);
         }
@@ -2940,6 +2938,8 @@
       if (s.xmpOn && Account.can('admin')) remote('xmp', t('In Dateien schreiben'), t('Schreiben in Dateien angehalten'));
       if (s.dupeMode === 'on' && Account.can('admin')) bar(t('Duplikate prüfen'), s.dupeDone, s.dupeTodo, 0, { job: 'dupes' });
       if (s.rulesRunning && Account.can('admin')) { busy = true; bar(t('Einsortieren'), s.rulesDone, s.rulesTodo, s.rulesFail || 0); }
+      // what accounts asked for (deleting, moving, rotating, editing): in the queue, also after a restart
+      if (s.ops) { busy = true; rows.push(`<div class="row"><span>${pl(s.ops, '{n} Änderung wird ausgeführt', '{n} Änderungen werden ausgeführt')}</span></div>`); }
       if (s.offline?.length) rows.push(`<div class="row"><span class="bad" title="${esc(t('Der bisherige Stand bleibt, bis der Ordner wieder da ist.'))}">${t('Nicht erreichbar')}: ${esc(s.offline.join(', '))}</span></div>`);
       if (s.import && Account.can('admin')) {
         if (s.import.waiting) rows.push(`<div class="row"><span>${t('Import')}: ${pl(s.import.waiting, '{n} Datei wird noch geschrieben', '{n} Dateien werden noch geschrieben')}</span></div>`);

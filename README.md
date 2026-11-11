@@ -53,9 +53,9 @@ or another one.
   nearly the same shot, and suggests the best copy. Admins compare side by
   side and clean up with one tap; what the copies knew moves to the one that
   stays.
-- **Notes and marks:** people with an account leave notes on photos (for
-  everybody, searchable) and mark photos for deletion (hidden for them, an
-  admin decides).
+- **Notes and the trash:** people with an account leave notes on photos (for
+  everybody, searchable) and delete photos into the trash, from where they
+  bring them back.
 - German and English (the browser's language, switchable in the sidebar); the
   search syntax works in both (`ort:`/`place:`, `monat:juni`/`month:june`).
 - Light, dark or system theme. Pinch the grid to resize it, long press to
@@ -273,7 +273,7 @@ copy that stays. "Keine Duplikate" remembers that photos only look alike.
 matches; `dupes.mode: off` switches the search off. Photos of the same scene
 with a different framing are beyond perceptual hashes.
 
-## Notes and marks for deletion
+## Notes and the trash
 
 Everybody with an account can write notes on a photo or video (in the
 details: who, what, where). Everybody who can see the photo reads them; the
@@ -281,11 +281,13 @@ search finds them in plain words, with `notiz:` / `note:` and with
 `typ:notiz` / `type:note`. Authors change and delete their own notes,
 admins any.
 
-The flag in the viewer (key **M**) or in the selection marks photos for
-deletion: they disappear for the account that marked them and show up in
-*Vorgemerkt*, where they can be brought back. Admins see every account's
-marks there (*Alle Konten*, the most marked first) and move them to the
-trash or remove the marks.
+Every account deletes photos (the bin in the viewer, key **Del**, or the
+selection) into the trash. *Papierkorb* in the sidebar shows what the account
+deleted (admins: everything) and brings it back. Emptying the trash, or
+removing entries from it, only hides them from that account's trash: files
+are deleted for good only `library.trash_days` days after they were deleted
+(30 by default), for everybody alike. Until then an admin can still bring
+them back under *Änderungen*.
 
 ## Editing (admins)
 
@@ -299,11 +301,10 @@ Admins see extra buttons in the viewer (also keys **E** edit, **R** rotate,
 - **Move** to any folder of the library, or a new one. Live Photos move with
   their video; names that are taken get " (2)".
 - **Delete** moves files to the trash (`<folder>/.schuhkarton-papierkorb/`),
-  with undo. *Papierkorb* in the sidebar restores them or deletes them for
-  good; the trash empties itself after `library.trash_days`.
+  with undo — like every account (see *Notes and the trash*).
 - **Änderungen** (sidebar) lists every change of the last `library.trash_days`
   days, newest first: edits, rotations, deletions, moves (also by the filing
-  rules), face names, notes, marks, favorites and requests to describe or
+  rules), face names, notes, favorites, emptied trashes and requests to describe or
   recognize again — by whom, or by Schuhkarton itself. Each can be undone
   while its old state is still there: a deletion comes back from the trash,
   a rotation turns back, a move goes back to the old folder. Nothing is
@@ -316,6 +317,16 @@ and `Category`; rotation as EXIF orientation for JPEG and TIFF). Off, they
 stay in the cache (`edits.json`) only. Formats exiftool cannot rotate (HEIC,
 PNG, …) keep the rotation in the cache either way. Favorites, names of
 people and cached previews follow moved and edited files.
+
+Deleting, restoring, moving, rotating, editing and resolving duplicates show
+on the page at once and run in a queue behind it, right away (not in the
+background window). The queue is kept in `ops.jsonl` in the cache: work that
+was not done when Schuhkarton stopped, crashed or was killed goes on at the
+next start, once the folders are read, without doing anything twice. Work
+asked for before a move (also one by the filing rules) follows the files to
+their new place. Describing or recognizing again by hand does not wait for
+the background window either, and survives a restart too (`urgent.json`), as
+does filing by the rules (`rules-pending.json`).
 
 A library folder that cannot be read when the folders are scanned (a
 network share that is down, an empty mount point) keeps what it had, and so
@@ -624,7 +635,7 @@ library:
   folder_meta: true           # read date, place and category from folder names like 2019/06 Juni Ort
   write_files: true           # write admin edits into the files (exiftool); false: cache only
   write_metadata: true        # write descriptions, keywords, texts and names into the files' XMP
-  trash_days: 30              # empty the trash and forget changes after this many days; 0: never empty it (changes: a year)
+  trash_days: 30              # delete trashed files for good and forget changes after this many days; 0: never (changes: a year)
   documents: [Dokumente, Documents, Scans, Belege]  # folders whose files are documents
   import:                     # import folder (see "Import folder")
     dir: ""                   # e.g. /home/me/Import; empty: none

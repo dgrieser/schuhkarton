@@ -39,6 +39,9 @@ type Change struct {
 	Undo     json.RawMessage `json:"undo,omitempty"`  // what undoing needs (by kind)
 	Undone   int64           `json:"undone,omitempty"`
 	UndoneBy string          `json:"undoneBy,omitempty"`
+	// Op is the queued work that made it: the same work done again after a
+	// restart replaces it, not adds another one
+	Op string `json:"op,omitempty"`
 }
 
 // The kinds of changes.
@@ -59,6 +62,7 @@ const (
 	ChAI        = "ai"        // description made again; Undo: item id -> description before
 	ChOCR       = "ocr"
 	ChSpeech    = "speech"
+	ChBinClear  = "binclear" // a trash emptied (only hidden); Undo: {"user","entries"}
 )
 
 // historyMax keeps the file small also when nothing is ever forgotten.
@@ -128,7 +132,9 @@ func (h *history) load() {
 func (h *history) apply(ev histEvent) {
 	switch {
 	case ev.C != nil:
-		if h.byID[ev.C.ID] == nil {
+		if old := h.byID[ev.C.ID]; old != nil {
+			*old = *ev.C // the same work done again after a restart
+		} else {
 			h.list = append(h.list, ev.C)
 			h.byID[ev.C.ID] = ev.C
 		}
@@ -208,6 +214,22 @@ func (h *history) add(c *Change, alive func(string) bool) {
 	}
 	c.ID, c.At = newChangeID(), nowUnix()
 	h.mu.Lock()
+	var same *Change
+	if c.Op != "" {
+		for i := len(h.list) - 1; i >= 0; i-- {
+			if h.list[i].Op == c.Op {
+				same = h.list[i]
+				break
+			}
+		}
+	}
+	if same != nil && same.Undone != 0 {
+		h.mu.Unlock() // undone meanwhile: stays undone
+		return
+	}
+	if same != nil {
+		c.ID, c.At = same.ID, same.At
+	}
 	for _, r := range h.recent { // oldest first
 		if r.at < c.At-60 {
 			continue
@@ -223,8 +245,12 @@ func (h *history) add(c *Change, alive func(string) bool) {
 		}
 		h.renameChange(c, ids)
 	}
-	h.list = append(h.list, c)
-	h.byID[c.ID] = c
+	if same != nil {
+		*same = *c
+	} else {
+		h.list = append(h.list, c)
+		h.byID[c.ID] = c
+	}
 	h.write(histEvent{C: c})
 	h.expire()
 	h.mu.Unlock()
@@ -508,6 +534,12 @@ func (l *Library) restoreNote(itemID string, n Note) error {
 	return err
 }
 
+// BinClearUndo is what undoing an emptied trash needs: whose, and which entries.
+type BinClearUndo struct {
+	User    string   `json:"user"`
+	Entries []string `json:"entries"`
+}
+
 // ToggleUndo is what undoing a mark or a favorite needs.
 type ToggleUndo struct {
 	User string `json:"user"`
@@ -675,6 +707,15 @@ func (l *Library) canUndo(c *Change, inTrash map[string]bool) (bool, string) {
 			}
 		}
 		return false, "nicht mehr im Papierkorb"
+	case ChBinClear:
+		var u BinClearUndo
+		json.Unmarshal(c.Undo, &u)
+		for _, e := range u.Entries {
+			if inTrash[e] {
+				return true, ""
+			}
+		}
+		return false, "nicht mehr im Papierkorb"
 	case ChHide, ChFaces:
 		return true, ""
 	case ChRotate, ChMark, ChUnmarkAll, ChFav, ChNote, ChAI, ChOCR, ChSpeech: // undone only all together
@@ -802,6 +843,12 @@ func (l *Library) UndoChange(id, by string) (EditResult, error) {
 		}
 		err = l.RestoreFaceLabels(labels)
 		res.Changed = len(labels)
+	case ChBinClear:
+		var u BinClearUndo
+		if err = json.Unmarshal(cp.Undo, &u); err == nil {
+			err = l.UnhideTrash(u.User, u.Entries)
+			res.Changed = len(u.Entries)
+		}
 	case ChHide:
 		var u struct {
 			Hid string `json:"hid"`
@@ -1009,6 +1056,23 @@ func (l *Library) RecognizeAgain(kind string, ids []string, by string) int {
 			undo = before
 		}
 		l.Record(Change{By: by, Kind: kind, Items: ids, Names: l.Names(ids), Info: map[string]any{"n": n}}, undo)
+		// the old results gone on disk first: a request kept over a restart
+		// must not find them and count as done
+		var err error
+		switch kind {
+		case ChAI:
+			err = l.saveAI()
+		case ChOCR:
+			err = l.saveOCR()
+		case ChSpeech:
+			if err = l.saveSpeech(); err == nil {
+				err = l.saveAI() // video descriptions made with the old words
+			}
+		}
+		if err != nil {
+			l.logf("%s: %v", kind, err)
+		}
+		l.markUrgent(kind, ids) // asked for by hand: not waiting for the background window
 	}
 	return n
 }
