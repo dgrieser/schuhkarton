@@ -47,14 +47,15 @@
   const markSnip = (s) => esc(s).replace(/\x01/g, '<mark>').replace(/\x02/g, '</mark>');
 
   let toastT;
-  // toast(msg) shows a short note; with action and onAction it gets a button (e.g. "Rückgängig")
-  function toast(msg, action, onAction) {
+  // toast(msg) shows a short note; with action and onAction it gets a button (e.g. "Rückgängig").
+  // ms: how long it stays (default: longer with a button). The one kind of message everywhere.
+  function toast(msg, action, onAction, ms) {
     const el = $('#toast');
     el.innerHTML = `<span>${esc(msg)}</span>${action ? `<button type="button">${esc(action)}</button>` : ''}`;
     el.classList.toggle('act', !!action);
     el.classList.add('on');
     clearTimeout(toastT);
-    toastT = setTimeout(() => el.classList.remove('on'), action ? 10000 : 2400);
+    toastT = setTimeout(() => el.classList.remove('on'), ms || (action ? 10000 : 2400));
     if (action) $('button', el).onclick = () => { el.classList.remove('on'); onAction(); };
   }
 
@@ -88,13 +89,15 @@
   const saveSize = () => store.set(`size-${devClass()}`, S.size);
   const canHevc = (() => { const v = document.createElement('video'); return !!(v.canPlayType('video/mp4; codecs="hvc1.1.6.L93.B0"') || v.canPlayType('video/mp4; codecs="hev1.1.6.L93.B0"')); })();
   const isTouch = matchMedia('(hover: none)').matches;
+  // keys go to a field that takes text; a slider, a checkbox or a button leaves them to the page
+  const isTyping = (el) => !!el.matches?.('textarea, select, [contenteditable], input:not([type=range], [type=checkbox], [type=radio], [type=button], [type=submit], [type=color])');
   // a popup that knows how to place itself moves when the keyboard comes or goes
   window.visualViewport?.addEventListener('resize', () => $('#pop')?.position?.());
   // the grip of a bottom sheet: dragging sets the height (set), end(height, start height, speed)
   // follows on release (speed in px per ms, positive = down)
   const gripDrag = (grip, get, set, end) => {
     let drag = null;
-    const viewer = () => grip.closest('.viewer');
+    const viewer = () => grip.closest('.viewer') || grip.parentElement;
     grip.addEventListener('pointerdown', (e) => {
       if (e.button) return;
       e.preventDefault();
@@ -110,9 +113,10 @@
       drag.lt = e.timeStamp;
       set(drag.h - (e.clientY - drag.y));
     });
-    const up = () => {
+    const up = (e) => {
       if (!drag) return;
-      const { h, v } = drag;
+      const { h, lt } = drag;
+      const v = e.timeStamp - lt > 120 ? 0 : drag.v; // held still before letting go: no flick
       drag = null;
       viewer()?.classList.remove('sheet-drag');
       end(get(), h, v);
@@ -122,6 +126,29 @@
   };
   // a sheet dragged this low or flicked down closes
   const sheetGone = (now, h, v) => now < 110 || (v > 1.2 && now < h);
+  // a dialog as a bottom sheet on a phone: a grip on top sets any height (remembered per kind
+  // of dialog, key), a flick down or dragging it nearly closed calls onClose. The grip only
+  // shows on a phone; elsewhere the dialog stays as it is.
+  const phoneMQ = matchMedia('(max-width: 720px)');
+  function sheetGrip(box, { key, onClose, min = 160 }) {
+    const grip = document.createElement('div');
+    grip.className = 'sheet-grip';
+    grip.title = t('Ziehen: Höhe ändern');
+    box.prepend(grip);
+    const set = (h) => {
+      box.style.height = `${Math.round(clamp(h, 0, innerHeight - 24))}px`;
+      box.style.maxHeight = 'none';
+    };
+    const saved = key ? +store.get(`dlg-h-${key}`, 0) : 0;
+    if (saved && phoneMQ.matches) set(Math.max(saved * innerHeight, min));
+    gripDrag(grip, () => box.offsetHeight, set, (now, h, v) => {
+      if (sheetGone(now, h, v)) { set(h); onClose(); return; }
+      const keep = Math.max(now, min);
+      set(keep);
+      if (key) store.set(`dlg-h-${key}`, Math.round((keep / innerHeight) * 1000) / 1000);
+    });
+    return grip;
+  }
 
   const thumbURL = (it) => `/t/${it.id}/s.jpg?v=${it.v}`;
   const largeURL = (it) => `/t/${it.id}/m.jpg?v=${it.v}`;
@@ -163,6 +190,27 @@
     toast(t('Wieder sichtbar'));
     if (back && S.peopleById.has(back)) location.replace(`#/person/${encodeURIComponent(back)}`);
     return true;
+  }
+  // a hidden group with its "Wieder zeigen" button
+  const hiddenCard = (h) => `<div class="hperson" data-hid="${esc(h.id)}">
+    <span class="face"><img src="${faceURL(h.cover.item, h.cover.idx)}" alt="" loading="lazy"></span>
+    <div class="hinfo"><b class="${h.name || h.loose ? '' : 'unnamed'}">${esc(h.loose ? t('Einzelne Gesichter') : h.name || t('Ohne Namen'))}</b>
+      <span>${h.loose ? pl(h.faces, '{n} Gesicht', '{n} Gesichter') : pl(h.count, '{n} Foto', '{n} Fotos')} · ${h.at ? t('ausgeblendet am {d}', { d: fmtLong(h.at) }) : t('früher ausgeblendet')}</span>
+      <div class="hsample">${h.sample.map((f) => `<img src="${faceURL(f.item, f.idx)}" alt="" loading="lazy">`).join('')}</div></div>
+    <button class="btn" type="button" data-show>${icon('eye')}<span>${t('Wieder zeigen')}</span></button></div>`;
+  // the buttons of the hidden groups in root; after: when the last one is shown again (each:
+  // after every one)
+  function bindShowHidden(root, after, each = false) {
+    for (const b of $$('[data-show]', root)) {
+      b.onclick = async () => {
+        const row = b.closest('.hperson');
+        b.disabled = true;
+        if (await showHidden(row.dataset.hid)) {
+          row.remove();
+          if (each || !$('.hperson', root)) after();
+        } else b.disabled = false;
+      };
+    }
   }
 
   async function loadPeople() {
@@ -369,7 +417,7 @@
       });
       this.height = y;
       this.el.style.height = `${y}px`;
-      this.el.className = `gallery layout-${mode}`;
+      this.el.className = `gallery layout-${mode}${size <= 80 ? ' tiny' : ''}`; // the two smallest sizes: the check circle in the middle
       this.render();
       this.opts.onLayout?.(this);
     }
@@ -697,12 +745,51 @@
   function selectionChanged() {
     const n = S.sel.size;
     $('#selbar').hidden = n === 0 && !S.selecting;
-    $('#selCount').textContent = n ? t('{n} ausgewählt', { n: num(n) }) : t('Elemente antippen');
+    $('#selCount').textContent = n ? t('{n} ausgewählt', { n: num(n) }) : isTouch ? t('Elemente antippen') : t('Elemente anklicken');
     document.body.classList.toggle('selecting', S.selecting || n > 0);
     S.gallery?.refreshTiles();
     for (const g of extraGalleries) g.refreshTiles();
+    if (n) SelPeople.load();
+    else SelPeople.clear();
   }
   function endSelection() { S.sel.clear(); S.selecting = false; selectionChanged(); }
+  // swiped away: the selection ends, the toast brings it back
+  function dropSelection() {
+    const ids = [...S.sel];
+    endSelection();
+    if (ids.length) toast(pl(ids.length, '{n} Element abgewählt', '{n} Elemente abgewählt'), t('Rückgängig'), () => { for (const id of ids) S.sel.add(id); S.selecting = true; selectionChanged(); });
+  }
+  sheetGrip($('#selbar'), { key: 'sel', onClose: dropSelection, min: 120 });
+  new ResizeObserver(() => document.body.style.setProperty('--selh', `${$('#selbar').offsetHeight}px`)).observe($('#selbar'));
+  // the people in the selection: a chip per person with the number of its photos there; a tap
+  // asks who that is in all of them at once (another name, not this person, not a face)
+  const SelPeople = {
+    el: $('#selPeople'), seq: 0,
+    clear() { this.seq++; this.el.hidden = true; this.el.innerHTML = ''; },
+    // the chips belong to the selection they were made for: off at once until the new ones come
+    load() {
+      this.seq++;
+      for (const b of $$('.sp', this.el)) b.disabled = true;
+      this.later();
+    },
+    later: debounce(() => SelPeople.fetch(), 250),
+    async fetch() {
+      const ids = [...S.sel], seq = ++this.seq;
+      if (!ids.length || S.config?.faces === 'off') { this.clear(); return; }
+      const res = await post('/api/items/people', { ids }).catch(() => null);
+      if (seq !== this.seq) return;
+      const people = res?.people || [];
+      this.el.hidden = !people.length;
+      this.el.innerHTML = people.length ? `<h4>${t('Personen')}</h4><div class="sp-list">${people.map((p, i) => `<button type="button" class="sp" data-i="${i}"
+        title="${t('{items} · {faces}', { items: pl(p.items, '{n} Foto', '{n} Fotos'), faces: pl(p.faces, '{n} Gesicht', '{n} Gesichter') })}"><img src="${faceURL(p.cover.item, p.cover.idx)}" alt="" loading="lazy"><span class="${p.name ? '' : 'unnamed'}">${esc(p.name || t('Unbenannt'))}</span><small>${num(p.items)}</small></button>`).join('')}</div>` : '';
+      for (const b of $$('.sp', this.el)) {
+        b.onclick = () => {
+          const p = people[+b.dataset.i];
+          Viewer.namePop(b, { name: p.name, person: p.id, multi: { ids, person: p.id, items: p.items, cover: p.cover } });
+        };
+      }
+    },
+  };
   $('#selectBtn').onclick = () => { S.selecting = !S.selecting; selectionChanged(); };
   $('#selClose').onclick = endSelection;
   $('#selFav').onclick = async () => {
@@ -1078,6 +1165,19 @@
     async saveFace(face, name) {
       const it = this.it;
       if (name && name !== '-') store.set('recent-names', [name, ...store.get('recent-names', []).filter((n) => n !== name)].slice(0, 8));
+      if (face.multi) { // a person in all photos of a selection
+        const m = face.multi;
+        const res = await post(`/api/items/people/${encodeURIComponent(m.person)}`, { ids: m.ids, name }).catch((e) => ({ error: e.message }));
+        if (res.error) { toast(t('Fehler: {e}', { e: String(res.error).replace(/^\d{3} /, '') })); return; }
+        const faces = pl(res.n, '{n} Gesicht', '{n} Gesichter');
+        const msg = name === '-' ? pl(res.n, '{n} Gesicht entfernt', '{n} Gesichter entfernt')
+          : name ? t('{faces} als {name} gespeichert', { faces, name })
+            : face.name ? t('{faces}: nicht {name}', { faces, name: face.name }) : t('{faces} ausgeblendet', { faces });
+        const after = async () => { await loadPeople(); scheduleReload(); SelPeople.load(); };
+        toast(msg, t('Rückgängig'), async () => { await post('/api/faces/labels', { labels: res.undo }); await after(); toast(t('Wiederhergestellt')); });
+        await after();
+        return;
+      }
       if (face.add) {
         const b = face.box;
         toast(t('Wird gespeichert …'));
@@ -1284,9 +1384,12 @@
       const person = (n) => `<button type="button" data-name="${esc(n)}"${n === face.name ? ' class="cur"' : ''}>${img(n)}<span>${esc(n)}</span>${n === face.name ? icon('check') : ''}</button>`;
       const sheet = this.sheetMode.matches;
       const pop = document.createElement('div');
-      pop.className = `pop name-pop${isTouch ? ' touch' : ''}${sheet ? ' sheet' : ''}`;
+      pop.className = `pop name-pop${isTouch ? ' touch' : ''}${sheet ? ' sheet' : ''}${face.multi ? ' themed' : ''}`; // themed: over the page, not the viewer
       pop.id = 'pop';
-      pop.innerHTML = `<div class="np-head"${sheet ? ` title="${t('Ziehen: Höhe ändern')}"` : ''}>${face.add ? '' : `<img src="${faceURL(this.it.id, face.idx)}" alt="">`}<b>${t('Wer ist das?')}</b></div>
+      // the face asked about; a person in a selection: its picture, and in how many photos
+      const m = face.multi;
+      const pic = m ? faceURL(m.cover.item, m.cover.idx) : face.add ? '' : faceURL(this.it.id, face.idx);
+      pop.innerHTML = `<div class="np-head"${sheet ? ` title="${t('Ziehen: Höhe ändern')}"` : ''}>${pic ? `<img src="${pic}" alt="">` : ''}<div><b>${face.name ? t('Ist das {name}?', { name: esc(face.name) }) : t('Wer ist das?')}</b>${m ? `<small>${pl(m.items, 'in {n} Foto', 'in {n} Fotos')}</small>` : ''}</div>${sheet ? '' : `<button type="button" class="btn ghost icon np-x" data-a="cancel" title="${t('Schließen')}">${icon('x')}</button>`}</div>
         ${recent.length ? `<div class="np-recent">${recent.map((n) => `<button type="button" data-name="${esc(n)}">${img(n)}<span>${esc(n)}</span></button>`).join('')}</div>` : ''}
         ${names.length && !isTouch ? `<input type="search" class="np-search" placeholder="${t('Person suchen')}" autocomplete="off" enterkeyhint="done">` : ''}
         ${names.length ? `<div class="np-list">${names.map(person).join('')}<button type="button" class="np-typed" data-a="typed" hidden>${icon('plus')}<span></span></button></div>` : ''}
@@ -1296,7 +1399,8 @@
         ${face.add ? `<div class="row np-acts"><button type="button" data-a="noname">${t('Ohne Namen speichern')}</button><button type="button" data-a="cancel">${t('Abbrechen')}</button></div>`
           : `<div class="row np-acts"><button type="button" data-a="not">${face.person ? t('Nicht diese Person') : t('Ausblenden')}</button>
             <button type="button" data-a="noface" title="${t('Falsch erkannt: kein Gesicht. Wird nicht mehr gezeigt, andere Gesichter bleiben.')}">${icon('face-x')}<span>${t('Kein Gesicht')}</span></button></div>`}`;
-      (sheet ? this.el : document.body).appendChild(pop);
+      // a sheet in the viewer shares it with the picture; one for a selection lies over the page
+      (sheet && !m ? this.el : document.body).appendChild(pop);
       const search = $('.np-search', pop), list = $('.np-list', pop), typed = $('.np-typed', pop), recentEl = $('.np-recent', pop);
       const form = $('.np-form', pop), nameIn = $('.np-name', pop);
       const adding = () => pop.classList.contains('adding');
@@ -1318,7 +1422,9 @@
           this.el.style.setProperty('--nsheet', `${h + kb}px`);
           return;
         }
-        const r = anchor.getBoundingClientRect();
+        // the face with its name label under it: the question does not cover the name
+        const r0 = anchor.getBoundingClientRect(), lab = anchor.matches?.('.v-face') ? $(':scope > span', anchor)?.getBoundingClientRect() : null;
+        const r = lab ? { left: r0.left, right: Math.max(r0.right, lab.right), top: r0.top, bottom: Math.max(r0.bottom, lab.bottom), width: r0.width } : r0;
         const top0 = vv ? vv.offsetTop : 0, h = vv ? vv.height : innerHeight, pw = pop.offsetWidth;
         const below = top0 + h - 8 - (r.bottom + 8), above = r.top - 8 - (top0 + 8);
         if (isTouch) {
@@ -1381,10 +1487,20 @@
         position();
         if (!on && search && !isTouch) search.focus();
       };
+      // the keys go to it (Escape, arrows), also without a search field
+      pop.tabIndex = -1;
       if (search && !isTouch) search.focus();
+      else pop.focus({ preventScroll: true });
       const close = () => { pop.remove(); onClose?.(); };
       // swiped away: a box marked by hand can still be adjusted
       const dismiss = () => { if (face.back) { pop.remove(); face.back(); } else close(); };
+      // a press beside it puts it away (a box marked by hand: back to the box)
+      const off = (e) => {
+        if (pop.isConnected && (pop.contains(e.target) || e.target.closest('.sp'))) return;
+        removeEventListener('pointerdown', off, true);
+        if (pop.isConnected) dismiss();
+      };
+      addEventListener('pointerdown', off, true);
       const save = (name) => { close(); this.saveFace(face, name); };
       // the people shown and the new-person entry, for the arrow keys
       const choices = () => $$('[data-name], .np-typed', pop).filter((b) => !b.hidden && !b.closest('[hidden]'));
@@ -1412,6 +1528,7 @@
         else nameIn.focus();
       };
       pop.onkeydown = (e) => {
+        if (e.key === 'Escape' && !adding()) { e.stopPropagation(); dismiss(); return; }
         if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
         const bs = choices(), i = bs.indexOf(document.activeElement);
         if (i < 0) return;
@@ -1550,13 +1667,23 @@
       store.set(`sheet-${devClass()}`, Math.round((now / innerHeight) * 1000) / 1000);
     });
 
-    // idle: the mouse shows the controls and they fade after a while; on touch a tap toggles them
+    // idle: the mouse shows the controls. They stay while it is on the picture or on them, and
+    // fade 2.6 s after it left (beside the picture, out of the window); on touch a tap toggles them.
+    const onContent = (x, y) => {
+      const r = V.media.getBoundingClientRect();
+      return (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) || !!V.el.querySelector('.v-top:hover, .v-strip:hover, .v-nav:hover');
+    };
+    const fadeLater = () => {
+      clearTimeout(V.idleT);
+      V.idleT = setTimeout(() => V.el.classList.add('idle'), 2600);
+    };
     V.el.addEventListener('pointermove', (e) => {
       if (e.pointerType !== 'mouse') return;
       V.el.classList.remove('idle');
-      clearTimeout(V.idleT);
-      V.idleT = setTimeout(() => { if (!V.el.querySelector('.v-top:hover, .v-strip:hover')) V.el.classList.add('idle'); }, 2600);
+      if (onContent(e.clientX, e.clientY)) clearTimeout(V.idleT);
+      else fadeLater();
     });
+    V.el.addEventListener('pointerleave', (e) => { if (e.pointerType === 'mouse') fadeLater(); });
 
     // wheel zoom
     V.stage.addEventListener('wheel', (e) => {
@@ -1741,7 +1868,7 @@
   // keyboard
   // ---------------------------------------------------------------------------
   addEventListener('keydown', (e) => {
-    const typing = e.target.matches('input, textarea, select');
+    const typing = isTyping(e.target);
     if (Viewer.open_) {
       if (typing) return;
       const V = Viewer;
@@ -1768,6 +1895,7 @@
     if (typing) return;
     if (e.key === '/') { e.preventDefault(); $('#q').focus(); $('#q').select(); }
     if ((e.key === 'v' || e.key === 'V') && !e.ctrlKey && !e.metaKey && !e.altKey) FS.toggle();
+    if (e.key === 'Escape' && $('#pop')) { $('#pop').remove(); return; } // a popup first, the selection stays
     if (e.key === 'Escape') { ViewMenu.close(); if (Filter.open_) Filter.close(); if (S.sel.size || S.selecting) endSelection(); $('#side').classList.remove('open'); }
   });
 
@@ -1977,11 +2105,29 @@
     async open() {
       this.open_ = true;
       this.el.hidden = false;
+      this.mark(true);
+      this.place();
       if (!this.facets) this.facets = await api(`/api/facets?lang=${LANG}`).catch(() => ({}));
       if (!S.people.length) await loadPeople().catch(() => {});
       this.draw();
     },
-    close() { this.open_ = false; this.el.hidden = true; },
+    close() { this.open_ = false; this.el.hidden = true; this.mark(false); },
+    // the filter button folds the panel up again while it is open
+    mark(on) {
+      $('#search').classList.toggle('fopen', on);
+      const b = $('#filterBtn');
+      b.classList.toggle('open', on);
+      b.innerHTML = on ? icon('down', 'flip') : icon('sliders');
+      b.title = on ? t('Filter schließen') : t('Filter');
+    },
+    // the lower part of the search field (a phone: the screen's width under the top bar)
+    place() {
+      if (!this.open_) return;
+      const f = $('#search .field').getBoundingClientRect(), s = this.el.style;
+      if (phoneMQ.matches) Object.assign(s, { left: '6px', width: `${innerWidth - 12}px`, top: `${Math.round($('.top').getBoundingClientRect().bottom)}px` });
+      else Object.assign(s, { left: `${Math.round(f.left)}px`, width: `${Math.round(f.width)}px`, top: `${Math.round(f.bottom - 1)}px` });
+      s.maxHeight = `${Math.round(innerHeight - parseFloat(s.top) - 16)}px`;
+    },
     count(n) { this.n = n; const c = $('.count', this.el); if (c) c.textContent = pl(n, '{n} Treffer', '{n} Treffer'); },
     current() { return route.view === 'suche' ? parseQ(route.arg) : { filters: [], words: [] }; },
     has(p, key, val) { return p.filters.some((f) => f.key === key && f.cv === val.toLowerCase() && !f.neg); },
@@ -2037,6 +2183,7 @@
     },
   };
   $('#filterBtn').onclick = (e) => { e.preventDefault(); e.stopPropagation(); Filter.open_ ? Filter.close() : Filter.open(); };
+  addEventListener('resize', () => Filter.place());
   document.addEventListener('pointerdown', (e) => {
     if (Filter.open_ && !e.target.closest('#fpanel') && !e.target.closest('#filterBtn') && !e.target.closest('[data-addf]')) Filter.close();
   });
@@ -2106,6 +2253,7 @@
         <button class="btn vrow ${S.animate ? 'on' : ''}" data-anim>${icon('play')}<span>${t('Videos und Live Photos animiert zeigen')}</span></button>`;
       document.body.appendChild(m);
       this.el = m;
+      sheetGrip(m, { key: 'view', onClose: () => this.close() });
       bindTools(m, g);
       $('[data-close]', m).onclick = () => this.close();
       this.off = (e) => { if (!m.contains(e.target) && !e.target.closest('[data-vmenu]')) this.close(); };
@@ -2279,7 +2427,7 @@
       }
       const places = [...m.values()].sort((a, b) => b.items.length - a.items.length);
       view.innerHTML = `<div class="head"><div><h1>${t('Orte')}</h1><div class="sub">${pl(places.length, '{n} Ort', '{n} Orte')}</div></div>
-        <div class="tools"><input class="filter-in" id="pf" placeholder="${t('Ort filtern …')}" type="search"></div></div><div class="cards" id="pc"></div>`;
+        <div class="tools grow"><input class="filter-in" id="pf" placeholder="${t('Ort filtern …')}" type="search"></div></div><div class="cards" id="pc"></div>`;
       const draw = (f = '') => {
         const fl = f.toLowerCase();
         $('#pc', view).innerHTML = places.filter((p) => !fl || p.name.toLowerCase().includes(fl)).map((p) => {
@@ -2323,12 +2471,47 @@
       else if (info.faceTodo > info.faces) banner = `<div class="banner">${icon('info')}<div>${t('Gesichter werden noch gesucht ({a} von {b}). Die Gruppen werden laufend besser.', { a: num(info.faces), b: num(info.faceTodo) })}</div></div>`;
       const card = (p) => `<a class="person" href="#/person/${encodeURIComponent(p.id)}"><span class="face"><img src="${faceURL(p.cover.item, p.cover.idx)}" alt="" loading="lazy"></span>
         <b class="${p.name ? '' : 'unnamed'}">${esc(p.name || t('Name hinzufügen'))}</b><span>${pl(p.count, '{n} Foto', '{n} Fotos')}</span></a>`;
-      const hiddenLink = Account.can('user') ? `<div class="tools"><a class="btn" href="#/ausgeblendet" title="${t('Ausgeblendete Personen ansehen und wieder zeigen')}">${icon('eye-off')}<span>${t('Ausgeblendet')}</span></a></div>` : '';
-      view.innerHTML = `<div class="head"><div><h1>${t('Personen')}</h1><div class="sub">${t('{a} mit Namen · {b} ohne Namen', { a: pl(named.length, '{n} Person', '{n} Personen'), b: pl(unnamed.length, '{n} Gruppe', '{n} Gruppen') })}</div></div>${hiddenLink}</div>
-        ${banner}
-        ${named.length ? `<div class="people">${named.map(card).join('')}</div>` : ''}
-        ${unnamed.length ? `<div class="head"><div><h1 style="font-size:20px">${t('Wer ist das?')}</h1><div class="sub">${t('Namen vergeben, gleiche Namen werden zusammengeführt')}</div></div></div><div class="people">${unnamed.map(card).join('')}</div>` : ''}
+      // which groups show, switched like the kinds of a gallery: with names, without, hidden
+      const user = Account.can('user');
+      const kinds = [['named', 'Mit Namen', 'people'], ['unnamed', 'Ohne Namen', 'face'], ...(user ? [['hidden', 'Ausgeblendet', 'eye-off']] : [])];
+      const show = new Set(store.get('people-show', ['named', 'unnamed']).filter((k) => kinds.some(([x]) => x === k)));
+      if (!show.size) show.add('named');
+      view.innerHTML = `<div class="head"><div><h1>${t('Personen')}</h1><div class="sub">${t('{a} mit Namen · {b} ohne Namen', { a: pl(named.length, '{n} Person', '{n} Personen'), b: pl(unnamed.length, '{n} Gruppe', '{n} Gruppen') })}</div></div>
+        <div class="tools"><div class="kindset" role="group" aria-label="${t('Anzeigen')}">${kinds.map(([k, l, ic]) =>
+          `<button data-pshow="${k}" class="${show.has(k) ? 'on' : ''}" aria-pressed="${show.has(k)}" title="${t('{x} zeigen oder ausblenden', { x: t(l) })}">${icon(ic)}<span>${t(l)}</span></button>`).join('')}</div></div></div>
+        ${banner}<div data-psec></div>
         ${!S.people.length && info.recognition ? `<div class="empty">${icon('people')}<h2>${t('Noch keine Personen')}</h2><p>${t('Die Gesichtssuche läuft im Hintergrund.')}</p></div>` : ''}`;
+      const sec = $('[data-psec]', view);
+      let hidden = null; // loaded when first shown
+      const draw = async () => {
+        const part = (title, sub, html) => `<div class="head"><div><h1 style="font-size:20px">${title}</h1>${sub ? `<div class="sub">${sub}</div>` : ''}</div></div>${html}`;
+        const parts = () => [
+          show.has('named') && named.length && `<div class="people">${named.map(card).join('')}</div>`,
+          show.has('unnamed') && unnamed.length && part(t('Wer ist das?'), t('Namen vergeben, gleiche Namen werden zusammengeführt'), `<div class="people">${unnamed.map(card).join('')}</div>`),
+          show.has('hidden') && part(t('Ausgeblendet'), hidden ? t('Die Gesichter bleiben erhalten und lassen sich wieder zeigen.') : t('wird geladen …'),
+            hidden ? (hidden.length ? `<div class="hpeople">${hidden.map(hiddenCard).join('')}</div>` : `<div class="empty">${icon('eye')}<h2>${t('Nichts ausgeblendet')}</h2></div>`) : ''),
+        ].filter(Boolean).join('');
+        sec.innerHTML = parts();
+        if (show.has('hidden') && !hidden) {
+          hidden = await api('/api/people/hidden').then((r) => r.hidden || []).catch(() => []);
+          if (route.view !== 'personen' || !sec.isConnected) return;
+          sec.innerHTML = parts();
+        }
+        bindShowHidden(sec, rerender, true); // the group is back among the others
+      };
+      for (const b of $$('[data-pshow]', view)) {
+        b.onclick = () => {
+          const k = b.dataset.pshow;
+          if (show.has(k)) {
+            if (show.size === 1) { toast(t('Mindestens eine Art bleibt sichtbar')); return; }
+            show.delete(k);
+          } else show.add(k);
+          store.set('people-show', [...show]);
+          for (const x of $$('[data-pshow]', view)) { const on = show.has(x.dataset.pshow); x.classList.toggle('on', on); x.setAttribute('aria-pressed', on); }
+          draw();
+        };
+      }
+      draw();
     },
 
     async person(view, id) {
@@ -2355,7 +2538,7 @@
       const head = $('.head', view);
       head.firstElementChild.outerHTML = `<div class="person-head"><span class="face"><img src="${faceURL(p.cover.item, p.cover.idx)}" alt=""></span><div>
         <input class="name-in" id="pname" value="${esc(p.name)}" placeholder="${Account.can('user') ? t('Name hinzufügen') : t('Unbenannt')}" list="pn2" ${Account.can('user') ? '' : 'readonly'}><datalist id="pn2">${names.map((n) => `<option value="${esc(n)}">`).join('')}</datalist>
-        <div class="sub">${pl(items.length, '{n} Foto', '{n} Fotos')} · ${pl(p.faces, '{n} Gesicht', '{n} Gesichter')} · ${t('gleicher Name führt Personen zusammen')}</div></div></div>`;
+        <div class="sub">${pl(items.length, '{n} Foto', '{n} Fotos')}</div></div></div>`;
       $('.head .tools', view).insertAdjacentHTML('afterbegin', `<button class="btn" id="phide" data-need="user" title="${t('Diese Gruppe nicht mehr zeigen')}">${icon('eye-off')}<span>${t('Ausblenden')}</span></button>
         <button class="btn" id="pnoface" data-need="user" title="${t('Falsch erkannt: das sind keine Gesichter. Sie werden nicht mehr gezeigt und nicht wieder gesucht.')}">${icon('face-x')}<span>${t('Kein Gesicht')}</span></button>`);
       const inp = $('#pname', view);
@@ -2409,26 +2592,10 @@
         return;
       }
       if (route.view !== 'ausgeblendet') return;
-      const when = (h) => h.at ? t('ausgeblendet am {d}', { d: fmtLong(h.at) }) : t('früher ausgeblendet');
-      const card = (h) => `<div class="hperson" data-hid="${esc(h.id)}">
-        <span class="face"><img src="${faceURL(h.cover.item, h.cover.idx)}" alt="" loading="lazy"></span>
-        <div class="hinfo"><b class="${h.name || h.loose ? '' : 'unnamed'}">${esc(h.loose ? t('Einzelne Gesichter') : h.name || t('Ohne Namen'))}</b>
-          <span>${h.loose ? pl(h.faces, '{n} Gesicht', '{n} Gesichter') : pl(h.count, '{n} Foto', '{n} Fotos')} · ${when(h)}</span>
-          <div class="hsample">${h.sample.map((f) => `<img src="${faceURL(f.item, f.idx)}" alt="" loading="lazy">`).join('')}</div></div>
-        <button class="btn" type="button" data-show>${icon('eye')}<span>${t('Wieder zeigen')}</span></button></div>`;
       view.innerHTML = head(list.length ? t('{n} – die Gesichter bleiben erhalten und lassen sich wieder zeigen.', { n: pl(list.length, '{n} Gruppe', '{n} Gruppen') }) : '')
-        + (list.length ? `<div class="hpeople">${list.map(card).join('')}</div>`
+        + (list.length ? `<div class="hpeople">${list.map(hiddenCard).join('')}</div>`
           : `<div class="empty">${icon('eye')}<h2>${t('Nichts ausgeblendet')}</h2><p>${t('Ausgeblendete Personen erscheinen hier.')}</p></div>`);
-      for (const b of $$('[data-show]', view)) {
-        b.onclick = async () => {
-          const row = b.closest('.hperson');
-          b.disabled = true;
-          if (await showHidden(row.dataset.hid)) {
-            row.remove();
-            if (!$('.hperson', view)) rerender();
-          } else b.disabled = false;
-        };
-      }
+      bindShowHidden(view, rerender);
     },
 
     alben(view, path) {
@@ -2802,7 +2969,7 @@
     passwordDialog() {
       $('#pop')?.remove();
       const pop = document.createElement('div');
-      pop.className = 'pop pw-pop';
+      pop.className = 'pop pw-pop themed';
       pop.id = 'pop';
       pop.innerHTML = `<b>${t('Passwort ändern')}</b>
         <form onsubmit="return false"><input type="text" autocomplete="username" value="${esc(this.me.name)}" hidden>
@@ -2810,9 +2977,12 @@
         <input type="password" id="pwNew" autocomplete="new-password" placeholder="${t('Neues Passwort (mind. 8 Zeichen)')}">
         <div class="row"><button class="primary" data-a="save">${t('Speichern')}</button><button data-a="cancel">${t('Abbrechen')}</button></div></form>`;
       document.body.appendChild(pop);
-      const r = $('#account').getBoundingClientRect();
-      pop.style.left = `${clamp(r.left, 8, innerWidth - 270)}px`;
-      pop.style.top = `${clamp(r.top - 190, 8, innerHeight - 200)}px`;
+      sheetGrip(pop, { onClose: () => pop.remove() });
+      if (!phoneMQ.matches) { // a phone: a sheet at the bottom
+        const r = $('#account').getBoundingClientRect();
+        pop.style.left = `${clamp(r.left, 8, innerWidth - 270)}px`;
+        pop.style.top = `${clamp(r.top - 190, 8, innerHeight - 200)}px`;
+      }
       $('#pwOld', pop).focus();
       pop.onclick = async (e) => {
         const a = e.target.closest('[data-a]')?.dataset.a;
@@ -2847,8 +3017,8 @@
   window.SK = {
     t, LANG, S, VIEWS, Viewer, Gallery, Account, api, post, toast, esc, icon, $, $$, num, plural, pl, clamp, debounce,
     fmtLong, fmtTime, fmtMonth, thumbURL, largeURL, tileLayer, galleryView,
-    route: () => route, render, rerender, loadItems, loadPeople, scheduleReload, selectionChanged, endSelection, updateCounts,
-    fmtSize, fmtDay, shown,
+    route: () => route, render, rerender, loadItems, loadPeople, scheduleReload, selectionChanged, endSelection, updateCounts, sheetGrip, phoneMQ,
+    fmtSize, fmtDay, shown, isTyping,
   };
 
   // ---------------------------------------------------------------------------

@@ -88,7 +88,7 @@
   }
 
   addEventListener('keydown', (e) => {
-    if (!V.open_ || !user() || e.ctrlKey || e.metaKey || e.altKey || e.target.matches('input, textarea, select') || $('.adm-dlg')) return;
+    if (!V.open_ || !user() || e.ctrlKey || e.metaKey || e.altKey || SK.isTyping(e.target) || $('.adm-dlg')) return;
     if (e.key === 'm' || e.key === 'M') { e.preventDefault(); vMark?.click(); }
   });
 

@@ -354,7 +354,7 @@
       render();
     };
     const onKey = (e) => {
-      if (SK.Viewer.open_ || $('.adm-dlg') || e.target.matches('input, textarea, select')) return;
+      if (SK.Viewer.open_ || $('.adm-dlg') || SK.isTyping(e.target)) return;
       const g = list[i];
       if (e.key === 'Escape') close();
       else if (e.key === 'ArrowRight') next(1);
