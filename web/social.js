@@ -286,14 +286,11 @@
     };
   }
 
-  // the details panel gets the notes; the info button shows how many there are
+  // the details panel gets the notes
   const render0 = V.renderInfo.bind(V);
   V.renderInfo = function renderInfo(...a) {
     render0(...a);
     const d = this.detail;
-    const n = d ? (d.notes || []).length : (S.byId.get(this.it?.id)?.nt || 0);
-    const ib = $('#vInfo');
-    if (ib) { if (n) ib.dataset.n = n > 9 ? '9+' : String(n); else delete ib.dataset.n; }
     syncMark();
     const panel = $('#vInfoPanel');
     if (!this.showInfo || !d || !panel) return;

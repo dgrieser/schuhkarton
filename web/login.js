@@ -13,6 +13,8 @@
     return n.startsWith('/') && !n.startsWith('//') && !n.startsWith('/login') ? n : '';
   })();
   let next = asked || '/';
+  // a shared link (…#/fotos%7C<id>) keeps its fragment through the redirect to this page: it goes on
+  const target = () => next + (next.includes('#') ? '' : location.hash);
   let tab = 'login', me = {};
 
   const post = async (path, body) => {
@@ -43,7 +45,7 @@
     try {
       if (tab === 'login') {
         const r = await post('/api/auth/login', { name, password });
-        if (r.ok) { location.href = next; return; }
+        if (r.ok) { location.href = target(); return; }
         msg(t(r.error || ''));
       } else {
         const r = await post('/api/auth/register', { name, password });
@@ -65,7 +67,7 @@
     me = await fetch('/api/me').then((r) => r.json()).catch(() => ({}));
     if (!asked && me.home) next = me.home;
     if (me.title) { $('#title').textContent = me.title; document.title = `${me.title} – ${t('Anmelden')}`; }
-    if (me.role && me.role !== 'anon') { location.href = next; return; }
+    if (me.role && me.role !== 'anon') { location.href = target(); return; }
     const alt = $('#alt');
     if (me.needAdmin) {
       const n = document.createElement('p');
@@ -73,7 +75,7 @@
       n.textContent = t('Es gibt noch kein Admin-Konto. Den Einrichtungslink öffnen, den schuhkarton beim Start ausgibt (…/setup?token=…); dort wird ein neues oder ein hier registriertes Konto zum Admin.');
       $('#form').before(n);
     }
-    if (me.anonymous && me.keyOK) alt.innerHTML = `<a href="${next.replace(/"/g, '')}">${t('Ohne Konto weiter ansehen')}</a>`;
+    if (me.anonymous && me.keyOK) alt.innerHTML = `<a href="${target().replace(/"/g, '')}">${t('Ohne Konto weiter ansehen')}</a>`;
     else if (me.anonymous) alt.textContent = t('Ohne Konto ansehen: den Link mit Zugangsschlüssel öffnen.');
     draw();
     $('#name').focus();

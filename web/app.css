@@ -756,7 +756,6 @@ body > .pop.name-pop.sheet { z-index: 130; } /* a person of a selection: over th
   /* the drawer covers the tab bar, so its footer (progress, theme) stays visible */
   .side { z-index: 45; overflow-y: auto; padding-bottom: calc(14px + env(safe-area-inset-bottom)); }
   .v-actions { gap: 0; }
-  #vPrint { display: none; } /* the title needs the room; phones print from the details ("drucken") */
 }
 
 /* --- setup ------------------------------------------------------------------------ */
@@ -1098,8 +1097,6 @@ select.sel, .setup .user select, .setup #nrole, .adm-shift select {
 
 /* --- notes (viewer details) -------------------------------------------------------------- */
 .vbtn { position: relative; }
-.vbtn[data-n]::after { content: attr(data-n); position: absolute; right: 3px; top: 3px; min-width: 16px; height: 16px; padding: 0 4px;
-  border-radius: 8px; background: var(--accent); color: var(--accent-ink); font: 700 10px/16px system-ui, sans-serif; text-align: center; }
 .v-notes h3 em { font-style: normal; color: var(--accent); margin-left: 4px; }
 .v-info .v-notes > h3:first-child { margin-top: 22px; }
 .v-notes .nt { margin: 8px 0; padding: 10px 12px; border-radius: 10px; background: #1a1c1f; border: 1px solid #26292e; }
