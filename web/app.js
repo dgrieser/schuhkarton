@@ -59,6 +59,22 @@
     if (action) $('button', el).onclick = () => { el.classList.remove('on'); onAction(); };
   }
 
+  // copies text to the clipboard (without the clipboard API: through a hidden field) and says so
+  async function copyText(s, done) {
+    try {
+      await navigator.clipboard.writeText(s);
+    } catch {
+      const ta = document.createElement('textarea');
+      ta.value = s;
+      Object.assign(ta.style, { position: 'fixed', opacity: '0', left: '0', top: '0' });
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      ta.remove();
+    }
+    toast(done);
+  }
+
   async function api(path, opts) {
     const r = await fetch(path, opts);
     if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
@@ -177,7 +193,15 @@
       removeEventListener('pointerdown', off, true);
       entries[+b.dataset.i].run();
     };
-    m.onkeydown = (e) => { if (e.key === 'Escape') { e.stopPropagation(); m.remove(); removeEventListener('pointerdown', off, true); anchor.focus?.(); } };
+    // its keys stay in it (Space and Enter press an entry, not the viewer's shortcuts); arrows move
+    m.onkeydown = (e) => {
+      e.stopPropagation();
+      if (e.key === 'Escape') { m.remove(); removeEventListener('pointerdown', off, true); anchor.focus?.(); return; }
+      if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+      e.preventDefault();
+      const bs = $$('[data-i]', m), i = bs.indexOf(document.activeElement);
+      bs[(i + (e.key === 'ArrowDown' ? 1 : bs.length - 1)) % bs.length]?.focus();
+    };
     $('[data-i]', m)?.focus({ preventScroll: true });
   }
 
@@ -904,6 +928,7 @@
       document.body.classList.remove('locked');
       this.mark?.end();
       $('#pop')?.remove();
+      $('.adm-menu')?.remove();
       if (FS.auto) FS.exit();
       if (!fromPop) history.back();
       if (this.it) S.gallery?.scrollToItem(this.it.id);
@@ -922,6 +947,7 @@
       this.mark?.end();
       this.resetZoom();
       $('#pop')?.remove();
+      $('.adm-menu')?.remove(); // its entries were for the photo before
       const m = this.media;
       m.innerHTML = '';
       if (it.k === 2) {
@@ -950,8 +976,6 @@
       $('#vLive').hidden = !it.lv;
       $('#vFav').classList.toggle('on', !!it.f);
       $('#vFav').innerHTML = icon('heart', it.f ? 'fill' : '');
-      $('#vDl').href = `/o/${it.id}?dl=1`;
-      $('#vPrint').hidden = it.k === 2;
       $('#vPrev').hidden = this.i === 0;
       $('#vNext').hidden = this.i >= this.list.length - 1;
       $('#vTitle').innerHTML = `<b>${fmtLong(it.t)}</b><span>${[it.ap ? t('ungefähr') : fmtTime(it.t), it.p, t('{i} von {n}', { i: num(this.i + 1), n: num(this.list.length) })].filter(Boolean).map(esc).join(' · ')}</span>`;
@@ -1197,6 +1221,22 @@
         user && ['eye-off', f.person ? t('Nicht diese Person') : t('Ausblenden'), () => this.saveFace(f, '')],
         user && ['face-x', t('Kein Gesicht'), () => this.saveFace(f, '-')],
       ].filter(Boolean));
+    },
+
+    // sharing, the original and printing: one button, its menu. The link opens this photo in the
+    // gallery (for whoever may see it there); "Teilen …" uses the device's own sharing
+    // (WhatsApp, mail, …) where the browser has it.
+    shareMenu(anchor) {
+      const it = this.it, d = this.detail;
+      if (!it) return;
+      const url = `${location.origin}${location.pathname}#/fotos%7C${it.id}`; // "|" encoded: chat apps keep the whole link
+      menu(anchor, [
+        ...(navigator.share ? [{ icon: 'share', label: t('Teilen …'), run: () => navigator.share({ title: d?.name || document.title, url }).catch(() => {}) }] : []),
+        { icon: 'chat', label: t('Per WhatsApp senden'), run: () => window.open(`https://wa.me/?text=${encodeURIComponent(url)}`, '_blank', 'noopener') },
+        { icon: 'link', label: t('Link kopieren'), run: () => copyText(url, t('Link kopiert')) },
+        { icon: 'download', label: t('Original herunterladen'), run: () => { location.href = `/o/${it.id}?dl=1`; } },
+        ...(it.k === 2 ? [] : [{ icon: 'print', label: t('Drucken'), run: () => printItem(it, d) }]),
+      ]);
     },
 
     // shows a face's box in the picture for a moment (a video: at the second it was found at)
@@ -1701,7 +1741,7 @@
     $('#vFaces').onclick = () => { V.showFaces = !V.showFaces; V.drawFaces(); };
     $('#vFav').onclick = () => V.toggleFav();
     $('#vPlay').onclick = () => (V.slideT ? V.stopSlides() : V.startSlides());
-    $('#vPrint').onclick = () => printItem(V.it, V.detail);
+    $('#vShare').onclick = (e) => V.shareMenu(e.currentTarget);
     $('#vStrip').onclick = (e) => { const b = e.target.closest('[data-j]'); if (b) { V.i = +b.dataset.j; V.step(0); } };
     const live = $('#vLive');
     live.onpointerenter = () => V.playLive(false);
@@ -2032,7 +2072,7 @@
   }
   function routeBase() {
     const h = location.hash.slice(1) || '/fotos';
-    return h.split('|')[0];
+    return h.split(/\||%7C/i)[0]; // a shared link has the "|" encoded
   }
   function currentQuery() { return route.view === 'suche' ? route.arg : ''; }
 
