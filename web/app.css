@@ -1370,3 +1370,28 @@ body.selecting:has(#selbar:not([hidden])) .toast { bottom: calc(var(--selh, 0px)
 #sideToggle { position: absolute; top: 18px; right: 10px; color: var(--muted); }
 body.side-mini #sideToggle { position: static; margin: -6px auto 10px; }
 @media (max-width: 720px) { .selbar.page .btn.pg { flex: 1 1 0; } } /* a page's few actions share the row */
+/* --- changes (admins): a timeline with undo -------------------------------------------- */
+.hx { display: grid; gap: 2px; max-width: 980px; padding-bottom: 24px; }
+.hx-day { margin: 18px 0 6px; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--faint); }
+.hx-row { display: grid; grid-template-columns: 34px 1fr auto; gap: 12px; align-items: start; padding: 10px 12px; border-radius: 12px; background: var(--surface); border: 1px solid var(--line); }
+.hx-row + .hx-row { margin-top: 6px; }
+.hx-row.undone { opacity: .6; }
+.hx-row.undone .hx-t { text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--muted) 70%, transparent); }
+.hx-ic { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 50%; background: var(--surface2); color: var(--muted); }
+.hx-ic .i { width: 18px; height: 18px; }
+.hx-main { min-width: 0; display: grid; gap: 4px; }
+.hx-t { line-height: 1.4; overflow-wrap: anywhere; }
+.hx-t b.sys { color: var(--accent); }
+.hx-meta { font-size: 12.5px; color: var(--muted); }
+.hx-thumbs { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.hx-th { display: grid; place-items: center; width: 52px; height: 52px; border-radius: 8px; overflow: hidden; background: var(--tile); color: var(--muted); font-size: 12px; font-weight: 600; }
+.hx-th img { width: 100%; height: 100%; object-fit: cover; }
+.hx-names { font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
+.hx-row > .btn { align-self: center; }
+.hx-more { display: flex; justify-content: center; padding: 8px 0 40px; }
+@media (max-width: 720px) {
+  .hx-row { grid-template-columns: 30px 1fr; padding: 10px; }
+  .hx-ic { width: 30px; height: 30px; }
+  .hx-row > .btn { grid-column: 2; justify-self: start; }
+  .hx-th { width: 44px; height: 44px; }
+}

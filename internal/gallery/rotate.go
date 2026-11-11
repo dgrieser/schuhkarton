@@ -75,6 +75,13 @@ func orientWritable(ext string) bool {
 // everything else keeps the rotation in Schuhkarton (thumbnails and
 // previews are turned, the original stays as it is).
 func (l *Library) Rotate(ids []string, deg int, by string) (EditResult, error) {
+	return l.RotateAs(ids, deg, by, nil)
+}
+
+// RotateAs rotates like Rotate; with rec the rotation is kept in the history
+// (rec gives what for) in the same locked step. Undone by turning back, which
+// it offers only when every file turned.
+func (l *Library) RotateAs(ids []string, deg int, by string, rec *Change) (EditResult, error) {
 	var res EditResult
 	deg = ((deg % 360) + 360) % 360
 	if deg == 0 || deg%90 != 0 {
@@ -154,6 +161,16 @@ func (l *Library) Rotate(ids []string, deg int, by string) (EditResult, error) {
 		return res, err
 	}
 	l.refresh(changed)
+	if rec != nil && res.Changed > 0 {
+		c := *rec
+		c.Kind, c.By, c.Items, c.Names = ChRotate, by, ids, l.Names(ids)
+		c.Info = map[string]any{"deg": deg}
+		var undo any
+		if len(res.Warnings) == 0 {
+			undo = map[string]int{"deg": deg}
+		}
+		l.Record(c, undo)
+	}
 	return res, nil
 }
 

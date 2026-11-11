@@ -540,6 +540,7 @@ func (l *Library) moveByRules(moves []RuleMove, by string) EditResult {
 	var res EditResult
 	favs, idMap := map[string]string{}, map[string]string{}
 	var changed []*Item
+	var froms []MoveFrom // for the history: where they were
 	from := map[string]bool{}
 	for _, m := range moves {
 		it := l.Get(m.ID)
@@ -556,6 +557,7 @@ func (l *Library) moveByRules(moves []RuleMove, by string) EditResult {
 			dirs[filepath.Dir(l.Path(x))] = true
 		}
 		warned := len(res.Warnings)
+		froms = append(froms, l.moveFrom(g[0][0]))
 		moved, err := l.moveGroup(g[0], m.root, m.dir, favs, idMap, &res)
 		if err != nil {
 			res.warn("%s: %v", path.Base(m.rel), err)
@@ -573,6 +575,9 @@ func (l *Library) moveByRules(moves []RuleMove, by string) EditResult {
 	}
 	if len(changed) > 0 {
 		l.finishMoves(favs, idMap, changed)
+		if back, ids := MovedTo(froms, idMap); len(ids) > 0 {
+			l.Record(Change{By: by, Kind: ChMove, Items: ids, Names: l.Names(ids), Info: map[string]any{"rules": true, "n": len(ids)}}, back)
+		}
 	} else {
 		l.saveEdits()
 	}

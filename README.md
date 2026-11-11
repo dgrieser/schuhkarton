@@ -301,6 +301,14 @@ Admins see extra buttons in the viewer (also keys **E** edit, **R** rotate,
 - **Delete** moves files to the trash (`<folder>/.schuhkarton-papierkorb/`),
   with undo. *Papierkorb* in the sidebar restores them or deletes them for
   good; the trash empties itself after `library.trash_days`.
+- **Änderungen** (sidebar) lists every change of the last `library.trash_days`
+  days, newest first: edits, rotations, deletions, moves (also by the filing
+  rules), face names, notes, marks, favorites and requests to describe or
+  recognize again — by whom, or by Schuhkarton itself. Each can be undone
+  while its old state is still there: a deletion comes back from the trash,
+  a rotation turns back, a move goes back to the old folder. Nothing is
+  copied for this; only the values before are kept (`history.jsonl` in the
+  cache). Older changes are forgotten and cannot be undone.
 
 With `library.write_files` on (the default), edits are also written into the
 files with exiftool (dates, GPS, `XMP-dc:Description`, `XMP-photoshop:City`
@@ -616,7 +624,7 @@ library:
   folder_meta: true           # read date, place and category from folder names like 2019/06 Juni Ort
   write_files: true           # write admin edits into the files (exiftool); false: cache only
   write_metadata: true        # write descriptions, keywords, texts and names into the files' XMP
-  trash_days: 30              # empty the trash after this many days; 0: never
+  trash_days: 30              # empty the trash and forget changes after this many days; 0: never empty it (changes: a year)
   documents: [Dokumente, Documents, Scans, Belege]  # folders whose files are documents
   import:                     # import folder (see "Import folder")
     dir: ""                   # e.g. /home/me/Import; empty: none

@@ -129,8 +129,16 @@ func (l *Library) speechOf(it *Item) *SpeechInfo {
 	return &cp
 }
 
-func (l *Library) setSpeech(it *Item, s *SpeechInfo) {
+func (l *Library) setSpeech(it *Item, s *SpeechInfo) bool { return l.storeSpeech(it, s, false) }
+
+// storeSpeech keeps a result (false: dropped); force: also over one an undo put back (which
+// a job that was running meanwhile does not replace: checked under the same lock).
+func (l *Library) storeSpeech(it *Item, s *SpeechInfo, force bool) bool {
 	l.speech.mu.Lock()
+	if !force && l.recognizedPinned(ChSpeech, it) {
+		l.speech.mu.Unlock()
+		return false
+	}
 	l.speech.items[l.favKey(it)] = s
 	l.speech.mu.Unlock()
 	l.speech.ver.Add(1)
@@ -138,6 +146,7 @@ func (l *Library) setSpeech(it *Item, s *SpeechInfo) {
 	if it.Kind == Video {
 		l.kickAISoon() // its description may wait for the words
 	}
+	return true
 }
 
 // renameSpeech moves texts to new keys ("" drops them).
@@ -162,6 +171,7 @@ func (l *Library) renameSpeech(pairs map[string]string) {
 
 // Retranscribe forgets what was heard in ids, so it is recognized again.
 func (l *Library) Retranscribe(ids []string) int {
+	l.unpinRecognized(ChSpeech, ids)
 	n := 0
 	var videos []*Item
 	l.speech.mu.Lock()
@@ -318,8 +328,11 @@ func (l *Library) transcribeOne(ctx context.Context, it *Item) error {
 		}
 		return fail(err)
 	}
-	l.setSpeech(it, s)
-	l.search.updateText(it.ID, it.Desc, l.ocrSearchText(it), s.Text)
+	l.recogPub.Lock()       // stored and searched together, not torn apart by an undo
+	if l.setSpeech(it, s) { // not over one an undo put back
+		l.search.updateText(it.ID, it.Desc, l.ocrSearchText(it), s.Text)
+	}
+	l.recogPub.Unlock()
 	j.handled(false, 0)
 	l.kickXMP()
 	return nil

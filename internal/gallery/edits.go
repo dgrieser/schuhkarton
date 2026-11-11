@@ -46,6 +46,12 @@ type Edit struct {
 	Desc     *string
 	GPS      *GPSEdit
 	By       string // account name, for the record
+	// Record keeps the change in the history with this description, together
+	// with the values before (taken while the change is made).
+	Record map[string]any
+	// Alone changes only these items, not their Live Photo videos too (undo
+	// puts each file back on its own).
+	Alone bool
 }
 
 // EditResult reports what an admin operation did.
@@ -211,8 +217,24 @@ func (l *Library) EditItems(ids []string, e Edit) (EditResult, error) {
 	l.opMu.Lock()
 	defer l.opMu.Unlock()
 	items, companion := l.withLive(ids)
+	if e.Alone {
+		items, companion = nil, map[string]bool{}
+		for _, id := range ids {
+			if it := l.Get(id); it != nil {
+				items = append(items, it)
+			}
+		}
+	}
 	if len(items) == 0 {
 		return res, errors.New("keine Elemente")
+	}
+	var before []EditBefore
+	var names []string
+	if e.Record != nil {
+		before = l.editBefores(items, companion, e)
+		for _, it := range items {
+			names = append(names, path.Base(it.Rel))
+		}
 	}
 	trim := func(p *string) *string {
 		if p == nil {
@@ -318,6 +340,14 @@ func (l *Library) EditItems(ids []string, e Edit) (EditResult, error) {
 	}
 	l.refresh(items)
 	l.editGen.Add(1)
+	if e.Record != nil && res.Changed > 0 {
+		var changed []string
+		for _, it := range items {
+			changed = append(changed, it.ID)
+		}
+		// before the filing below: a move then takes the change along
+		l.Record(Change{By: e.By, Kind: ChEdit, Items: changed, Names: names, Info: e.Record}, before)
+	}
 	// filing follows what the folders are made of: date, place, category
 	if e.Taken != nil || e.Shift != 0 || place != nil || cat != nil {
 		var ids2 []string

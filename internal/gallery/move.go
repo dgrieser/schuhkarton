@@ -245,6 +245,13 @@ func (l *Library) relocate(it *Item, ri int, rel string, favs, ids map[string]st
 // folder of a root. Names that are taken get " (2)". The folder may be new;
 // Schuhkarton imposes no layout.
 func (l *Library) Move(ids []string, root, dir string) (EditResult, error) {
+	return l.MoveAs(ids, root, dir, nil)
+}
+
+// MoveAs moves like Move; with rec the move is kept in the history (rec gives
+// who and what for), together with where the files were, in the same locked
+// step, so a move right after it cannot slip in between.
+func (l *Library) MoveAs(ids []string, root, dir string, rec *Change) (EditResult, error) {
 	var res EditResult
 	ri, d, err := l.cleanDir(root, dir)
 	if err != nil {
@@ -252,6 +259,10 @@ func (l *Library) Move(ids []string, root, dir string) (EditResult, error) {
 	}
 	l.opMu.Lock()
 	defer l.opMu.Unlock()
+	var froms []MoveFrom
+	if rec != nil {
+		froms = l.MoveFroms(ids)
+	}
 	favs, idMap := map[string]string{}, map[string]string{}
 	var changed []*Item
 	for _, g := range l.groups(ids) {
@@ -263,43 +274,99 @@ func (l *Library) Move(ids []string, root, dir string) (EditResult, error) {
 	}
 	l.finishMoves(favs, idMap, changed)
 	res.IDs = idMap
+	if back, moved := MovedTo(froms, idMap); rec != nil && len(moved) > 0 {
+		c := *rec
+		c.Kind, c.Items, c.Names = ChMove, moved, l.Names(moved)
+		if c.Info == nil {
+			c.Info = map[string]any{}
+		}
+		c.Info["n"] = len(moved)
+		l.Record(c, back)
+	}
+	return res, nil
+}
+
+// MoveBack moves items back to where they were (undo of a move), under
+// their names then when those are free.
+func (l *Library) MoveBack(froms []MoveFrom) (EditResult, error) {
+	var res EditResult
+	l.opMu.Lock()
+	defer l.opMu.Unlock()
+	favs, idMap := map[string]string{}, map[string]string{}
+	var changed []*Item
+	for _, f := range froms {
+		ri, d, err := l.cleanDir(f.Root, f.Dir)
+		if err != nil {
+			res.warn("%s: %v", f.Name, err)
+			continue
+		}
+		gs := l.groups([]string{f.ID})
+		if len(gs) == 0 { // in the trash meanwhile: the undo stays open for it
+			res.warn("%s: nicht da (im Papierkorb?)", f.Name)
+			continue
+		}
+		for _, g := range gs {
+			moved, err := l.moveGroupAs(g, ri, d, f.Name, favs, idMap, &res)
+			if err != nil {
+				res.warn("%s: %v", f.Name, err)
+				continue
+			}
+			changed = append(changed, moved...)
+		}
+	}
+	if len(changed) > 0 {
+		l.finishMoves(favs, idMap, changed)
+	}
+	res.IDs = idMap
 	return res, nil
 }
 
 // moveGroup moves one photo with its Live Photo video (or a single file)
 // into folder d of root ri. The caller holds opMu and calls finishMoves.
 func (l *Library) moveGroup(g []*Item, ri int, d string, favs, idMap map[string]string, res *EditResult) ([]*Item, error) {
+	return l.moveGroupAs(g, ri, d, "", favs, idMap, res)
+}
+
+// moveGroupAs moves like moveGroup; name (without extension) is the name the
+// files get when it is free ("": the one they have).
+func (l *Library) moveGroupAs(g []*Item, ri int, d, name string, favs, idMap map[string]string, res *EditResult) ([]*Item, error) {
 	lead := g[0]
 	cur := path.Dir(lead.Rel)
 	if cur == "." {
 		cur = ""
 	}
-	if lead.Root == ri && cur == d {
+	base := path.Base(lead.Rel)
+	if lead.Root == ri && cur == d && (name == "" || strings.TrimSuffix(base, path.Ext(base)) == name) {
 		return nil, nil // already there
 	}
 	target := filepath.Join(l.opt.Roots[ri].Path, filepath.FromSlash(d))
 	if err := os.MkdirAll(target, 0o755); err != nil {
 		return nil, err
 	}
-	base := path.Base(lead.Rel)
 	stem := strings.TrimSuffix(base, path.Ext(base))
+	if name != "" {
+		stem = name
+	}
 	var exts []string
 	for _, it := range g {
 		exts = append(exts, path.Ext(it.Rel))
 	}
 	stem = freeStem(target, stem, exts)
+	if name != "" && stem != name && lead.Root == ri && cur == d {
+		return nil, nil // in its folder, and its old name is taken: it stays as it is
+	}
 	var moved []*Item
 	for i, it := range g {
 		if i > 0 && strings.TrimSuffix(path.Base(it.Rel), path.Ext(it.Rel)) != strings.TrimSuffix(base, path.Ext(base)) {
 			// a companion with another name keeps its own
 			stem = freeStem(target, strings.TrimSuffix(path.Base(it.Rel), path.Ext(it.Rel)), []string{path.Ext(it.Rel)})
 		}
-		name := stem + path.Ext(it.Rel)
-		rel := name
+		file := stem + path.Ext(it.Rel)
+		rel := file
 		if d != "" {
-			rel = d + "/" + name
+			rel = d + "/" + file
 		}
-		if err := moveWithSidecars(l.Path(it), filepath.Join(target, name)); err != nil {
+		if err := moveWithSidecars(l.Path(it), filepath.Join(target, file)); err != nil {
 			res.warn("%s: %v", path.Base(it.Rel), err)
 			if i == 0 {
 				break // keep the pair together
@@ -319,7 +386,9 @@ func (l *Library) finishMoves(favs, idMap map[string]string, changed []*Item) {
 	l.renameEdits(favs)
 	l.saveEdits()
 	l.RenameKeys(favs)
+	l.renamePins(favs)
 	l.people.renameLabelItems(idMap)
+	l.hist.rename(idMap) // the changes kept follow the items
 	l.refresh(changed)
 	l.recluster()
 	l.bump()

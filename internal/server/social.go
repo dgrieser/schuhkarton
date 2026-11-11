@@ -2,6 +2,7 @@ package server
 
 import (
 	"net/http"
+	"path"
 
 	"github.com/dgrieser/schuhkarton/internal/gallery"
 )
@@ -46,10 +47,16 @@ func (s *Server) setMarks(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "ungültige Anfrage", http.StatusBadRequest)
 		return
 	}
-	n, err := s.lib.SetMarks(userName(r), req.IDs, req.On)
+	user := userName(r)
+	changing := s.lib.Changing(req.IDs, req.On, func(it *gallery.Item) bool { return s.lib.IsMarked(user, it) })
+	n, err := s.lib.SetMarks(user, req.IDs, req.On)
 	if err != nil {
 		writeJSON(w, r, map[string]any{"ok": false, "error": err.Error()})
 		return
+	}
+	if len(changing) > 0 {
+		s.lib.Record(gallery.Change{By: user, Kind: gallery.ChMark, Items: changing, Names: s.lib.Names(changing), Info: map[string]any{"on": req.On, "n": len(changing)}},
+			gallery.ToggleUndo{User: user, On: req.On})
 	}
 	writeJSON(w, r, map[string]any{"ok": true, "changed": n})
 }
@@ -66,10 +73,14 @@ func (s *Server) adminClearMarks(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "ungültige Anfrage", http.StatusBadRequest)
 		return
 	}
+	before := s.lib.MarksOf(req.IDs)
 	n, err := s.lib.ClearMarks(req.IDs)
 	if err != nil {
 		writeJSON(w, r, map[string]any{"ok": false, "error": err.Error()})
 		return
+	}
+	if n > 0 {
+		s.lib.Record(gallery.Change{By: userName(r), Kind: gallery.ChUnmarkAll, Items: req.IDs, Names: s.lib.Names(req.IDs), Info: map[string]any{"n": n}}, before)
 	}
 	writeJSON(w, r, map[string]any{"ok": true, "changed": n})
 }
@@ -98,7 +109,12 @@ func (s *Server) addNote(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	n, err := s.lib.AddNote(userName(r), r.PathValue("id"), text)
+	id := r.PathValue("id")
+	n, err := s.lib.AddNote(userName(r), id, text)
+	if err == nil {
+		s.lib.Record(gallery.Change{By: userName(r), Kind: gallery.ChNote, Items: []string{id}, Names: s.lib.Names([]string{id}), Info: map[string]any{"op": "add", "text": clip(n.Text, 120)}},
+			gallery.NoteUndo{Op: "add", Item: id, Note: n.ID, User: n.User})
+	}
 	s.noteResult(w, r, n, err)
 }
 
@@ -107,15 +123,24 @@ func (s *Server) updateNote(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	n, err := s.lib.UpdateNote(userName(r), r.PathValue("id"), r.PathValue("note"), text)
+	id, nid := r.PathValue("id"), r.PathValue("note")
+	n, old, err := s.lib.UpdateNoteWas(userName(r), id, nid, text)
+	if err == nil {
+		s.lib.Record(gallery.Change{By: userName(r), Kind: gallery.ChNote, Items: []string{id}, Names: s.lib.Names([]string{id}), Info: map[string]any{"op": "edit", "text": clip(n.Text, 120)}},
+			gallery.NoteUndo{Op: "edit", Item: id, Note: nid, User: old.User, Text: old.Text})
+	}
 	s.noteResult(w, r, n, err)
 }
 
 func (s *Server) deleteNote(w http.ResponseWriter, r *http.Request) {
-	if err := s.lib.DeleteNote(userName(r), isAdmin(r), r.PathValue("id"), r.PathValue("note")); err != nil {
+	id, nid := r.PathValue("id"), r.PathValue("note")
+	old, err := s.lib.DeleteNoteWas(userName(r), isAdmin(r), id, nid)
+	if err != nil {
 		writeJSON(w, r, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
+	s.lib.Record(gallery.Change{By: userName(r), Kind: gallery.ChNote, Items: []string{id}, Names: s.lib.Names([]string{id}), Info: map[string]any{"op": "delete", "text": clip(old.Text, 120), "of": old.User}},
+		gallery.NoteUndo{Op: "delete", Item: id, User: old.User, Text: old.Text, Was: &old})
 	writeJSON(w, r, map[string]any{"ok": true})
 }
 
@@ -143,6 +168,19 @@ func (s *Server) adminResolveDupes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	res, freed, err := s.lib.ResolveDupes(req.Groups, userName(r))
+	if len(res.Entries) > 0 {
+		var names []string
+		pick := map[string]bool{}
+		for _, e := range res.Entries {
+			pick[e] = true
+		}
+		for _, e := range s.lib.TrashList() {
+			if pick[e.ID] {
+				names = append(names, path.Base(e.Rel))
+			}
+		}
+		s.lib.Record(gallery.Change{By: userName(r), Kind: gallery.ChDelete, Names: names, Info: map[string]any{"n": len(res.Entries), "dupes": true}}, res.Entries)
+	}
 	if err != nil {
 		writeJSON(w, r, map[string]any{"ok": false, "error": err.Error(), "warnings": res.Warnings})
 		return

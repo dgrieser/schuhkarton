@@ -150,12 +150,21 @@ func (l *Library) ocrOf(it *Item) *OCRInfo {
 	return &cp
 }
 
-func (l *Library) setOCR(it *Item, o *OCRInfo) {
+func (l *Library) setOCR(it *Item, o *OCRInfo) bool { return l.storeOCR(it, o, false) }
+
+// storeOCR keeps a result (false: dropped); force: also over one an undo put back (which
+// a job that was running meanwhile does not replace: checked under the same lock).
+func (l *Library) storeOCR(it *Item, o *OCRInfo, force bool) bool {
 	l.ocr.mu.Lock()
+	if !force && l.recognizedPinned(ChOCR, it) {
+		l.ocr.mu.Unlock()
+		return false
+	}
 	l.ocr.items[l.favKey(it)] = o
 	l.ocr.mu.Unlock()
 	l.ocr.ver.Add(1)
 	l.markOCRDirty()
+	return true
 }
 
 // renameOCR moves texts to new keys ("" drops them).
@@ -182,6 +191,7 @@ func (l *Library) renameOCR(pairs map[string]string) {
 // outside the job's scope (a photo moved out of the documents folders) keep
 // theirs: the job would not read them again.
 func (l *Library) Rerecognize(ids []string) int {
+	l.unpinRecognized(ChOCR, ids)
 	n := 0
 	l.ocr.mu.Lock()
 	for _, id := range ids {
@@ -293,8 +303,11 @@ func (l *Library) recognizeOne(ctx context.Context, it *Item) error {
 		j.handled(true, 0)
 		return nil
 	}
-	l.setOCR(it, o)
-	l.search.updateText(it.ID, it.Desc, o.Text, l.SpeechText(it))
+	l.recogPub.Lock()    // stored and searched together, not torn apart by an undo
+	if l.setOCR(it, o) { // not over one an undo put back
+		l.search.updateText(it.ID, it.Desc, o.Text, l.SpeechText(it))
+	}
+	l.recogPub.Unlock()
 	l.kickXMP()
 	tokens, failed, err := l.translateOCR(ctx, it, o)
 	if err != nil {
@@ -321,9 +334,11 @@ func (l *Library) translateOCR(ctx context.Context, it *Item, o *OCRInfo) (token
 		l.logf("translate %s: %v", it.Rel, err)
 		tr = ocrTranslation{model: l.ocrTr.opt.Model, err: err.Error(), tokens: tr.tokens}
 	}
+	l.recogPub.Lock() // stored and searched together, not torn apart by an undo
 	if l.setTranslation(it, o, tr) && tr.err == "" {
 		l.search.updateText(it.ID, it.Desc, l.ocrSearchText(it), l.SpeechText(it))
 	}
+	l.recogPub.Unlock()
 	return tr.tokens, tr.err != "", nil
 }
 
@@ -333,6 +348,8 @@ func (l *Library) setTranslation(it *Item, base *OCRInfo, tr ocrTranslation) boo
 	key := l.favKey(it)
 	l.ocr.mu.Lock()
 	cur := l.ocr.items[key]
+	// only a translation of the text stored now (also one an undo put back: it
+	// is that very text)
 	ok := cur.ok() && cur.At == base.At && cur.Text == base.Text
 	if ok {
 		n := *cur

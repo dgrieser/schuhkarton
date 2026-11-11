@@ -142,41 +142,56 @@ func (l *Library) findNote(itemID, noteID string) (string, int) {
 
 // UpdateNote changes the text of one's own note.
 func (l *Library) UpdateNote(user string, itemID, noteID, text string) (Note, error) {
-	text, err := cleanNote(text)
+	n, _, err := l.UpdateNoteWas(user, itemID, noteID, text)
+	return n, err
+}
+
+// UpdateNoteWas changes a note like UpdateNote and also returns it as it was
+// (read in the same step, for undo).
+func (l *Library) UpdateNoteWas(user string, itemID, noteID, text string) (now, was Note, err error) {
+	text, err = cleanNote(text)
 	if err != nil {
-		return Note{}, err
+		return Note{}, Note{}, err
 	}
+	l.notes.mu.Lock()
+	k, i := l.findNote(itemID, noteID)
+	if i < 0 {
+		l.notes.mu.Unlock()
+		return Note{}, Note{}, ErrNoteMissing
+	}
+	n := l.notes.items[k][i]
+	if n.User != user {
+		l.notes.mu.Unlock()
+		return Note{}, Note{}, ErrNoteNotYours
+	}
+	was = *n
+	n.Text, n.Edited = text, nowUnix()
+	err = l.saveNotes()
+	now = *n
+	l.notes.mu.Unlock()
+	l.notesChanged()
+	return now, was, err
+}
+
+// DeleteNote removes a note: one's own, or any for admins.
+func (l *Library) DeleteNote(user string, admin bool, itemID, noteID string) error {
+	_, err := l.DeleteNoteWas(user, admin, itemID, noteID)
+	return err
+}
+
+// DeleteNoteWas removes a note like DeleteNote and returns it (for undo).
+func (l *Library) DeleteNoteWas(user string, admin bool, itemID, noteID string) (Note, error) {
 	l.notes.mu.Lock()
 	k, i := l.findNote(itemID, noteID)
 	if i < 0 {
 		l.notes.mu.Unlock()
 		return Note{}, ErrNoteMissing
 	}
-	n := l.notes.items[k][i]
-	if n.User != user {
+	if l.notes.items[k][i].User != user && !admin {
 		l.notes.mu.Unlock()
 		return Note{}, ErrNoteNotYours
 	}
-	n.Text, n.Edited = text, nowUnix()
-	err = l.saveNotes()
-	cp := *n
-	l.notes.mu.Unlock()
-	l.notesChanged()
-	return cp, err
-}
-
-// DeleteNote removes a note: one's own, or any for admins.
-func (l *Library) DeleteNote(user string, admin bool, itemID, noteID string) error {
-	l.notes.mu.Lock()
-	k, i := l.findNote(itemID, noteID)
-	if i < 0 {
-		l.notes.mu.Unlock()
-		return ErrNoteMissing
-	}
-	if l.notes.items[k][i].User != user && !admin {
-		l.notes.mu.Unlock()
-		return ErrNoteNotYours
-	}
+	was := *l.notes.items[k][i]
 	list := l.notes.items[k]
 	list = append(list[:i:i], list[i+1:]...)
 	if len(list) == 0 {
@@ -187,7 +202,7 @@ func (l *Library) DeleteNote(user string, admin bool, itemID, noteID string) err
 	err := l.saveNotes()
 	l.notes.mu.Unlock()
 	l.notesChanged()
-	return err
+	return was, err
 }
 
 // NoteCount returns how many notes an item has.

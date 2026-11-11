@@ -266,8 +266,11 @@ func (l *Library) describeVideo(ctx context.Context, it *Item) (done bool, err e
 		}
 		return true, nil
 	}
-	l.setAI(it, info)
-	l.search.updateAI(it.ID, info)
+	l.recogPub.Lock()      // stored and searched together, not torn apart by an undo
+	if l.setAI(it, info) { // not over one an undo put back
+		l.search.updateAI(it.ID, info)
+	}
+	l.recogPub.Unlock()
 	j.handled(false, info.Tokens)
 	l.kickXMP()
 	return true, nil
