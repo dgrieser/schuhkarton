@@ -494,7 +494,7 @@ func (l *Library) xmpTask() jobTask {
 			return false, false
 		},
 		one:  l.writeXMPOne,
-		save: l.closeXMPTools,
+		save: func() error { l.closeXMPTools(); return nil },
 		// the target is what is read and written (a sidecar: not the
 		// original); its tries go through nasretry.DoFile, so after the
 		// pause a file with one strike is tried again

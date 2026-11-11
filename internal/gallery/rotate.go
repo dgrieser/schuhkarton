@@ -89,6 +89,13 @@ func (l *Library) RotateAs(ids []string, deg int, by string, rec *Change) (EditR
 	}
 	l.opMu.Lock()
 	defer l.opMu.Unlock()
+	return l.rotateLocked(ids, deg, by, rec)
+}
+
+// rotateLocked rotates like RotateAs (deg is 90, 180 or 270); the caller
+// holds opMu.
+func (l *Library) rotateLocked(ids []string, deg int, by string, rec *Change) (EditResult, error) {
+	var res EditResult
 	var changed []*Item
 	for _, id := range ids {
 		it := l.Get(id)
@@ -149,6 +156,12 @@ func (l *Library) RotateAs(ids []string, deg int, by string, rec *Change) (EditR
 		// a Live Photo's video turns along, or it would play sideways over the photo
 		if it.LiveVideo != "" {
 			if lv := l.Get(it.LiveVideo); lv != nil {
+				if !written { // the photo's turn kept first: a kill in between turns the video once
+					if err := l.saveEdits(); err != nil {
+						res.warn("%s: %v", path.Base(it.Rel), err)
+						continue
+					}
+				}
 				if err := l.rotateVideo(lv, deg); err != nil {
 					res.warn("%s: %v", path.Base(lv.Rel), err)
 				} else {

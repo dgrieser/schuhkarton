@@ -129,7 +129,7 @@
         ? t('{n} Gruppen bereinigt · {s} frei', { n: num(groups.length), s: size(r.freed) })
         : t('{n} in den Papierkorb · {s} frei', { n: num(r.changed), s: size(r.freed) }),
     t('Rückgängig'), async () => {
-      const u = await ui.call('/api/admin/trash/restore', { ids: entries });
+      const u = await ui.call('/api/trash/restore', { ids: entries });
       if (!u) return;
       toast(t('Wiederhergestellt'));
       await SK.loadItems();

@@ -1569,12 +1569,21 @@ func (l *Library) mergeInto(keep *Item, rem []*Item, by string, res *EditResult)
 		}
 	}
 
-	// notes (the removed copies keep theirs for a restore)
+	// notes (the removed copies keep theirs for a restore); each once, also
+	// when this runs again after a restart
 	l.notes.mu.Lock()
 	nk := l.favKey(keep)
 	copied := false
+	have := map[string]bool{}
+	for _, n := range l.notes.items[nk] {
+		have[n.ID] = true
+	}
 	for _, it := range rem {
 		for _, n := range l.notes.items[l.favKey(it)] {
+			if have[n.ID] {
+				continue
+			}
+			have[n.ID] = true
 			cp := *n
 			l.notes.items[nk] = append(l.notes.items[nk], &cp)
 			copied = true

@@ -259,6 +259,13 @@ func (l *Library) MoveAs(ids []string, root, dir string, rec *Change) (EditResul
 	}
 	l.opMu.Lock()
 	defer l.opMu.Unlock()
+	return l.moveLocked(ids, ri, d, rec)
+}
+
+// moveLocked moves like MoveAs into folder d of root ri (cleaned); the caller
+// holds opMu.
+func (l *Library) moveLocked(ids []string, ri int, d string, rec *Change) (EditResult, error) {
+	var res EditResult
 	var froms []MoveFrom
 	if rec != nil {
 		froms = l.MoveFroms(ids)
@@ -389,6 +396,8 @@ func (l *Library) finishMoves(favs, idMap map[string]string, changed []*Item) {
 	l.renamePins(favs)
 	l.people.renameLabelItems(idMap)
 	l.hist.rename(idMap) // the changes kept follow the items
+	l.noteMoves(idMap)   // so does work in the queue
+	l.moveUrgent(idMap)
 	l.refresh(changed)
 	l.recluster()
 	l.bump()

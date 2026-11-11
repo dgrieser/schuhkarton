@@ -24,6 +24,8 @@ type remoteJob struct {
 	done, todo, fail, tokens atomic.Int64
 	paused                   atomic.Int64 // unix time the job waits until after a busy service; 0 while it runs
 	rate                     jobRate
+	urgent                   urgentSet     // files asked for by hand: not waiting for the window (urgent.go)
+	urgentWake               chan struct{} // a job waiting for its window looks at urgent work
 }
 
 // jobTask is what a job works on.
@@ -36,7 +38,7 @@ type jobTask struct {
 	// one works on one file. It returns an error only when the whole pass
 	// has to stop (service problems); problems with the file are recorded.
 	one  func(ctx context.Context, it *Item) error
-	save func()
+	save func() error // keeps the results (an error: they are not kept)
 	// first, when set, is asked once per pass for a test that puts the
 	// files it returns true for at the front (cheap ones first:
 	// descriptions of photos with a large preview)
@@ -105,6 +107,15 @@ func (l *Library) jobLoop(ctx context.Context, j *remoteJob, t jobTask) {
 	backoff := time.Minute
 	timer := time.NewTimer(3 * time.Second) // thumbnails first
 	defer timer.Stop()
+	// urgent work that failed (the service down for a moment) is tried again
+	// outside the window, waiting longer each time
+	urgentBackoff := time.Minute
+	var urgentRetry *time.Timer
+	defer func() {
+		if urgentRetry != nil {
+			urgentRetry.Stop()
+		}
+	}()
 	j.rate.begin(time.Now())
 	for {
 		select {
@@ -115,21 +126,65 @@ func (l *Library) jobLoop(ctx context.Context, j *remoteJob, t jobTask) {
 		}
 		win := l.window(j.kind)
 		if !win.Open(time.Now()) {
+			if j.hasUrgent() { // asked for by hand: right away, not in the window
+				err := l.jobPass(ctx, j, j.urgentTask(t))
+				if err != nil && ctx.Err() == nil {
+					l.logf("%s (asked for): %v", j.name, err)
+				}
+				if l.saveJob(j, t) == nil { // the results first: then the requests done are forgotten
+					l.pruneUrgent(j, t)
+				}
+				if ctx.Err() != nil {
+					return
+				}
+				if urgentRetry != nil {
+					urgentRetry.Stop()
+				}
+				if err == nil {
+					urgentBackoff = time.Minute
+				} else if j.hasUrgent() {
+					urgentRetry = time.AfterFunc(urgentBackoff, func() {
+						select {
+						case j.urgentWake <- struct{}{}:
+						default:
+						}
+					})
+					urgentBackoff = min(urgentBackoff*2, 30*time.Minute)
+				}
+			}
 			j.paused.Store(0) // no old pause shown: the window decides now
 			l.jobTodo(j, t)   // the counts for the UI meanwhile
 		}
-		wctx, cancel, ok := win.Wait(ctx)
+		// waiting for the window; urgent work asked for meanwhile does not wait
+		waitCtx, stopWait := context.WithCancel(ctx)
+		waiting := make(chan struct{}) // closed when the wait ends: wake-ups are the loop's again
+		if !win.Open(time.Now()) {
+			go l.urgentWaiter(waitCtx, j, waiting, stopWait)
+		}
+		wctx, cancel, ok := win.Wait(waitCtx)
+		close(waiting)
 		if !ok {
-			t.save()
-			return
+			stopWait()
+			if ctx.Err() != nil {
+				l.saveJob(j, t)
+				return
+			}
+			j.kick() // urgent work: round again
+			continue
 		}
 		j.paused.Store(0) // running again: no pause, no old error
 		j.err.Store("")
 		err := l.jobPass(wctx, j, t)
 		closed := schedule.Closed(ctx, wctx)
 		cancel()
+		stopWait()
+		if j.hasUrgent() {
+			if l.saveJob(j, t) == nil { // the results first: then the requests done are forgotten
+				l.pruneUrgent(j, t)
+			}
+		}
 		if ctx.Err() != nil {
-			t.save()
+			l.saveJob(j, t)
 			return
 		}
 		wait := 20 * time.Minute // look again now and then (new photos come with scans, which kick)
@@ -149,7 +204,7 @@ func (l *Library) jobLoop(ctx context.Context, j *remoteJob, t jobTask) {
 			wait, backoff = backoff, min(backoff*2, 30*time.Minute)
 			j.paused.Store(time.Now().Add(wait).Unix())
 		}
-		t.save()
+		l.saveJob(j, t)
 		if !timer.Stop() {
 			select {
 			case <-timer.C:
@@ -288,4 +343,36 @@ func (r *jobRate) perHour(now time.Time) float64 {
 		return 0
 	}
 	return float64(len(r.times)) / span.Hours()
+}
+
+// urgentWaiter ends the wait for the window (stop) when urgent work comes, or
+// on a wake-up while urgent work waits (a video for its words); it returns
+// when the wait ends (waiting closed). Other wake-ups need no pass before
+// the window opens.
+func (l *Library) urgentWaiter(waitCtx context.Context, j *remoteJob, waiting <-chan struct{}, stop func()) {
+	for {
+		select {
+		case <-waiting:
+			return
+		case <-j.urgentWake:
+			stop()
+			return
+		case <-j.wake:
+			if j.hasUrgent() {
+				stop()
+				return
+			}
+		case <-waitCtx.Done():
+			return
+		}
+	}
+}
+
+// saveJob keeps the results of a job (an error is logged and returned).
+func (l *Library) saveJob(j *remoteJob, t jobTask) error {
+	err := t.save()
+	if err != nil {
+		l.logf("%s: %v", j.name, err)
+	}
+	return err
 }

@@ -85,10 +85,11 @@ func (l *Library) retryFailed() time.Duration {
 // --- storage ------------------------------------------------------------------
 
 type aiStore struct {
-	mu    sync.Mutex
-	items map[string]*AIInfo
-	dirty atomic.Bool
-	ver   atomic.Int64 // changes with every new description (search index)
+	mu     sync.Mutex
+	items  map[string]*AIInfo
+	dirty  atomic.Bool
+	saveMu sync.Mutex   // one save at a time: a second one waits for the one writing
+	ver    atomic.Int64 // changes with every new description (search index)
 }
 
 func (l *Library) loadAI() {
@@ -106,6 +107,8 @@ func (l *Library) loadAI() {
 }
 
 func (l *Library) saveAI() error {
+	l.ai.saveMu.Lock()
+	defer l.ai.saveMu.Unlock()
 	if !l.ai.dirty.Swap(false) {
 		return nil
 	}
@@ -115,7 +118,11 @@ func (l *Library) saveAI() error {
 	if err != nil {
 		return err
 	}
-	return writeFileAtomic(filepath.Join(l.opt.CacheDir, "ai.json"), b)
+	if err := writeFileAtomic(filepath.Join(l.opt.CacheDir, "ai.json"), b); err != nil {
+		l.ai.dirty.Store(true) // tried again at the next save
+		return fmt.Errorf("ai.json: %w", err)
+	}
+	return nil
 }
 
 func (l *Library) markAIDirty() {
@@ -124,7 +131,7 @@ func (l *Library) markAIDirty() {
 	}
 	time.AfterFunc(30*time.Second, func() {
 		if err := l.saveAI(); err != nil {
-			l.logf("ai.json: %v", err)
+			l.logf("%v", err)
 		}
 	})
 }
@@ -224,12 +231,8 @@ func (l *Library) aiTask() jobTask {
 			}
 			return false, false
 		},
-		one: l.describeOne,
-		save: func() {
-			if err := l.saveAI(); err != nil {
-				l.logf("ai.json: %v", err)
-			}
-		},
+		one:  l.describeOne,
+		save: l.saveAI,
 		// photos with a large preview here first: their picture for the
 		// model comes from it in a moment, not from the original on a
 		// network share (only this cache folder is looked at: cheap)

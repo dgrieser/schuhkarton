@@ -9,6 +9,8 @@ package gallery
 // More than one file at a time moves in the background.
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -385,6 +387,7 @@ func (l *Library) plan(c *compiledRules, only map[string]bool) []RuleMove {
 
 type rulesJob struct {
 	running    atomic.Bool
+	resuming   atomic.Bool // a full run from before a restart waits for the one running
 	done, todo atomic.Int64
 	fail       atomic.Int64 // files that could not be moved in this run
 	lastErr    atomic.Value // string: why the last one failed
@@ -394,6 +397,8 @@ type rulesJob struct {
 }
 
 const rulesChunk = 50
+
+var errRulesRunning = errors.New("Einsortieren läuft schon")
 
 // ApplyRules moves every file the rules put elsewhere, in the background.
 // It returns how many files are planned.
@@ -410,7 +415,7 @@ func (l *Library) ApplyRules(by string) (int, error) {
 	}
 	if !j.running.CompareAndSwap(false, true) {
 		j.mu.Unlock()
-		return 0, errors.New("Einsortieren läuft schon")
+		return 0, errRulesRunning
 	}
 	l.bg.Add(1) // Close waits for the run
 	j.mu.Unlock()
@@ -422,6 +427,7 @@ func (l *Library) ApplyRules(by string) (int, error) {
 	j.fail.Store(0)
 	j.lastErr.Store("")
 	j.todo.Store(int64(len(moves)))
+	l.saveRulesIntent(true, nil, by) // goes on after a restart
 	// also with nothing to move: the run takes over edits queued meanwhile
 	go l.rulesLoop(c, moves, gen, by)
 	return len(moves), nil
@@ -437,6 +443,7 @@ func (l *Library) queueRules(ids []string, by string) {
 	for _, id := range ids {
 		j.pending[id] = true
 	}
+	l.saveRulesIntent(false, ids, by) // goes on after a restart
 	j.by = by
 	start := !l.closing.Load() && j.running.CompareAndSwap(false, true)
 	if start {
@@ -527,6 +534,9 @@ func (l *Library) rulesLoop(c *compiledRules, moves []RuleMove, gen int64, by st
 		j.mu.Lock()
 		j.running.Store(false)
 		more := len(j.pending) > 0 && !l.closing.Load() && j.running.CompareAndSwap(false, true)
+		if !more && !l.closing.Load() {
+			l.clearRulesIntent() // all filed: nothing to go on with after a restart
+		}
 		j.mu.Unlock()
 		if !more {
 			return
@@ -703,5 +713,87 @@ func (l *Library) fileByRules(ids []string, by string, res *EditResult) {
 		}
 		l.queueRules(queued, by)
 		res.Queued = len(moves)
+	}
+}
+
+// --- going on after a restart ---------------------------------------------------------------
+
+// rulesIntent is what the filing still has to do (rules-pending.json): all
+// files, or these. It is kept until the job is through, so a restart (or a
+// kill) in between goes on with it.
+type rulesIntent struct {
+	All bool     `json:"all,omitempty"`
+	IDs []string `json:"ids,omitempty"`
+	By  string   `json:"by,omitempty"`
+}
+
+var rulesIntentMu sync.Mutex
+
+func (l *Library) rulesIntentPath() string {
+	return filepath.Join(l.opt.CacheDir, "rules-pending.json")
+}
+
+func (l *Library) loadRulesIntent() rulesIntent {
+	var in rulesIntent
+	if b, err := os.ReadFile(l.rulesIntentPath()); err == nil {
+		json.Unmarshal(b, &in)
+	}
+	return in
+}
+
+// saveRulesIntent adds to what the filing has to do.
+func (l *Library) saveRulesIntent(all bool, ids []string, by string) {
+	rulesIntentMu.Lock()
+	defer rulesIntentMu.Unlock()
+	in := l.loadRulesIntent()
+	in.All = in.All || all
+	if !in.All {
+		in.IDs = append(in.IDs, ids...)
+	} else {
+		in.IDs = nil
+	}
+	in.By = by
+	if b, err := json.Marshal(in); err == nil {
+		writeFileAtomic(l.rulesIntentPath(), b)
+	}
+}
+
+func (l *Library) clearRulesIntent() {
+	if l.rulesJob.resuming.Load() {
+		return // the full run from before a restart is still to come
+	}
+	rulesIntentMu.Lock()
+	defer rulesIntentMu.Unlock()
+	os.Remove(l.rulesIntentPath())
+}
+
+// resumeRules goes on with filing that a stop or a kill interrupted. A full
+// run waits for one running already (edits filed after the restart), and
+// its intent stays kept until it starts.
+func (l *Library) resumeRules(ctx context.Context) {
+	in := l.loadRulesIntent()
+	switch {
+	case in.All:
+		l.rulesJob.resuming.Store(true)
+		defer l.rulesJob.resuming.Store(false)
+		for {
+			_, err := l.ApplyRules(in.By)
+			if err == nil {
+				return
+			}
+			if !errors.Is(err, errRulesRunning) {
+				l.logf("Regeln: Einsortieren nicht fortgesetzt: %v", err)
+				l.rulesJob.resuming.Store(false)
+				l.clearRulesIntent()
+				return
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(2 * time.Second):
+			}
+		}
+	case len(in.IDs) > 0:
+		l.queueRules(in.IDs, in.By)
 	}
 }

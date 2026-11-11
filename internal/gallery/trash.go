@@ -8,6 +8,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -19,15 +20,18 @@ const TrashDir = ".schuhkarton-papierkorb"
 
 // TrashEntry is one deleted photo or video (with its Live Photo video).
 type TrashEntry struct {
-	ID       string      `json:"id"`
-	Root     string      `json:"root"`
-	Rel      string      `json:"rel"`      // where it was
-	TrashRel string      `json:"trashRel"` // where it is, relative to the root
-	Deleted  int64       `json:"deleted"`
-	By       string      `json:"by,omitempty"`
-	Key      string      `json:"key"` // cache key: the thumbnail stays until the trash is emptied
-	Item     *Item       `json:"item"`
-	Live     *TrashEntry `json:"live,omitempty"`
+	ID       string `json:"id"`
+	Root     string `json:"root"`
+	Rel      string `json:"rel"`      // where it was
+	TrashRel string `json:"trashRel"` // where it is, relative to the root
+	Deleted  int64  `json:"deleted"`
+	By       string `json:"by,omitempty"`
+	// Hidden: accounts that emptied their trash of it. It is gone from their
+	// view only; the file stays until PurgeTrash deletes it after TrashDays.
+	Hidden []string    `json:"hidden,omitempty"`
+	Key    string      `json:"key"` // cache key: the thumbnail stays until the trash is emptied
+	Item   *Item       `json:"item"`
+	Live   *TrashEntry `json:"live,omitempty"`
 }
 
 func (l *Library) loadTrash() {
@@ -444,4 +448,89 @@ func TrashNames(entries []*TrashEntry) []string {
 		out = append(out, path.Base(e.Rel))
 	}
 	return out
+}
+
+// --- every account: its own trash ----------------------------------------------------
+
+// hiddenFor reports whether an account emptied its trash of the entry.
+func (e *TrashEntry) hiddenFor(user string) bool {
+	for _, u := range e.Hidden {
+		if u == user {
+			return true
+		}
+	}
+	return false
+}
+
+// visibleTo: an account sees what it deleted, admins see everything; neither
+// what they emptied their trash of.
+func (e *TrashEntry) visibleTo(user string, admin bool) bool {
+	return (admin || e.By == user) && !e.hiddenFor(user)
+}
+
+// TrashFor lists the trash as an account sees it, newest first.
+func (l *Library) TrashFor(user string, admin bool) []*TrashEntry {
+	l.PurgeTrash()
+	l.trashMu.Lock()
+	var out []*TrashEntry
+	for _, e := range l.trash {
+		if e.visibleTo(user, admin) {
+			cp := *e
+			cp.Hidden = nil
+			out = append(out, &cp)
+		}
+	}
+	l.trashMu.Unlock()
+	sort.Slice(out, func(a, b int) bool { return out[a].Deleted > out[b].Deleted })
+	return out
+}
+
+// MayRestore keeps the entries an account may bring back: its own, admins any.
+func (l *Library) MayRestore(user string, admin bool, ids []string) []string {
+	var out []string
+	for _, id := range ids {
+		if e := l.TrashEntryByID(id); e != nil && (admin || e.By == user) {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// HideTrash empties the trash for an account: the entries (ids, or all it
+// sees) leave its view. Nothing is deleted: that happens only after
+// TrashDays, for everyone alike. It returns the entries hidden.
+func (l *Library) HideTrash(user string, admin bool, ids []string) ([]string, error) {
+	want := map[string]bool{}
+	for _, id := range ids {
+		want[id] = true
+	}
+	l.trashMu.Lock()
+	defer l.trashMu.Unlock()
+	var hidden []string
+	for _, e := range l.trash {
+		if (len(ids) == 0 || want[e.ID]) && e.visibleTo(user, admin) {
+			e.Hidden = append(e.Hidden, user)
+			hidden = append(hidden, e.ID)
+		}
+	}
+	if len(hidden) == 0 {
+		return nil, nil
+	}
+	return hidden, l.saveTrash()
+}
+
+// UnhideTrash brings entries back into an account's trash (undo of HideTrash).
+func (l *Library) UnhideTrash(user string, ids []string) error {
+	want := map[string]bool{}
+	for _, id := range ids {
+		want[id] = true
+	}
+	l.trashMu.Lock()
+	defer l.trashMu.Unlock()
+	for _, e := range l.trash {
+		if want[e.ID] {
+			e.Hidden = slices.DeleteFunc(e.Hidden, func(u string) bool { return u == user })
+		}
+	}
+	return l.saveTrash()
 }

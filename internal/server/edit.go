@@ -10,25 +10,18 @@ import (
 	"github.com/dgrieser/schuhkarton/internal/gallery"
 )
 
-// adminRoutes registers the admin tools: editing metadata, rotating,
-// moving, deleting and the trash.
+// adminRoutes registers the admin tools: editing metadata, rotating, moving,
+// duplicates and the history of changes (the trash is for everybody: trash.go).
 func (s *Server) adminRoutes(mux *http.ServeMux, admin func(http.HandlerFunc) http.HandlerFunc) {
 	mux.HandleFunc("POST /api/admin/edit", admin(s.adminEdit))
 	mux.HandleFunc("POST /api/admin/unreadable/retry", admin(s.adminRetryUnreadable))
 	mux.HandleFunc("POST /api/admin/rotate", admin(s.adminRotate))
-	mux.HandleFunc("POST /api/admin/delete", admin(s.adminDelete))
-	mux.HandleFunc("GET /api/admin/trash", admin(s.adminTrash))
-	mux.HandleFunc("POST /api/admin/trash/restore", admin(s.adminRestore))
-	mux.HandleFunc("POST /api/admin/trash/empty", admin(s.adminEmpty))
-	mux.HandleFunc("GET /api/admin/trash/{id}/thumb", admin(s.adminTrashThumb))
 	mux.HandleFunc("GET /api/admin/folders", admin(s.adminFolders))
 	mux.HandleFunc("POST /api/admin/folders", admin(s.adminMkdir))
 	mux.HandleFunc("POST /api/admin/move", admin(s.adminMove))
 	mux.HandleFunc("POST /api/admin/describe", admin(s.adminDescribe))
 	mux.HandleFunc("POST /api/admin/ocr", admin(s.adminOCR))
 	mux.HandleFunc("POST /api/admin/speech", admin(s.adminSpeech))
-	mux.HandleFunc("GET /api/admin/marks", admin(s.adminMarks))
-	mux.HandleFunc("POST /api/admin/marks/clear", admin(s.adminClearMarks))
 	mux.HandleFunc("GET /api/admin/dupes", admin(s.adminDupes))
 	mux.HandleFunc("POST /api/admin/dupes/resolve", admin(s.adminResolveDupes))
 	mux.HandleFunc("POST /api/admin/dupes/ignore", admin(s.adminIgnoreDupes))
@@ -160,9 +153,7 @@ func (s *Server) adminEdit(w http.ResponseWriter, r *http.Request) {
 	case req.Lat != nil && req.Lon != nil:
 		e.GPS = &gallery.GPSEdit{Lat: *req.Lat, Lon: *req.Lon}
 	}
-	e.Record = editInfo(req.Taken, req.Shift, e) // kept with the values before, for undo
-	res, err := s.lib.EditItems(req.IDs, e)
-	s.adminResult(w, r, res, err)
+	s.queue(w, r, gallery.OpEdit, gallery.EditArgs{IDs: req.IDs, Edit: e, Info: editInfo(req.Taken, req.Shift, e)})
 }
 
 // editInfo describes an edit for the history: which fields, and to what.
@@ -215,114 +206,11 @@ func (s *Server) adminRotate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	res, err := s.lib.RotateAs(req.IDs, req.Deg, userName(r), &gallery.Change{})
-	s.adminResult(w, r, res, err)
-}
-
-func (s *Server) adminDelete(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		IDs []string `json:"ids"`
-	}
-	if err := readJSON(r, &req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+	if d := ((req.Deg % 360) + 360) % 360; d == 0 || d%90 != 0 {
+		writeJSON(w, r, map[string]any{"ok": false, "error": "nur 90, 180 oder 270 Grad"})
 		return
 	}
-	names := s.lib.Names(req.IDs)
-	res, err := s.lib.Trash(req.IDs, userName(r))
-	if len(res.Entries) > 0 {
-		// the files are in the trash now: the entry names them, not their old ids
-		s.lib.Record(gallery.Change{By: userName(r), Kind: gallery.ChDelete, Names: names, Info: map[string]any{"n": len(res.Entries)}}, res.Entries)
-	}
-	s.adminResult(w, r, res, err)
-}
-
-func (s *Server) adminTrash(w http.ResponseWriter, r *http.Request) {
-	type entry struct {
-		ID      string  `json:"id"`
-		Root    string  `json:"root"`
-		Rel     string  `json:"rel"`
-		Deleted int64   `json:"deleted"`
-		By      string  `json:"by,omitempty"`
-		Kind    uint8   `json:"k"`
-		Taken   int64   `json:"t"`
-		Aspect  float64 `json:"a"`
-		Live    bool    `json:"live,omitempty"`
-		Thumb   bool    `json:"thumb"`
-	}
-	list := s.lib.TrashList()
-	out := make([]entry, 0, len(list))
-	for _, e := range list {
-		x := entry{ID: e.ID, Root: e.Root, Rel: e.Rel, Deleted: e.Deleted, By: e.By, Live: e.Live != nil,
-			Thumb: s.lib.TrashThumb(e.ID) != ""}
-		if it := e.Item; it != nil {
-			x.Kind, x.Taken, x.Aspect = uint8(it.Kind), it.Taken, round(it.Aspect, 3)
-		}
-		out = append(out, x)
-	}
-	writeJSON(w, r, map[string]any{"days": s.cfg.Library.TrashDays, "entries": out})
-}
-
-func (s *Server) adminRestore(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		IDs []string `json:"ids"`
-	}
-	if err := readJSON(r, &req); err != nil || len(req.IDs) == 0 {
-		http.Error(w, "ids fehlen", http.StatusBadRequest)
-		return
-	}
-	res, err := s.lib.Restore(req.IDs)
-	if len(res.IDs) > 0 {
-		var ids []string
-		for _, id := range res.IDs {
-			ids = append(ids, id)
-		}
-		s.lib.Record(gallery.Change{By: userName(r), Kind: gallery.ChRestore, Items: ids, Names: s.lib.Names(ids), Info: map[string]any{"n": len(ids)}}, nil)
-	}
-	s.adminResult(w, r, res, err)
-}
-
-func (s *Server) adminEmpty(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		IDs []string `json:"ids"`
-		All bool     `json:"all"` // explicit: an empty list never empties everything
-	}
-	if err := readJSON(r, &req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	if !req.All && len(req.IDs) == 0 {
-		http.Error(w, "ids fehlen", http.StatusBadRequest)
-		return
-	}
-	ids := req.IDs
-	if req.All {
-		ids = nil
-	}
-	var gone []*gallery.TrashEntry
-	pick := map[string]bool{}
-	for _, id := range ids {
-		pick[id] = true
-	}
-	for _, e := range s.lib.TrashList() {
-		if req.All || pick[e.ID] {
-			gone = append(gone, e)
-		}
-	}
-	res, err := s.lib.EmptyTrash(ids)
-	if err == nil && res.Changed > 0 {
-		s.lib.Record(gallery.Change{By: userName(r), Kind: gallery.ChPurge, Names: gallery.TrashNames(gone), Info: map[string]any{"n": res.Changed}}, nil)
-	}
-	s.adminResult(w, r, res, err)
-}
-
-func (s *Server) adminTrashThumb(w http.ResponseWriter, r *http.Request) {
-	p := s.lib.TrashThumb(r.PathValue("id"))
-	if p == "" {
-		http.NotFound(w, r)
-		return
-	}
-	w.Header().Set("Cache-Control", "private, max-age=3600")
-	http.ServeFile(w, r, p)
+	s.queue(w, r, gallery.OpRotate, gallery.RotateArgs{IDs: req.IDs, Deg: req.Deg})
 }
 
 func (s *Server) adminFolders(w http.ResponseWriter, r *http.Request) {
@@ -355,9 +243,7 @@ func (s *Server) adminMove(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	res, err := s.lib.MoveAs(req.IDs, req.Root, req.Dir,
-		&gallery.Change{By: userName(r), Info: map[string]any{"to": strings.Trim(req.Root+"/"+req.Dir, "/")}})
-	s.adminResult(w, r, res, err)
+	s.queue(w, r, gallery.OpMove, gallery.MoveArgs{IDs: req.IDs, Root: req.Root, Dir: req.Dir})
 }
 
 // adminRetryUnreadable tries files the share hung on again (all of them

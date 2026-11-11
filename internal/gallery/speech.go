@@ -66,10 +66,11 @@ const (
 // --- storage ------------------------------------------------------------------
 
 type speechStore struct {
-	mu    sync.Mutex
-	items map[string]*SpeechInfo
-	dirty atomic.Bool
-	ver   atomic.Int64
+	mu     sync.Mutex
+	items  map[string]*SpeechInfo
+	dirty  atomic.Bool
+	saveMu sync.Mutex // one save at a time: a second one waits for the one writing
+	ver    atomic.Int64
 }
 
 func (l *Library) loadSpeech() {
@@ -87,6 +88,8 @@ func (l *Library) loadSpeech() {
 }
 
 func (l *Library) saveSpeech() error {
+	l.speech.saveMu.Lock()
+	defer l.speech.saveMu.Unlock()
 	if !l.speech.dirty.Swap(false) {
 		return nil
 	}
@@ -96,7 +99,11 @@ func (l *Library) saveSpeech() error {
 	if err != nil {
 		return err
 	}
-	return writeFileAtomic(filepath.Join(l.opt.CacheDir, "speech.json"), b)
+	if err := writeFileAtomic(filepath.Join(l.opt.CacheDir, "speech.json"), b); err != nil {
+		l.speech.dirty.Store(true) // tried again at the next save
+		return fmt.Errorf("speech.json: %w", err)
+	}
+	return nil
 }
 
 func (l *Library) markSpeechDirty() {
@@ -105,7 +112,7 @@ func (l *Library) markSpeechDirty() {
 	}
 	time.AfterFunc(30*time.Second, func() {
 		if err := l.saveSpeech(); err != nil {
-			l.logf("speech.json: %v", err)
+			l.logf("%v", err)
 		}
 	})
 }
@@ -256,12 +263,8 @@ func (l *Library) speechTask() jobTask {
 			}
 			return false, false
 		},
-		one: l.transcribeOne,
-		save: func() {
-			if err := l.saveSpeech(); err != nil {
-				l.logf("speech.json: %v", err)
-			}
-		},
+		one:  l.transcribeOne,
+		save: l.saveSpeech,
 	}
 }
 

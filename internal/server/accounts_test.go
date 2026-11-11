@@ -19,6 +19,7 @@ type fixture struct {
 	h     http.Handler
 	cfg   *config.Config
 	users *auth.Store
+	lib   *gallery.Library // photoFixture only
 }
 
 func newFixture(t *testing.T, token string, anonymous bool) *fixture {
@@ -92,8 +93,10 @@ func TestPermissions(t *testing.T) {
 		{"POST", "/api/rescan", `{}`, ben, 403},
 		{"GET", "/api/users", "", ben, 403},
 		{"GET", "/api/users", "", anna, 200},
-		{"GET", "/api/admin/trash", "", ben, 403},
-		{"GET", "/api/admin/trash", "", anna, 200},
+		{"GET", "/api/trash", "", "", 401},
+		{"GET", "/api/trash", "", ben, 200},
+		{"GET", "/api/admin/history", "", ben, 403},
+		{"GET", "/api/admin/history", "", anna, 200},
 		{"POST", "/api/users", `{"name":"Dora","password":"dora-pass","role":"user"}`, anna, 200},
 		{"GET", "/api/people/hidden", "", "", 401},
 		{"GET", "/api/people/hidden", "", ben, 200},
