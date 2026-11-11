@@ -326,6 +326,9 @@ type Library struct {
 	rulesChunkHook func(start int)
 	editMu         sync.Mutex           // guards edits
 	edits          map[string]*Override // root name + "/" + rel -> admin edits
+	hist           *history             // changes of the last days, to look at and undo
+	pins           recogPins            // results an undo put back (history.go)
+	recogPub       sync.Mutex           // a recognized result is stored and searched in one step (history.go)
 	trashMu        sync.Mutex
 	trash          []*TrashEntry
 
@@ -443,6 +446,7 @@ func Open(opt Options) (*Library, error) {
 		l.logf("Regeln ausgeschaltet: %v", err)
 	}
 	l.loadTrash()
+	l.hist = newHistory(opt.CacheDir, opt.TrashDays)
 	l.loadDupes()
 	l.loadMarks()
 	l.loadNotes()

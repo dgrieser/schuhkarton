@@ -9,6 +9,7 @@ import (
 	"path"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -122,7 +123,34 @@ func (l *Library) Trash(ids []string, by string) (EditResult, error) {
 	err := l.saveTrash()
 	l.trashMu.Unlock()
 	l.removeItems(gone)
+	// the changes kept of these files wait in the trash with them: a new file
+	// at the same path (same id) gets changes of its own
+	refs := map[string]string{}
+	for _, e := range entries {
+		for i, m := range e.members() {
+			if m.Item != nil {
+				refs[m.Item.ID] = trashRef(e.ID, i)
+			}
+		}
+	}
+	l.hist.rename(refs)
 	return res, err
+}
+
+// members are the files of an entry: the photo, then its Live Photo video.
+func (e *TrashEntry) members() []*TrashEntry {
+	if e.Live != nil {
+		return []*TrashEntry{e, e.Live}
+	}
+	return []*TrashEntry{e}
+}
+
+// trashRef names a file in the trash in the changes kept (member i of an entry).
+func trashRef(entry string, i int) string {
+	if i == 0 {
+		return "trash:" + entry
+	}
+	return "trash:" + entry + "/" + strconv.Itoa(i)
 }
 
 // removeItems drops items from the index.
@@ -210,6 +238,7 @@ func (l *Library) Restore(ids []string) (EditResult, error) {
 	var back []*TrashEntry // failed: stay in the trash
 	var restored []*Item
 	favs, idMap := map[string]string{}, map[string]string{}
+	refs := map[string]string{} // trash ref -> the restored id, for the changes kept
 	for _, e := range entries {
 		ri := l.rootIndex(e.Root)
 		if ri < 0 {
@@ -271,6 +300,7 @@ func (l *Library) Restore(ids []string) (EditResult, error) {
 				it.ID = itemID(root.Name, rel)
 			}
 			restored = append(restored, it)
+			refs[trashRef(e.ID, i)] = it.ID
 			if i == 0 {
 				if res.IDs == nil {
 					res.IDs = map[string]string{}
@@ -291,7 +321,9 @@ func (l *Library) Restore(ids []string) (EditResult, error) {
 	l.renameEdits(favs)
 	l.saveEdits()
 	l.RenameKeys(favs)
+	l.renamePins(favs)
 	l.people.renameLabelItems(idMap)
+	l.hist.rename(refs) // the changes kept come back with the files
 	if len(restored) > 0 {
 		l.mu.Lock()
 		all := append(append([]*Item(nil), l.items...), restored...)
@@ -327,6 +359,7 @@ func (l *Library) PurgeTrash() {
 	}
 	defer l.opMu.Unlock()
 	if old := l.takeTrash(nil, func(e *TrashEntry) bool { return e.Deleted < limit }); len(old) > 0 {
+		l.Record(Change{Kind: ChPurge, Names: TrashNames(old), Info: map[string]any{"n": len(old), "days": l.opt.TrashDays}}, nil)
 		r := l.emptyTrash(old)
 		l.logf("trash: %d entries older than %d days removed", r.Changed, l.opt.TrashDays)
 	}
@@ -376,7 +409,15 @@ func (l *Library) emptyTrash(entries []*TrashEntry) EditResult {
 	l.renameEdits(favs)
 	l.saveEdits()
 	l.RenameKeys(favs)
+	l.renamePins(favs)
 	l.people.renameLabelItems(idMap)
+	gone := map[string]string{}
+	for _, e := range entries {
+		for i := range e.members() {
+			gone[trashRef(e.ID, i)] = "" // gone for good: no new file at that path gets them
+		}
+	}
+	l.hist.rename(gone)
 	l.trashMu.Lock()
 	l.saveTrash()
 	l.trashMu.Unlock()
@@ -394,4 +435,13 @@ func pruneTrashDirs(d string) {
 		}
 		d = filepath.Dir(d)
 	}
+}
+
+// TrashNames returns the file names of trash entries.
+func TrashNames(entries []*TrashEntry) []string {
+	out := make([]string, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, path.Base(e.Rel))
+	}
+	return out
 }

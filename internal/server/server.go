@@ -389,29 +389,75 @@ func (s *Server) namePerson(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	id := r.PathValue("id")
+	old, items := s.personBefore(id)
 	if strings.TrimSpace(req.Name) == "-" { // no face: a group of misdetections
-		prev, err := s.lib.NoFacePerson(r.PathValue("id"))
+		prev, err := s.lib.NoFacePerson(id)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		s.recordFaces(r, items, map[string]any{"op": "noface", "from": old, "n": len(prev)}, prev)
 		writeJSON(w, r, map[string]any{"ok": true, "undo": prev})
 		return
 	}
 	if strings.TrimSpace(req.Name) == "~" {
-		hid, err := s.lib.HidePerson(r.PathValue("id"))
+		hid, err := s.lib.HidePerson(id)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		s.lib.Record(gallery.Change{By: userName(r), Kind: gallery.ChHide, Items: items, Info: map[string]any{"from": old}}, map[string]string{"hid": hid})
 		writeJSON(w, r, map[string]any{"ok": true, "hidden": hid})
 		return
 	}
-	if err := s.lib.NamePerson(r.PathValue("id"), req.Name); err != nil {
+	before := s.lib.PersonLabels(id)
+	if err := s.lib.NamePerson(id, req.Name); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	s.recordFaces(r, items, map[string]any{"op": faceOp(req.Name), "from": old, "to": strings.TrimSpace(req.Name), "n": len(before)}, before)
 	writeJSON(w, r, map[string]any{"ok": true})
+}
+
+// personBefore returns a person's name and some of its items, for the history.
+func (s *Server) personBefore(id string) (string, []string) {
+	p := s.lib.Person(id)
+	if p == nil {
+		return "", nil
+	}
+	items := p.Items
+	if len(items) > 24 {
+		items = items[:24]
+	}
+	return p.Name, append([]string(nil), items...)
+}
+
+// faceOp names what a face label does: a name, not this person, hidden, no face.
+func faceOp(name string) string {
+	switch strings.TrimSpace(name) {
+	case "":
+		return "not"
+	case "-":
+		return "noface"
+	case "~":
+		return "hide"
+	}
+	return "name"
+}
+
+// recordFaces keeps a change of face names with the labels before.
+func (s *Server) recordFaces(r *http.Request, items []string, info map[string]any, before map[string]string) {
+	if len(items) == 0 {
+		seen := map[string]bool{}
+		for k := range before {
+			if id, _, ok := strings.Cut(k, ":"); ok && !seen[id] && len(items) < 24 {
+				seen[id] = true
+				items = append(items, id)
+			}
+		}
+	}
+	s.lib.Record(gallery.Change{By: userName(r), Kind: gallery.ChFaces, Items: items, Info: info}, before)
 }
 
 // hiddenPeople lists the groups hidden with "Ausblenden".
@@ -424,6 +470,7 @@ func (s *Server) showHidden(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	s.lib.Record(gallery.Change{By: userName(r), Kind: gallery.ChShow}, nil)
 	writeJSON(w, r, map[string]any{"ok": true})
 }
 
@@ -440,11 +487,14 @@ func (s *Server) labelFace(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unknown face", http.StatusBadRequest)
 		return
 	}
+	old, _ := s.personBefore(s.lib.PersonOf(r.PathValue("id"), idx))
 	prev, err := s.lib.LabelFace(r.PathValue("id"), idx, req.Name)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	key := r.PathValue("id") + ":" + strconv.Itoa(idx)
+	s.recordFaces(r, []string{r.PathValue("id")}, map[string]any{"op": faceOp(req.Name), "from": old, "to": strings.TrimSpace(req.Name), "n": 1}, map[string]string{key: prev})
 	// what the face had, for undo
 	writeJSON(w, r, map[string]any{"ok": true, "undo": map[string]string{r.PathValue("id") + ":" + strconv.Itoa(idx): prev}})
 }
@@ -467,6 +517,8 @@ func (s *Server) addFace(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	key := r.PathValue("id") + ":" + strconv.Itoa(idx)
+	s.recordFaces(r, []string{r.PathValue("id")}, map[string]any{"op": "add", "to": strings.TrimSpace(req.Name), "n": 1}, map[string]string{key: "-"})
 	writeJSON(w, r, map[string]any{"ok": true, "idx": idx})
 }
 
@@ -494,10 +546,14 @@ func (s *Server) labelPersonIn(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	old, _ := s.personBefore(r.PathValue("id"))
 	undo, err := s.lib.LabelPersonIn(req.IDs, r.PathValue("id"), req.Name)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
+	}
+	if len(undo) > 0 {
+		s.recordFaces(r, nil, map[string]any{"op": faceOp(req.Name), "from": old, "to": strings.TrimSpace(req.Name), "n": len(undo)}, undo)
 	}
 	writeJSON(w, r, map[string]any{"ok": true, "n": len(undo), "undo": undo})
 }
@@ -511,10 +567,16 @@ func (s *Server) restoreFaceLabels(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	keys := make([]string, 0, len(req.Labels))
+	for k := range req.Labels {
+		keys = append(keys, k)
+	}
+	before := s.lib.FaceLabels(keys)
 	if err := s.lib.RestoreFaceLabels(req.Labels); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	s.recordFaces(r, nil, map[string]any{"op": "restore", "n": len(keys)}, before)
 	writeJSON(w, r, map[string]any{"ok": true})
 }
 
@@ -527,9 +589,15 @@ func (s *Server) fav(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := s.lib.SetFav(userName(r), req.IDs, req.On); err != nil {
+	user := userName(r)
+	changing := s.lib.Changing(req.IDs, req.On, func(it *gallery.Item) bool { return s.lib.IsFav(user, it) })
+	if err := s.lib.SetFav(user, req.IDs, req.On); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	if len(changing) > 0 {
+		s.lib.Record(gallery.Change{By: user, Kind: gallery.ChFav, Items: changing, Names: s.lib.Names(changing), Info: map[string]any{"on": req.On, "n": len(changing)}},
+			gallery.ToggleUndo{User: user, On: req.On})
 	}
 	writeJSON(w, r, map[string]any{"ok": true})
 }

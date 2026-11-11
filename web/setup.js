@@ -304,7 +304,7 @@
           <label class="check"><input type="checkbox" id="fxmp" ${C.library.write_metadata ? 'checked' : ''} ${dis('library.write_metadata')}>
             <span><b>${t('Erkanntes in die Dateien schreiben')}</b><br><span class="muted">${t('KI-Beschreibungen und Stichwörter, erkannter und gesprochener Text und die Namen der Personen landen in den XMP-Metadaten der Dateien (bei RAW und Formaten, die exiftool nicht schreibt, in einer .xmp-Datei daneben). Andere Programme sehen sie, und der Schuhkarton liest sie wieder ein, wenn der Cache fehlt.')}</span></span></label>
           ${lockNote('library.write_metadata')}
-          <label class="field"><span>${t('Papierkorb nach so vielen Tagen leeren (0 = nie)')}</span>
+          <label class="field"><span>${t('Gelöschtes und Änderungen so viele Tage aufheben (0 = Papierkorb nie leeren)')}</span>
             <input type="number" id="ftrash" min="0" max="3650" value="${C.library.trash_days ?? 30}" ${dis('library.trash_days')}>${lockNote('library.trash_days')}</label>
           <label class="check"><input type="checkbox" id="fdupes" ${(C.dupes?.mode || 'on') === 'on' ? 'checked' : ''} ${dis('dupes.mode')}>
             <span><b>${t('Duplikate suchen')}</b><br><span class="muted">${t('Vergleicht die Vorschaubilder (auch gedreht, verkleinert, neu gespeichert) und zeigt Admins doppelte Fotos und Serien. Läuft im Hintergrund, braucht kaum Rechenzeit.')}</span></span></label>

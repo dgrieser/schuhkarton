@@ -141,12 +141,21 @@ func (l *Library) AIOf(it *Item) *AIInfo {
 	return &cp
 }
 
-func (l *Library) setAI(it *Item, a *AIInfo) {
+func (l *Library) setAI(it *Item, a *AIInfo) bool { return l.storeAI(it, a, false) }
+
+// storeAI keeps a result (false: dropped); force: also over one an undo put back (which
+// a job that was running meanwhile does not replace: checked under the same lock).
+func (l *Library) storeAI(it *Item, a *AIInfo, force bool) bool {
 	l.ai.mu.Lock()
+	if !force && l.recognizedPinned(ChAI, it) {
+		l.ai.mu.Unlock()
+		return false
+	}
 	l.ai.items[l.favKey(it)] = a
 	l.ai.mu.Unlock()
 	l.ai.ver.Add(1)
 	l.markAIDirty()
+	return true
 }
 
 // renameAI moves descriptions to new keys ("" drops them).
@@ -171,6 +180,7 @@ func (l *Library) renameAI(pairs map[string]string) {
 
 // Redescribe forgets the descriptions of ids, so they are made again.
 func (l *Library) Redescribe(ids []string) int {
+	l.unpinRecognized(ChAI, ids)
 	n := 0
 	l.ai.mu.Lock()
 	for _, id := range ids {
@@ -273,8 +283,11 @@ func (l *Library) describeOne(ctx context.Context, it *Item) error {
 	if it.Kind == Video && l.media.ffmpeg != "" {
 		info.From, info.Tried = "frame", time.Now().Unix() // the clip could not be made
 	}
-	l.setAI(it, info)
-	l.search.updateAI(it.ID, info)
+	l.recogPub.Lock()      // stored and searched together, not torn apart by an undo
+	if l.setAI(it, info) { // not over one an undo put back
+		l.search.updateAI(it.ID, info)
+	}
+	l.recogPub.Unlock()
 	j.handled(false, info.Tokens)
 	l.kickXMP()
 	return nil

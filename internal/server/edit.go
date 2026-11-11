@@ -3,6 +3,7 @@ package server
 import (
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -32,6 +33,26 @@ func (s *Server) adminRoutes(mux *http.ServeMux, admin func(http.HandlerFunc) ht
 	mux.HandleFunc("POST /api/admin/dupes/resolve", admin(s.adminResolveDupes))
 	mux.HandleFunc("POST /api/admin/dupes/ignore", admin(s.adminIgnoreDupes))
 	mux.HandleFunc("POST /api/admin/dupes/rescan", admin(s.adminRescanDupes))
+	mux.HandleFunc("GET /api/admin/history", admin(s.adminHistory))
+	mux.HandleFunc("POST /api/admin/history/{id}/undo", admin(s.adminUndo))
+}
+
+// adminHistory lists the changes kept, newest first (before: those after the
+// change with this id; kind: comma separated kinds; by: an account, "-" for Schuhkarton).
+func (s *Server) adminHistory(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	list, days, more := s.lib.History(q.Get("before"), limit, q.Get("kind"), q.Get("by"))
+	if list == nil {
+		list = []gallery.ChangeView{}
+	}
+	writeJSON(w, r, map[string]any{"changes": list, "days": days, "more": more})
+}
+
+// adminUndo undoes one change.
+func (s *Server) adminUndo(w http.ResponseWriter, r *http.Request) {
+	res, err := s.lib.UndoChange(r.PathValue("id"), userName(r))
+	s.adminResult(w, r, res, err)
 }
 
 // adminDescribe drops the AI descriptions of ids so they are made again.
@@ -47,7 +68,8 @@ func (s *Server) adminDescribe(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, r, map[string]any{"ok": false, "error": "Bildbeschreibungen sind ausgeschaltet"})
 		return
 	}
-	writeJSON(w, r, map[string]any{"ok": true, "changed": s.lib.Redescribe(req.IDs)})
+	n := s.lib.RecognizeAgain(gallery.ChAI, req.IDs, userName(r))
+	writeJSON(w, r, map[string]any{"ok": true, "changed": n})
 }
 
 // adminOCR drops the recognized texts of ids so they are recognized again.
@@ -63,7 +85,8 @@ func (s *Server) adminOCR(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, r, map[string]any{"ok": false, "error": "Texterkennung ist ausgeschaltet"})
 		return
 	}
-	writeJSON(w, r, map[string]any{"ok": true, "changed": s.lib.Rerecognize(req.IDs)})
+	n := s.lib.RecognizeAgain(gallery.ChOCR, req.IDs, userName(r))
+	writeJSON(w, r, map[string]any{"ok": true, "changed": n})
 }
 
 // adminSpeech drops what was heard in ids so it is recognized again.
@@ -79,7 +102,8 @@ func (s *Server) adminSpeech(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, r, map[string]any{"ok": false, "error": "Spracherkennung ist ausgeschaltet"})
 		return
 	}
-	writeJSON(w, r, map[string]any{"ok": true, "changed": s.lib.Retranscribe(req.IDs)})
+	n := s.lib.RecognizeAgain(gallery.ChSpeech, req.IDs, userName(r))
+	writeJSON(w, r, map[string]any{"ok": true, "changed": n})
 }
 
 // adminResult answers with what an operation did and the new library version.
@@ -136,8 +160,50 @@ func (s *Server) adminEdit(w http.ResponseWriter, r *http.Request) {
 	case req.Lat != nil && req.Lon != nil:
 		e.GPS = &gallery.GPSEdit{Lat: *req.Lat, Lon: *req.Lon}
 	}
+	e.Record = editInfo(req.Taken, req.Shift, e) // kept with the values before, for undo
 	res, err := s.lib.EditItems(req.IDs, e)
 	s.adminResult(w, r, res, err)
+}
+
+// editInfo describes an edit for the history: which fields, and to what.
+func editInfo(taken *string, shift int64, e gallery.Edit) map[string]any {
+	info := map[string]any{}
+	var fields []string
+	if e.Taken != nil {
+		fields = append(fields, "taken")
+		info["taken"] = *taken
+	}
+	if shift != 0 {
+		fields = append(fields, "taken")
+		info["shift"] = shift
+	}
+	if e.Place != nil {
+		fields = append(fields, "place")
+		info["place"] = *e.Place
+	}
+	if e.Category != nil {
+		fields = append(fields, "category")
+		info["category"] = *e.Category
+	}
+	if e.Desc != nil {
+		fields = append(fields, "desc")
+		info["desc"] = clip(*e.Desc, 120)
+	}
+	if e.GPS != nil {
+		fields = append(fields, "gps")
+		info["gpsClear"] = e.GPS.Clear
+	}
+	info["fields"] = fields
+	return info
+}
+
+// clip shortens a text for the history.
+func clip(s string, n int) string {
+	r := []rune(strings.TrimSpace(s))
+	if len(r) <= n {
+		return string(r)
+	}
+	return string(r[:n]) + "…"
 }
 
 func (s *Server) adminRotate(w http.ResponseWriter, r *http.Request) {
@@ -149,7 +215,7 @@ func (s *Server) adminRotate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	res, err := s.lib.Rotate(req.IDs, req.Deg, userName(r))
+	res, err := s.lib.RotateAs(req.IDs, req.Deg, userName(r), &gallery.Change{})
 	s.adminResult(w, r, res, err)
 }
 
@@ -161,7 +227,12 @@ func (s *Server) adminDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	names := s.lib.Names(req.IDs)
 	res, err := s.lib.Trash(req.IDs, userName(r))
+	if len(res.Entries) > 0 {
+		// the files are in the trash now: the entry names them, not their old ids
+		s.lib.Record(gallery.Change{By: userName(r), Kind: gallery.ChDelete, Names: names, Info: map[string]any{"n": len(res.Entries)}}, res.Entries)
+	}
 	s.adminResult(w, r, res, err)
 }
 
@@ -200,6 +271,13 @@ func (s *Server) adminRestore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	res, err := s.lib.Restore(req.IDs)
+	if len(res.IDs) > 0 {
+		var ids []string
+		for _, id := range res.IDs {
+			ids = append(ids, id)
+		}
+		s.lib.Record(gallery.Change{By: userName(r), Kind: gallery.ChRestore, Items: ids, Names: s.lib.Names(ids), Info: map[string]any{"n": len(ids)}}, nil)
+	}
 	s.adminResult(w, r, res, err)
 }
 
@@ -220,7 +298,20 @@ func (s *Server) adminEmpty(w http.ResponseWriter, r *http.Request) {
 	if req.All {
 		ids = nil
 	}
+	var gone []*gallery.TrashEntry
+	pick := map[string]bool{}
+	for _, id := range ids {
+		pick[id] = true
+	}
+	for _, e := range s.lib.TrashList() {
+		if req.All || pick[e.ID] {
+			gone = append(gone, e)
+		}
+	}
 	res, err := s.lib.EmptyTrash(ids)
+	if err == nil && res.Changed > 0 {
+		s.lib.Record(gallery.Change{By: userName(r), Kind: gallery.ChPurge, Names: gallery.TrashNames(gone), Info: map[string]any{"n": res.Changed}}, nil)
+	}
 	s.adminResult(w, r, res, err)
 }
 
@@ -264,7 +355,8 @@ func (s *Server) adminMove(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	res, err := s.lib.Move(req.IDs, req.Root, req.Dir)
+	res, err := s.lib.MoveAs(req.IDs, req.Root, req.Dir,
+		&gallery.Change{By: userName(r), Info: map[string]any{"to": strings.Trim(req.Root+"/"+req.Dir, "/")}})
 	s.adminResult(w, r, res, err)
 }
 

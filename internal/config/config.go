@@ -100,7 +100,8 @@ type Library struct {
 	// exiftool cannot write). Schuhkarton reads it back after the cache is lost.
 	WriteMetadata bool `yaml:"write_metadata" json:"write_metadata"`
 	// TrashDays empties deleted files from the trash after this many days
-	// (0: only by hand).
+	// (0: only by hand). The history of changes (admins can undo them) keeps
+	// the same days (0: a year).
 	TrashDays int `yaml:"trash_days" json:"trash_days"`
 	// Documents names folders whose files count as documents (scans,
 	// receipts): galleries hide them unless documents are switched on.

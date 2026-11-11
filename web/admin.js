@@ -512,7 +512,8 @@
   // trash view
   // ---------------------------------------------------------------------------
   $('#nav a[data-v="favoriten"]')?.insertAdjacentHTML('afterend',
-    `<a href="#/papierkorb" data-v="papierkorb" data-need="admin">${icon('trash')}<span>${esc(t('Papierkorb'))}</span><em class="count" id="trashCount"></em></a>`);
+    `<a href="#/papierkorb" data-v="papierkorb" data-need="admin">${icon('trash')}<span>${esc(t('Papierkorb'))}</span><em class="count" id="trashCount"></em></a>
+     <a href="#/aenderungen" data-v="aenderungen" data-need="admin">${icon('restore')}<span>${esc(t('Änderungen'))}</span></a>`);
 
   async function trashCount() {
     if (!admin()) return;
@@ -597,5 +598,152 @@
         $('span', btn('all')).textContent = pick.size === list.length ? t('Auswahl aufheben') : t('Alle auswählen');
       },
     });
+  };
+
+  // ---------------------------------------------------------------------------
+  // changes: everything that changed in the last days, by whom, and undo
+  // ---------------------------------------------------------------------------
+  const KINDS = [
+    ['', 'Alle Änderungen'], ['edit', 'Bearbeitet'], ['rotate', 'Gedreht'], ['delete,restore,purge', 'Papierkorb'],
+    ['move', 'Verschoben'], ['faces,hide,show', 'Personen'], ['note', 'Notizen'], ['mark,unmarkall', 'Vorgemerkt'],
+    ['fav', 'Favoriten'], ['ai,ocr,speech', 'KI und Texterkennung'],
+  ];
+  const KIND_ICON = { edit: 'edit', rotate: 'rotate', delete: 'trash', restore: 'restore', purge: 'trash', move: 'move', faces: 'face',
+    hide: 'eye-off', show: 'eye', note: 'text', mark: 'mark', unmarkall: 'unmark', fav: 'heart', ai: 'spark', ocr: 'file', speech: 'spark' };
+  // a real time as the wall clock, which the date helpers show (they read UTC)
+  const realLocal = (ts) => ts - new Date(ts * 1000).getTimezoneOffset() * 60;
+  const FIELD = { taken: 'Datum', place: 'Ort', category: 'Kategorie', desc: 'Text', gps: 'Position' };
+  // what happened, in words
+  const changeText = (c) => {
+    const i = c.info || {}, n = c.items?.length || c.names?.length || i.n || 0;
+    const count = n > 1 ? ` (${num(n)})` : '';
+    switch (c.kind) {
+      case 'edit': {
+        const parts = (i.fields || []).filter((f, k, a) => a.indexOf(f) === k).map((f) => {
+          if (f === 'place' && i.place) return `${t('Ort')}: ${i.place}`;
+          if (f === 'category' && i.category) return `${t('Kategorie')}: ${i.category}`;
+          if (f === 'taken' && i.taken) return `${t('Datum')}: ${i.taken.replace('T', ' ')}`;
+          if (f === 'taken' && i.shift) return t('Datum um {h} Std. verschoben', { h: Math.round(i.shift / 360) / 10 });
+          if (f === 'gps' && i.gpsClear) return t('Position entfernt');
+          return t(FIELD[f] || f);
+        });
+        return t('geändert: {what}', { what: parts.join(', ') }) + count;
+      }
+      case 'rotate': return (i.deg === 90 ? t('nach rechts gedreht') : i.deg === 270 ? t('nach links gedreht') : t('um {d}° gedreht', { d: i.deg })) + count;
+      case 'delete': return (i.dupes ? t('Duplikate in den Papierkorb gelegt') : t('in den Papierkorb gelegt')) + count;
+      case 'restore': return t('aus dem Papierkorb geholt') + count;
+      case 'purge': return (c.by ? t('endgültig gelöscht') : t('nach {d} Tagen endgültig gelöscht', { d: i.days || '?' })) + count;
+      case 'move': return (i.rules ? t('nach den Regeln einsortiert') : t('verschoben nach {to}', { to: i.to || '/' })) + count;
+      case 'faces':
+        switch (i.op) {
+          case 'add': return i.to ? t('Gesicht markiert: {name}', { name: i.to }) : t('Gesicht markiert');
+          case 'not': return t('nicht {name}', { name: i.from || t('diese Person') }) + count;
+          case 'noface': return t('kein Gesicht') + count;
+          case 'hide': return t('Gesicht ausgeblendet') + count;
+          case 'restore': return t('Gesichter zurückgesetzt') + count;
+          default: return (i.from && i.from !== i.to ? t('{from} heißt jetzt {to}', { from: i.from, to: i.to }) : t('benannt: {to}', { to: i.to })) + count;
+        }
+      case 'hide': return t('{name} ausgeblendet', { name: i.from || t('Person') });
+      case 'show': return t('ausgeblendete Person wieder gezeigt');
+      case 'note':
+        if (i.op === 'add') return t('Notiz geschrieben: „{text}“', { text: i.text });
+        return i.op === 'edit' ? t('Notiz geändert: „{text}“', { text: i.text }) : t('Notiz gelöscht: „{text}“', { text: i.text });
+      case 'mark': return (i.on ? t('zum Löschen vorgemerkt') : t('Vormerkung entfernt')) + count;
+      case 'unmarkall': return t('alle Vormerkungen entfernt') + count;
+      case 'fav': return (i.on ? t('als Favorit markiert') : t('aus den Favoriten genommen')) + count;
+      case 'ai': return t('Beschreibung neu angefordert') + count;
+      case 'ocr': return t('Text im Bild neu erkennen lassen') + count;
+      case 'speech': return t('Sprache neu erkennen lassen') + count;
+    }
+    return c.kind;
+  };
+
+  SK.VIEWS.aenderungen = async (view) => {
+    if (!admin()) {
+      view.innerHTML = `<div class="empty">${icon('restore')}<h2>${esc(t('Änderungen'))}</h2><p>${esc(t('Nur für Admins.'))}</p></div>`;
+      return;
+    }
+    let kind = '', by = '', list = [], more = false, gen = 0; // gen: only the newest request counts
+    const people = new Set();
+    view.innerHTML = `<div class="head"><div><h1>${esc(t('Änderungen'))}</h1><div class="sub">${esc(t('Wird geladen …'))}</div></div>
+      <div class="tools"><select class="sel" data-kind title="${esc(t('Art'))}">${KINDS.map(([k, l]) => `<option value="${k}">${esc(t(l))}</option>`).join('')}</select>
+        <select class="sel" data-by title="${esc(t('Wer'))}"><option value="">${esc(t('Alle'))}</option><option value="-">${esc(t('Schuhkarton'))}</option></select></div></div>
+      <div class="hx" data-hx></div><div class="hx-more"><button class="btn" data-more hidden>${esc(t('Ältere laden'))}</button></div>`;
+    const box = $('[data-hx]', view);
+    // the photos it was about; gone ones from the trash, else their names
+    const thumbs = (c) => {
+      const out = [];
+      for (const id of c.items || []) {
+        const it = S.byId.get(id);
+        if (it) out.push(`<a href="#/fotos|${esc(id)}" class="hx-th" data-open="${esc(id)}"><img loading="lazy" alt="" src="${SK.thumbURL(it)}"></a>`);
+        if (out.length >= 8) break;
+      }
+      if (!out.length) {
+        for (const e of (c.trash || []).slice(0, 8)) out.push(`<span class="hx-th"><img loading="lazy" alt="" src="/api/admin/trash/${encodeURIComponent(e)}/thumb"></span>`);
+      }
+      const total = Math.max(c.items?.length || 0, c.trash?.length || 0, c.names?.length || 0);
+      if (!out.length && c.names?.length) return `<div class="hx-names">${c.names.slice(0, 6).map(esc).join(' · ')}${c.names.length > 6 ? ` · +${num(c.names.length - 6)}` : ''}</div>`;
+      return out.length ? `<div class="hx-thumbs">${out.join('')}${total > out.length ? `<span class="hx-th more">+${num(total - out.length)}</span>` : ''}</div>` : '';
+    };
+    const row = (c) => {
+      const undone = c.undone ? t('rückgängig gemacht von {who}, {d} {t}', { who: c.undoneBy || '?', d: SK.fmtDay(realLocal(c.undone)), t: SK.fmtTime(realLocal(c.undone)) }) : '';
+      const why = !c.canUndo && !c.undone && c.why ? t(c.why) : '';
+      return `<div class="hx-row${c.undone ? ' undone' : ''}" data-id="${esc(c.id)}">
+        <span class="hx-ic">${icon(KIND_ICON[c.kind] || 'edit')}</span>
+        <div class="hx-main"><div class="hx-t"><b class="${c.by ? '' : 'sys'}">${esc(c.by || t('Schuhkarton'))}</b> ${esc(changeText(c))}</div>
+          <div class="hx-meta">${esc(SK.fmtTime(realLocal(c.at)))}${undone ? ` · ${esc(undone)}` : ''}${why ? ` · ${esc(why)}` : ''}</div>${thumbs(c)}</div>
+        ${c.canUndo ? `<button class="btn" data-undo>${icon('restore')}<span>${esc(t('Rückgängig'))}</span></button>` : ''}</div>`;
+    };
+    const draw = () => {
+      let day = '', html = '';
+      for (const c of list) {
+        const d = SK.fmtDay(realLocal(c.at));
+        if (d !== day) { day = d; html += `<h3 class="hx-day">${esc(d)}</h3>`; }
+        html += row(c);
+      }
+      box.innerHTML = html || `<div class="empty">${icon('restore')}<h2>${esc(t('Keine Änderungen'))}</h2><p>${esc(t('Was jemand ändert, erscheint hier und lässt sich zurücknehmen.'))}</p></div>`;
+      $('[data-more]', view).hidden = !more;
+      const sel = $('[data-by]', view);
+      for (const u of [...people].sort()) if (![...sel.options].some((o) => o.value === u)) sel.insertAdjacentHTML('beforeend', `<option value="${esc(u)}">${esc(u)}</option>`);
+    };
+    const load = async (append = false) => {
+      const my = ++gen;
+      const before = append && list.length ? list[list.length - 1].id : '';
+      const q = new URLSearchParams({ limit: '100' });
+      if (before) q.set('before', String(before));
+      if (kind) q.set('kind', kind);
+      if (by) q.set('by', by);
+      const r = await api(`/api/admin/history?${q}`).catch(() => null);
+      if (!r || my !== gen || SK.route().view !== 'aenderungen') return; // a newer filter or page came meanwhile
+      list = append ? list.concat(r.changes) : r.changes;
+      more = r.more;
+      for (const c of r.changes) if (c.by) people.add(c.by);
+      $('.head .sub', view).textContent = r.days > 0 ? t('Die letzten {d} Tage. Was älter ist, lässt sich nicht mehr zurücknehmen.', { d: r.days })
+        : t('Das letzte Jahr. Was älter ist, lässt sich nicht mehr zurücknehmen.');
+      draw();
+    };
+    $('[data-kind]', view).onchange = (e) => { kind = e.target.value; load(); };
+    $('[data-by]', view).onchange = (e) => { by = e.target.value; load(); };
+    $('[data-more]', view).onclick = () => load(true);
+    box.onclick = async (e) => {
+      const open = e.target.closest('[data-open]');
+      if (open) {
+        e.preventDefault();
+        const it = S.byId.get(open.dataset.open);
+        if (it) SK.Viewer.open([it], 0);
+        return;
+      }
+      const b = e.target.closest('[data-undo]');
+      if (!b) return;
+      b.disabled = true;
+      const r = await call(`/api/admin/history/${encodeURIComponent(b.closest('.hx-row').dataset.id)}/undo`, {});
+      if (!r) { b.disabled = false; return; }
+      report(r, t('Rückgängig gemacht'));
+      await SK.loadItems().catch(() => {});
+      await SK.loadPeople().catch(() => {});
+      trashCount();
+      load();
+    };
+    load();
   };
 })();
