@@ -449,6 +449,8 @@ window.I18N.en = {
   "Verkleinern": "Zoom out",
   "Vergrößern": "Zoom in",
   "Diashow starten": "Start the slideshow",
+  "Abspielen": "Play",
+  "Pause": "Pause",
   "Vorname": "First name",
   "Nachname": "Last name",
   "Zuletzt benutzt": "Recently used",

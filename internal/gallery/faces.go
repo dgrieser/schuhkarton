@@ -39,7 +39,33 @@ const (
 	// detector took for one): left out everywhere, never shown again
 	labelNoFace = "-"
 	minCluster  = 3
+	// rejectSep parts the names of "!A\x1fB": a face that is neither A nor B
+	rejectSep = "\x1f"
 )
+
+// rejects tells whether a face's label says it is not that person.
+func rejects(label, name string) bool {
+	if !strings.HasPrefix(label, "!") || name == "" {
+		return false
+	}
+	for _, n := range strings.Split(label[1:], rejectSep) {
+		if n == name {
+			return true
+		}
+	}
+	return false
+}
+
+// withReject adds a name to the names a face is not (label: "" or "!…").
+func withReject(label, name string) string {
+	if rejects(label, name) {
+		return label
+	}
+	if !strings.HasPrefix(label, "!") || len(label) == 1 {
+		return "!" + name
+	}
+	return label + rejectSep + name
+}
 
 type peopleStore struct {
 	path string
@@ -145,9 +171,12 @@ func (l *Library) NamePerson(id, name string) error {
 	}
 	for _, r := range p.refs {
 		k := r.key()
-		if name == "" {
+		switch {
+		case strings.HasPrefix(s.labels[k], "!") && (name == "" || rejects(s.labels[k], name)):
+			// a face said not to be this name keeps saying so (and does not join it)
+		case name == "":
 			delete(s.labels, k)
-		} else {
+		default:
 			s.labels[k] = name
 		}
 	}
@@ -179,8 +208,9 @@ func (l *Library) LabelFace(item string, idx int, name string) (string, error) {
 }
 
 // setLabel labels one face (see LabelFace); the caller holds s.mu. "Not
-// this person" remembers the name the face has now, so the next clustering
-// lets it join the next most alike person instead; a face without a named
+// this person" remembers the name the face has now, together with the names
+// it was said not to be before, so the next clustering lets it join the next
+// most alike person instead, and never one of those; a face without a named
 // person is hidden.
 func (s *peopleStore) setLabel(k, name string) {
 	switch {
@@ -188,14 +218,17 @@ func (s *peopleStore) setLabel(k, name string) {
 		s.labels[k] = labelNoFace
 	case name == "":
 		cur := s.labels[k]
-		pid := s.byFace[k]
-		if cur == "" || strings.HasPrefix(cur, "!") {
-			if p := s.byID[pid]; p != nil && p.Name != "" {
+		before := ""
+		if strings.HasPrefix(cur, "!") {
+			before, cur = cur, ""
+		}
+		if cur == "" {
+			if p := s.byID[s.byFace[k]]; p != nil && p.Name != "" {
 				cur = p.Name
 			}
 		}
-		if cur != "" && cur != labelHidden && !strings.HasPrefix(cur, "!") {
-			s.labels[k] = "!" + cur
+		if cur != "" && cur != labelHidden && cur != labelNoFace {
+			s.labels[k] = withReject(before, cur)
 		} else {
 			s.labels[k] = labelHidden
 		}
@@ -288,6 +321,9 @@ func (s *peopleStore) labelPersonIn(ids []string, person, name string) (map[stri
 			continue
 		}
 		k := r.key()
+		if rejects(s.labels[k], strings.TrimSpace(name)) {
+			continue // said not to be that person: stays apart
+		}
 		prev[k] = s.labels[k]
 		s.setLabel(k, name)
 	}
@@ -628,7 +664,7 @@ func buildPeople(items []faceSnap, labels map[string]string, threshNew, threshNa
 		var pairs []pair
 		for i, ms := range candidates(rest, namedList, threshNamed) {
 			for _, m := range ms {
-				if rest[i].label != "!"+m.c.name {
+				if !rejects(rest[i].label, m.c.name) {
 					pairs = append(pairs, pair{i, m.c, m.sim})
 				}
 			}
