@@ -115,7 +115,7 @@
     let drag = null;
     const viewer = () => grip.closest('.viewer') || grip.parentElement;
     grip.addEventListener('pointerdown', (e) => {
-      if (e.button) return;
+      if (e.button || e.target.closest('button')) return; // a button in the grip is pressed, not dragged
       e.preventDefault();
       grip.setPointerCapture(e.pointerId);
       drag = { y: e.clientY, h: get(), ly: e.clientY, lt: e.timeStamp, v: 0 };
@@ -168,6 +168,7 @@
   // menu: a small list of actions next to a button (a phone: a sheet at the bottom). entries:
   // { icon, label, run, danger }, or { head, sub } for a line on top that is not an action
   function menu(anchor, entries) {
+    if (anchor && Date.now() - (anchor.menuShut || 0) < 400) return; // its button pressed again: closed, stays closed
     $('.adm-menu')?.remove();
     const m = document.createElement('div');
     m.className = 'adm-menu';
@@ -175,7 +176,12 @@
     m.innerHTML = entries.map((e, i) => (e.head !== undefined ? `<div class="mh"><b>${esc(e.head)}</b>${e.sub ? `<small>${esc(e.sub)}</small>` : ''}</div>`
       : `<button type="button" role="menuitem" data-i="${i}" class="${e.danger ? 'danger' : ''}">${icon(e.icon)}<span>${esc(e.label)}</span></button>`)).join('');
     document.body.appendChild(m);
-    const off = (e) => { if (!m.contains(e.target)) { m.remove(); removeEventListener('pointerdown', off, true); } };
+    const off = (e) => {
+      if (m.contains(e.target)) return;
+      if (anchor?.contains?.(e.target)) anchor.menuShut = Date.now();
+      m.remove();
+      removeEventListener('pointerdown', off, true);
+    };
     sheetGrip(m, { onClose: () => { m.remove(); removeEventListener('pointerdown', off, true); }, min: 0 });
     if (!phoneMQ.matches) {
       const r = anchor.getBoundingClientRect();
@@ -492,8 +498,10 @@
 
     viewport() {
       if (this.opts.scrollRoot) {
+        // where the gallery is in its scroll box, by their rects (offsetTop counts from the nearest
+        // positioned parent, which may lie outside the box: the list under the map on a phone)
         const r = this.opts.scrollRoot;
-        return { top: r.scrollTop - this.el.offsetTop, h: r.clientHeight };
+        return { top: r.getBoundingClientRect().top + r.clientTop - this.el.getBoundingClientRect().top, h: r.clientHeight };
       }
       const top = this.el.getBoundingClientRect().top;
       return { top: -top, h: innerHeight };
@@ -1266,7 +1274,12 @@
     // An added face (face.add) is saved with its box.
     async saveFace(face, name) {
       const it = this.it;
-      if (name && name !== '-') store.set('recent-names', [name, ...store.get('recent-names', []).filter((n) => n !== name)].slice(0, 8));
+      if (name && name !== '-') {
+        store.set('recent-names', [name, ...store.get('recent-names', []).filter((n) => n !== name)].slice(0, 8));
+        // when each name was last given, for the order "recently used" (the 300 newest)
+        const used = Object.entries({ ...store.get('names-used', {}), [name]: Date.now() }).sort((a, b) => b[1] - a[1]).slice(0, 300);
+        store.set('names-used', Object.fromEntries(used));
+      }
       if (face.multi) { // a person in all photos of a selection
         const m = face.multi;
         const res = await post(`/api/items/people/${encodeURIComponent(m.person)}`, { ids: m.ids, name }).catch((e) => ({ error: e.message }));
@@ -1312,16 +1325,33 @@
       $('#pop')?.remove();
       const ov = document.createElement('div');
       ov.className = 'v-mark';
-      ov.innerHTML = `<div class="v-mark-hint"><span></span><button type="button" data-cancel>${t('Abbrechen')}</button></div>`;
       m.appendChild(ov);
-      const hint = $('.v-mark-hint span', ov);
+      // the hint lies on the stage, not on the picture (which zooms); after a while only its
+      // button stays, a tap on it shows the text again
+      const hintBar = document.createElement('div');
+      hintBar.className = 'v-mark-hint';
+      hintBar.innerHTML = `<span></span><button type="button" data-cancel>${t('Abbrechen')}</button>`;
+      this.stage.appendChild(hintBar);
+      const hint = $('span', hintBar);
+      let foldT = 0;
+      const unfold = () => {
+        hintBar.classList.remove('folded');
+        clearTimeout(foldT);
+        foldT = setTimeout(() => hintBar.classList.add('folded'), 5000);
+      };
       const box = document.createElement('div');
       box.className = 'v-face mark';
-      // size and confirm buttons next to the box; outside the picture, so they also fit beside a small one
+      // on a touch screen a grip under the box moves it too (the finger does not cover the box)
+      if (isTouch) box.innerHTML = `<i class="mark-grip" title="${t('Verschieben')}">${icon('drag')}</i>`;
+      // zoom, size and confirm buttons next to the box; outside the picture, so they also fit
+      // beside a small one
       const tools = document.createElement('div');
       tools.className = 'v-mark-tools';
-      tools.innerHTML = `<button type="button" data-k="-" title="${t('Kleiner')} (−)">${icon('minus')}</button>
-        <button type="button" data-k="+" title="${t('Größer')} (+)">${icon('plus')}</button>
+      tools.innerHTML = `<button type="button" data-k="zo" title="${t('Verkleinern')}">${icon('zoom-out')}</button>
+        <button type="button" data-k="zi" title="${t('Vergrößern')}">${icon('zoom-in')}</button>
+        <span class="sep"></span>
+        <button type="button" data-k="-" title="${t('Rahmen kleiner')} (−)">${icon('minus')}</button>
+        <button type="button" data-k="+" title="${t('Rahmen größer')} (+)">${icon('plus')}</button>
         <button type="button" class="ok" data-k="ok" title="${t('Weiter')} (Enter)">${icon('check')}<span>${t('Weiter')}</span></button>`;
       this.el.classList.add('marking'); // bars out of the way
       let b = null, drag = null;
@@ -1343,15 +1373,19 @@
       ro.observe(ov);
       const done = () => {
         ov.remove();
+        hintBar.remove();
+        clearTimeout(foldT);
         tools.remove();
         ro.disconnect();
+        if (this.zoom.s !== 1) this.resetZoom(true);
         $('#pop')?.remove();
         this.el.classList.remove('marking');
         if (this.mark === mark) this.mark = null;
       };
       // with a box: it can be moved and resized; without: one is drawn
       const adjusting = (on) => {
-        hint.textContent = on ? t('Rahmen auf das Gesicht schieben, Größe mit − und +') : t('Rahmen um das Gesicht ziehen oder auf das Gesicht tippen');
+        const text = on ? t('Rahmen auf das Gesicht schieben, Größe mit − und +') : t('Rahmen um das Gesicht ziehen oder auf das Gesicht tippen');
+        if (hint.textContent !== text) { hint.textContent = text; unfold(); }
         if (!on) { tools.remove(); return; }
         $('#pop')?.remove();
         document.body.appendChild(tools);
@@ -1363,6 +1397,7 @@
         b = { x: clamp(nb.x, 0, 1 - w), y: clamp(nb.y, 0, 1 - h), w, h };
         if (!box.isConnected) ov.appendChild(box);
         Object.assign(box.style, { left: `${b.x * 100}%`, top: `${b.y * 100}%`, width: `${w * 100}%`, height: `${h * 100}%` });
+        box.classList.toggle('grip-up', b.y + h > 0.8); // no room under it: the grip above
         if (!keepTools) placeTools();
       };
       // a square box around a point: given size (fractions), or a fifth of the picture's shorter side
@@ -1379,6 +1414,16 @@
         if (f < 1 && Math.min(b.w * r.width, b.h * r.height) * f < 16) return;
         const w = b.w * f, h = b.h * f;
         place({ x: b.x - (w - b.w) / 2, y: b.y - (h - b.h) / 2, w, h }, true);
+      };
+      // zooms the picture in or out, the box in the middle of the stage (as far as the picture
+      // reaches); the bar follows once the picture is there
+      const zoomBox = (f) => {
+        const st = this.stage.getBoundingClientRect(), r = (b ? box : ov).getBoundingClientRect();
+        this.animateZoom();
+        const ns = this.zoom.s * f;
+        if (ns < 1.05) this.resetZoom(); // back to the whole picture (not a hair above it)
+        else this.zoomAt(r.left + r.width / 2, r.top + r.height / 2, ns, st.left + st.width / 2, st.top + st.height / 2);
+        setTimeout(placeTools, 260);
       };
       const ok = () => {
         if (!b) return;
@@ -1409,11 +1454,18 @@
           return true;
         },
       });
-      $('[data-cancel]', ov).onclick = (e) => { e.stopPropagation(); done(); };
+      hintBar.onclick = (e) => {
+        e.stopPropagation();
+        if (e.target.closest('[data-cancel]')) done();
+        else unfold();
+      };
+      for (const ev of ['pointerdown', 'dblclick', 'touchstart']) hintBar.addEventListener(ev, (e) => e.stopPropagation());
       tools.onclick = (e) => {
         const k = e.target.closest('[data-k]')?.dataset.k;
         if (k === '+') resize(1.2);
         if (k === '-') resize(1 / 1.2);
+        if (k === 'zi') zoomBox(1.6);
+        if (k === 'zo') zoomBox(1 / 1.6);
         if (k === 'ok') ok();
       };
       const pos = (e) => {
@@ -1428,11 +1480,10 @@
       };
       const draw = (a, c) => place({ x: Math.min(a.x, c.x), y: Math.min(a.y, c.y), w: Math.abs(a.x - c.x), h: Math.abs(a.y - c.y) });
       ov.onpointerdown = (e) => {
-        if (e.target.closest('.v-mark-hint')) return;
         e.preventDefault(); e.stopPropagation();
         ov.setPointerCapture(e.pointerId);
         const p = pos(e);
-        if (onBox(e)) { drag = { p, b0: b, move: true }; adjusting(true); return; }
+        if (e.target.closest('.mark-grip') || onBox(e)) { drag = { p, b0: b, move: true }; adjusting(true); return; }
         drag = { p, prev: b };
         $('#pop')?.remove();
         tools.remove();
@@ -1477,13 +1528,42 @@
     namePop(anchor, face, onClose) {
       if (!Account.need('user')) return;
       $('#pop')?.remove();
-      // one entry per name; the group with the most photos gives the picture
-      const people = new Map();
-      for (const p of S.people) if (p.name && !(people.get(p.name)?.count >= p.count)) people.set(p.name, p);
-      const names = [...people.keys()].sort((a, b) => a.localeCompare(b));
-      const recent = store.get('recent-names', []).filter((n) => people.has(n)).slice(0, 4);
+      // one entry per name; the group with the most photos gives the picture, all of them the count
+      const people = new Map(), total = new Map();
+      for (const p of S.people) {
+        if (!p.name) continue;
+        total.set(p.name, (total.get(p.name) || 0) + (p.count || 0));
+        if (!(people.get(p.name)?.count >= p.count)) people.set(p.name, p);
+      }
+      const recent = store.get('recent-names', []).filter((n) => people.has(n));
       const img = (n) => { const c = people.get(n).cover; return c ? `<img src="${faceURL(c.item, c.idx)}" alt="" loading="lazy">` : '<i></i>'; };
       const person = (n) => `<button type="button" data-name="${esc(n)}"${n === face.name ? ' class="cur"' : ''}>${img(n)}<span>${esc(n)}</span>${n === face.name ? icon('check') : ''}</button>`;
+      // the list in an order of one's choice (kept): first name, last name, most photos, recently used
+      const SORTS = [['first', t('Vorname')], ['last', t('Nachname')], ['count', t('Meiste Fotos')], ['recent', t('Zuletzt benutzt')]];
+      let sort = SORTS.some(([k]) => k === store.get('name-sort')) ? store.get('name-sort') : 'first';
+      const words = (n) => n.trim().split(/\s+/);
+      const lastKey = (n) => { const w = words(n); return [w[w.length - 1], ...w.slice(0, -1)].join(' '); };
+      const sorted = () => {
+        // names given before this was kept: in the order of the recent ones
+        const used = store.get('names-used', {}), abc = (a, b) => a.localeCompare(b);
+        const when = (x) => used[x] || (recent.includes(x) ? recent.length - recent.indexOf(x) : 0);
+        const by = {
+          first: abc,
+          last: (a, b) => lastKey(a).localeCompare(lastKey(b)) || abc(a, b),
+          count: (a, b) => (total.get(b) || 0) - (total.get(a) || 0) || abc(a, b),
+          recent: (a, b) => when(b) - when(a) || abc(a, b),
+        }[sort];
+        return [...people.keys()].sort(by);
+      };
+      const names = sorted();
+      // the recent ones as chips with their first names (more of them fit); the same first
+      // name twice: with the initial of the last name
+      const firsts = recent.map((n) => words(n)[0]);
+      const chip = (n, i) => {
+        const w = words(n), short = w.length > 1 && firsts.filter((f) => f === firsts[i]).length > 1 ? `${w[0]} ${w[w.length - 1][0]}.` : w[0];
+        return `<button type="button" data-name="${esc(n)}" title="${esc(n)}">${img(n)}<span>${esc(short)}</span></button>`;
+      };
+      const sortLabel = () => SORTS.find(([k]) => k === sort)[1];
       const sheet = this.sheetMode.matches;
       const pop = document.createElement('div');
       pop.className = `pop name-pop${isTouch ? ' touch' : ''}${sheet ? ' sheet' : ''}${face.multi ? ' themed' : ''}`; // themed: over the page, not the viewer
@@ -1491,8 +1571,8 @@
       // the face asked about; a person in a selection: its picture, and in how many photos
       const m = face.multi;
       const pic = m ? faceURL(m.cover.item, m.cover.idx) : face.add ? '' : faceURL(this.it.id, face.idx);
-      pop.innerHTML = `<div class="np-head"${sheet ? ` title="${t('Ziehen: Höhe ändern')}"` : ''}>${pic ? `<img src="${pic}" alt="">` : ''}<div><b>${face.name ? t('Ist das {name}?', { name: esc(face.name) }) : t('Wer ist das?')}</b>${m ? `<small>${pl(m.items, 'in {n} Foto', 'in {n} Fotos')}</small>` : ''}</div>${sheet ? '' : `<button type="button" class="btn ghost icon np-x" data-a="cancel" title="${t('Schließen')}">${icon('x')}</button>`}</div>
-        ${recent.length ? `<div class="np-recent">${recent.map((n) => `<button type="button" data-name="${esc(n)}">${img(n)}<span>${esc(n)}</span></button>`).join('')}</div>` : ''}
+      pop.innerHTML = `<div class="np-head"${sheet ? ` title="${t('Ziehen: Höhe ändern')}"` : ''}>${pic ? `<img src="${pic}" alt="">` : ''}<div><b>${face.name ? t('Ist das {name}?', { name: esc(face.name) }) : t('Wer ist das?')}</b>${m ? `<small>${pl(m.items, 'in {n} Foto', 'in {n} Fotos')}</small>` : ''}</div>${names.length > 1 ? `<button type="button" class="np-sort" data-a="sort" title="${t('Sortieren')}" aria-haspopup="menu">${icon('sort')}<span>${esc(sortLabel())}</span></button>` : ''}${sheet ? '' : `<button type="button" class="btn ghost icon np-x" data-a="cancel" title="${t('Schließen')}">${icon('x')}</button>`}</div>
+        ${recent.length ? `<div class="np-recent">${recent.map(chip).join('')}</div>` : ''}
         ${names.length && !isTouch ? `<input type="search" class="np-search" placeholder="${t('Person suchen')}" autocomplete="off" enterkeyhint="done">` : ''}
         ${names.length ? `<div class="np-list">${names.map(person).join('')}<button type="button" class="np-typed" data-a="typed" hidden>${icon('plus')}<span></span></button></div>` : ''}
         <button type="button" class="np-add" data-a="new">${icon('plus')}<span>${t('Neue Person …')}</span></button>
@@ -1598,7 +1678,7 @@
       const dismiss = () => { if (face.back) { pop.remove(); face.back(); } else close(); };
       // a press beside it puts it away (a box marked by hand: back to the box)
       const off = (e) => {
-        if (pop.isConnected && (pop.contains(e.target) || e.target.closest('.sp'))) return;
+        if (pop.isConnected && (pop.contains(e.target) || e.target.closest('.sp, .adm-menu'))) return;
         removeEventListener('pointerdown', off, true);
         if (pop.isConnected) dismiss();
       };
@@ -1649,6 +1729,25 @@
         if (a === 'noname' || a === 'not') save('');
         if (a === 'cancel') close();
         if (a === 'noface') save('-');
+        if (a === 'sort') {
+          const btn = e.target.closest('[data-a]');
+          menu(btn, SORTS.map(([k, l]) => ({ icon: k === sort ? 'check' : 'none', label: l, run: () => resort(k) })));
+        }
+      };
+      // a new order: the list drawn again, the search or the typed name still applies
+      const resort = (k) => {
+        sort = k;
+        store.set('name-sort', k);
+        $('.np-sort span', pop).textContent = sortLabel();
+        if (list) {
+          list.innerHTML = `${sorted().map(person).join('')}`;
+          list.appendChild(typed);
+          list.scrollTop = 0;
+        }
+        filter(adding() ? nameIn.value.trim() : search?.value.trim() || '');
+        // the keys go to the question again (the menu took them)
+        if (search && !isTouch) search.focus();
+        else $('.np-sort', pop).focus({ preventScroll: true });
       };
     },
 
@@ -1685,6 +1784,7 @@
       if (z.s === 1) z.x = z.y = 0;
       else this.clampZoom();
       this.media.style.transform = z.s === 1 ? '' : `translate(${z.x}px, ${z.y}px) scale(${z.s})`;
+      this.media.style.setProperty('--zs', z.s); // what keeps its size while zooming divides by it
       this.stage.style.cursor = z.s > 1 ? 'grab' : '';
     },
     // scales by ns around the screen point (cx, cy) and moves that point to (tx, ty); pinches may dip below 1 and snap back
@@ -2349,7 +2449,7 @@
       const m = document.createElement('div');
       m.className = 'vmenu';
       m.setAttribute('role', 'dialog');
-      m.innerHTML = `<header><b>${t('Ansicht')}</b><button class="btn ghost icon" data-close title="${t('Schließen')}">${icon('x')}</button></header>
+      m.innerHTML = `<header><b>${t('Ansicht')}</b><button class="btn vslides" data-slides title="${t('Diashow starten')}">${icon('slides')}<span>${t('Diashow')}</span></button><button class="btn ghost icon" data-close title="${t('Schließen')}">${icon('x')}</button></header>
         <h4>${t('Anordnung')}</h4><div class="seg wide">${lay('rows', 'Reihen')}${lay('grid', 'Raster')}${lay('masonry', 'Mosaik')}</div>
         ${group ? `<h4>${t('Gruppieren nach')}</h4><div class="seg wide">${[['year', 'Jahren'], ['month', 'Monaten'], ['day', 'Tagen']].map(([k, l]) => `<button data-grp="${k}" class="${S.group === k ? 'on' : ''}">${t(l)}</button>`).join('')}</div>` : ''}
         <h4>${t('Größe')}</h4><input type="range" min="70" max="420" step="10" value="${S.size}" data-size aria-label="${t('Größe')}">
@@ -2359,6 +2459,7 @@
       sheetGrip(m, { key: 'view', onClose: () => this.close() });
       bindTools(m, g);
       $('[data-close]', m).onclick = () => this.close();
+      $('[data-slides]', m).onclick = () => { this.close(); slideshow(g); };
       this.off = (e) => { if (!m.contains(e.target) && !e.target.closest('[data-vmenu]')) this.close(); };
       document.addEventListener('pointerdown', this.off, true);
       cleanup.push(() => this.close());
@@ -2371,6 +2472,15 @@
     },
   };
   const byKind = (items) => items.filter(shown);
+
+  // the photos of a gallery (the page's, else everything) as a slideshow, full screen
+  function slideshow(g) {
+    const list = (g?.items || S.gallery?.items || S.items).filter((it) => it.k === 1);
+    if (!list.length) { toast(t('Keine Fotos gefunden.')); return; }
+    if (FS.ok && !FS.on) { FS.enter(); FS.auto = true; }
+    Viewer.open(list, 0);
+    Viewer.startSlides();
+  }
 
   function galleryView(view, { title, sub = '', items, group = S.group, kinds = false, before = '', snips = null, autoplay = false, scrub = true, emptyText = t('Keine Fotos gefunden.'), tools = {} }) {
     // sub may be a function of the shown items, so it follows the kind switches
@@ -2647,8 +2757,7 @@
       head.firstElementChild.outerHTML = `<div class="person-head"><span class="face"><img src="${faceURL(p.cover.item, p.cover.idx)}" alt=""></span><div>
         <input class="name-in" id="pname" value="${esc(p.name)}" placeholder="${Account.can('user') ? t('Name hinzufügen') : t('Unbenannt')}" list="pn2" ${Account.can('user') ? '' : 'readonly'}><datalist id="pn2">${names.map((n) => `<option value="${esc(n)}">`).join('')}</datalist>
         <div class="sub">${pl(items.length, '{n} Foto', '{n} Fotos')}</div></div></div>`;
-      $('.head .tools', view).insertAdjacentHTML('afterbegin', `<button class="btn" id="phide" data-need="user" title="${t('Diese Gruppe nicht mehr zeigen')}">${icon('eye-off')}<span>${t('Ausblenden')}</span></button>
-        <button class="btn" id="pnoface" data-need="user" title="${t('Falsch erkannt: das sind keine Gesichter. Sie werden nicht mehr gezeigt und nicht wieder gesucht.')}">${icon('face-x')}<span>${t('Kein Gesicht')}</span></button>`);
+      $('.head .tools', view).insertAdjacentHTML('afterbegin', `<button class="btn view-btn pact" id="pact" data-need="user" title="${t('Person')}: ${t('Ausblenden')}, ${t('Kein Gesicht')}" aria-haspopup="menu">${icon('face')}${icon('down')}</button>`);
       const inp = $('#pname', view);
       const save = async () => {
         const name = inp.value.trim();
@@ -2663,7 +2772,7 @@
       };
       inp.onkeydown = (e) => { if (e.key === 'Enter') inp.blur(); };
       inp.onchange = save;
-      $('#pnoface', view).onclick = async () => {
+      const noFace = async () => {
         const res = await post(`/api/people/${encodeURIComponent(id)}`, { name: '-' });
         await loadPeople();
         await loadItems();
@@ -2675,13 +2784,18 @@
           toast(t('Wiederhergestellt'));
         });
       };
-      $('#phide', view).onclick = async () => {
+      const hide = async () => {
         const res = await post(`/api/people/${encodeURIComponent(id)}`, { name: '~' });
         await loadPeople();
         location.replace('#/personen'); // the hidden group is gone: "back" must not lead to it
         if (res.hidden) toast(t('Ausgeblendet'), t('Rückgängig'), () => showHidden(res.hidden, id));
         else toast(t('Ausgeblendet'));
       };
+      $('#pact', view).onclick = (e) => menu(e.currentTarget, [
+        { head: p.name || t('Unbenannt'), sub: pl(items.length, '{n} Foto', '{n} Fotos') },
+        { icon: 'eye-off', label: t('Ausblenden'), run: hide },
+        { icon: 'face-x', label: t('Kein Gesicht'), run: noFace },
+      ]);
     },
 
     async ausgeblendet(view) {
@@ -3051,13 +3165,7 @@
   $('#theme').onclick = () => Theme.cycle();
   $('#rescan').onclick = async () => { await post('/api/rescan', {}); toast(t('Ordner werden neu eingelesen')); pollStatus(); };
   $('#menu').onclick = () => $('#side').classList.toggle('open');
-  $('#slideBtn').onclick = () => {
-    const list = (S.gallery?.items || S.items).filter((it) => it.k === 1);
-    if (!list.length) return;
-    if (FS.ok && !FS.on) { FS.enter(); FS.auto = true; }
-    Viewer.open(list, 0);
-    Viewer.startSlides();
-  };
+  $('#slideBtn').onclick = () => slideshow();
   document.addEventListener('click', (e) => {
     if ($('#side').classList.contains('open') && !e.target.closest('#side') && !e.target.closest('#menu') && !e.target.closest('.pop')) $('#side').classList.remove('open');
   });
