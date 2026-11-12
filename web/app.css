@@ -422,7 +422,10 @@ body.has-scrubber .view { padding-right: 64px; }
 .v-face {
   position: absolute; border: 2px solid rgba(255, 255, 255, .9); border-radius: 8px; pointer-events: auto; cursor: pointer;
   box-shadow: 0 0 0 1px rgba(0, 0, 0, .3);
+  /* a zoomed picture: frames and names keep their size on the screen */
+  border-width: calc(2px / var(--zs, 1)); border-radius: calc(8px / var(--zs, 1));
 }
+.v-face span { transform: scale(calc(1 / var(--zs, 1))); transform-origin: 0 0; }
 .v-face span {
   position: absolute; left: -2px; top: 100%; margin-top: 4px; white-space: nowrap;
   background: rgba(0, 0, 0, .72); padding: 2px 8px; border-radius: 6px; font-size: 12px; font-weight: 600;
@@ -433,6 +436,8 @@ body.has-scrubber .view { padding-right: 64px; }
 @keyframes face-flash { 50% { border-color: var(--accent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 45%, transparent), 0 0 0 9999px rgba(0, 0, 0, .35); } }
 /* marking a face by hand */
 .viewer.marking .v-top, .viewer.marking .v-strip, .viewer.marking .v-nav, .viewer.marking .v-faces { opacity: 0; pointer-events: none; }
+/* moving the box selects no text and opens no callout */
+.viewer.marking, .viewer.marking :not(input, textarea), .v-mark-tools, .v-mark-tools * { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 .v-mark { position: absolute; inset: 0; z-index: 4; cursor: crosshair; touch-action: none; background: rgba(0, 0, 0, .18); }
 .v-face.mark { border-color: var(--accent); box-shadow: 0 0 0 1px rgba(0, 0, 0, .4), 0 0 0 9999px rgba(0, 0, 0, .25); pointer-events: none; }
 .v-mark-hint { position: absolute; z-index: 6; left: 50%; top: 10px; transform: translateX(-50%); display: flex; align-items: center; gap: 8px; width: max-content; max-width: calc(100% - 20px);
@@ -453,6 +458,10 @@ body.has-scrubber .view { padding-right: 64px; }
 .v-mark-tools button:hover { background: rgba(255, 255, 255, .26); }
 .v-mark-tools button.ok { padding: 0 14px; background: var(--accent); color: var(--accent-ink); }
 .v-mark-tools .sep { flex: none; width: 1px; margin: 8px 1px; background: rgba(255, 255, 255, .22); }
+/* narrow screens: the buttons shrink so the bar fits (with the play button of a video too) */
+.v-mark-tools { max-width: calc(100vw - 16px); }
+.v-mark-tools button { flex: 0 1 auto; min-width: 34px; }
+@media (max-width: 360px) { .v-mark-tools button.ok span { display: none; } .v-mark-tools button.ok { padding: 0 12px; } }
 .viewer.faces-on .v-media img { -webkit-touch-callout: none; }
 .pop.v-ctx { width: auto; min-width: 200px; padding: 6px; gap: 2px; }
 .pop.v-ctx button { display: flex; align-items: center; gap: 10px; height: 40px; padding: 0 12px; border: 0; border-radius: 8px; background: none; font-size: 14px; text-align: left; white-space: nowrap; }

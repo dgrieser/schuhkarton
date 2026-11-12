@@ -1187,7 +1187,7 @@
     // a menu at that spot (above a finger, so it is not covered). False when there is none
     // (e.g. beside the picture).
     faceMenu(x, y, touch = false) {
-      if (!this.showFaces || this.it?.k !== 1 || this.mark || !Account.can('user')) return false;
+      if (!this.showFaces || (this.it?.k !== 1 && this.it?.k !== 2) || this.mark || !Account.can('user')) return false;
       const r = this.media.getBoundingClientRect();
       if (x < r.left || x > r.right || y < r.top || y > r.bottom) return false;
       const at = { x: (x - r.left) / r.width, y: (y - r.top) / r.height };
@@ -1275,7 +1275,7 @@
     async saveFace(face, name) {
       const it = this.it;
       if (name && name !== '-') {
-        store.set('recent-names', [name, ...store.get('recent-names', []).filter((n) => n !== name)].slice(0, 8));
+        store.set('recent-names', [name, ...store.get('recent-names', []).filter((n) => n !== name)].slice(0, 12));
         // when each name was last given, for the order "recently used" (the 300 newest)
         const used = Object.entries({ ...store.get('names-used', {}), [name]: Date.now() }).sort((a, b) => b[1] - a[1]).slice(0, 300);
         store.set('names-used', Object.fromEntries(used));
@@ -1315,12 +1315,18 @@
     markFace(at) {
       if (!Account.need('user')) return;
       const it = this.it, m = this.media;
+      this.mark?.end(); // first: it gives the video its controls back
       const v = it.k === 2 ? $('video', m) : null;
-      const time = v ? (v.pause(), v.currentTime) : 0;
+      v?.pause();
+      // a video: its own controls (the big play button in the middle) go while marking; it
+      // plays and pauses with a button of the bar, the box goes on the frame shown at "next"
+      const hadControls = !!v?.controls;
+      if (v) v.controls = false;
       const lv = $('.live-v', m); // a Live Photo: the box is drawn on the still photo
       if (lv) { lv.pause(); lv.classList.remove('on'); }
-      this.mark?.end();
-      this.resetZoom();
+      getSelection()?.removeAllRanges(); // a long press may have started one
+      // a zoomed picture stays zoomed (the zoom can still be changed); afterwards it is as before
+      const zoom0 = { ...this.zoom };
       if (this.sheetMode.matches) this.setSheet(Math.min(this.sheetH(), innerHeight * 0.3)); // room for the picture
       $('#pop')?.remove();
       const ov = document.createElement('div');
@@ -1347,7 +1353,7 @@
       // beside a small one
       const tools = document.createElement('div');
       tools.className = 'v-mark-tools';
-      tools.innerHTML = `<button type="button" data-k="zo" title="${t('Verkleinern')}">${icon('zoom-out')}</button>
+      tools.innerHTML = `${v ? `<button type="button" data-k="play" title="${t('Abspielen')} / ${t('Pause')}">${icon('play')}</button><span class="sep"></span>` : ''}<button type="button" data-k="zo" title="${t('Verkleinern')}">${icon('zoom-out')}</button>
         <button type="button" data-k="zi" title="${t('Vergrößern')}">${icon('zoom-in')}</button>
         <span class="sep"></span>
         <button type="button" data-k="-" title="${t('Rahmen kleiner')} (−)">${icon('minus')}</button>
@@ -1355,29 +1361,36 @@
         <button type="button" class="ok" data-k="ok" title="${t('Weiter')} (Enter)">${icon('check')}<span>${t('Weiter')}</span></button>`;
       this.el.classList.add('marking'); // bars out of the way
       let b = null, drag = null;
-      // the bar goes below the picture (no room: above it; a picture that fills the stage: at
-      // the stage's bottom edge), under the middle of the box, so a growing box does not run
-      // into it. It stays where it is while the box is resized: − and + can be tapped again
-      // and again at the same spot.
+      // the bar has one place: the middle of the stage's bottom edge. Wherever the box goes and
+      // however the picture zooms, its buttons stay under the finger and can be tapped again
+      // and again.
       const placeTools = () => {
         if (!tools.isConnected) return;
-        const p = ov.getBoundingClientRect(), s = this.stage.getBoundingClientRect(), tw = tools.offsetWidth, th = tools.offsetHeight;
-        const lo = Math.max(s.top, 0) + 8, hi = Math.min(s.bottom, innerHeight) - th - 8;
-        let top = p.bottom + 10;
-        if (top > hi) top = p.top - th - 10 >= lo ? p.top - th - 10 : hi;
-        const r = box.isConnected ? box.getBoundingClientRect() : p;
-        tools.style.left = `${clamp(r.left + r.width / 2 - tw / 2, 8, innerWidth - tw - 8)}px`;
-        tools.style.top = `${clamp(top, 8, innerHeight - th - 8)}px`;
+        const s = this.stage.getBoundingClientRect(), tw = tools.offsetWidth, th = tools.offsetHeight;
+        tools.style.left = `${clamp(s.left + s.width / 2 - tw / 2, 8, innerWidth - tw - 8)}px`;
+        tools.style.top = `${clamp(Math.min(s.bottom, innerHeight) - th - 12, 8, innerHeight - th - 8)}px`;
       };
-      const ro = new ResizeObserver(placeTools); // the picture changes size (sheet, rotation)
-      ro.observe(ov);
+      const ro = new ResizeObserver(placeTools); // the stage changes size (sheet, rotation)
+      ro.observe(this.stage);
+      const playIcon = () => { const pb = $('[data-k="play"]', tools); if (pb) pb.innerHTML = icon(v.paused ? 'play' : 'pause'); };
+      v?.addEventListener('play', playIcon);
+      v?.addEventListener('pause', playIcon);
       const done = () => {
         ov.remove();
         hintBar.remove();
         clearTimeout(foldT);
         tools.remove();
         ro.disconnect();
-        if (this.zoom.s !== 1) this.resetZoom(true);
+        if (v) {
+          v.removeEventListener('play', playIcon);
+          v.removeEventListener('pause', playIcon);
+          v.controls = hadControls;
+        }
+        if (this.zoom.s !== zoom0.s || this.zoom.x !== zoom0.x || this.zoom.y !== zoom0.y) {
+          this.zoom = zoom0;
+          this.animateZoom();
+          this.applyZoom();
+        }
         $('#pop')?.remove();
         this.el.classList.remove('marking');
         if (this.mark === mark) this.mark = null;
@@ -1400,9 +1413,11 @@
         box.classList.toggle('grip-up', b.y + h > 0.8); // no room under it: the grip above
         if (!keepTools) placeTools();
       };
-      // a square box around a point: given size (fractions), or a fifth of the picture's shorter side
+      // a square box around a point: given size (fractions), or a fifth of the shorter side of
+      // what is seen of the picture (zoomed in: of the stage)
       const around = (p, size) => {
-        const r = ov.getBoundingClientRect(), side = Math.min(r.width, r.height) * 0.2;
+        const r = ov.getBoundingClientRect(), st = this.stage.getBoundingClientRect();
+        const side = Math.min(r.width, r.height, st.width, st.height) * 0.2;
         const w = size?.w ?? side / r.width, h = size?.h ?? side / r.height;
         place({ x: p.x - w / 2, y: p.y - h / 2, w, h });
       };
@@ -1425,10 +1440,27 @@
         else this.zoomAt(r.left + r.width / 2, r.top + r.height / 2, ns, st.left + st.width / 2, st.top + st.height / 2);
         setTimeout(placeTools, 260);
       };
+      // the face as a small picture for the question, cut from what is shown (the face's own
+      // picture is made only when it is saved)
+      const preview = () => {
+        try {
+          const src = v || $$('img', m).filter((i) => i.complete && i.naturalWidth).sort((x, y) => y.naturalWidth - x.naturalWidth)[0];
+          const W = v ? v.videoWidth : src?.naturalWidth, H = v ? v.videoHeight : src?.naturalHeight;
+          if (!W || !H) return '';
+          const side = Math.max(b.w * W, b.h * H) * 1.15, cx = (b.x + b.w / 2) * W, cy = (b.y + b.h / 2) * H;
+          const c = document.createElement('canvas');
+          c.width = c.height = 96;
+          c.getContext('2d').drawImage(src, cx - side / 2, cy - side / 2, side, side, 0, 0, 96, 96);
+          return c.toDataURL('image/jpeg', 0.85);
+        } catch {
+          return '';
+        }
+      };
       const ok = () => {
         if (!b) return;
+        v?.pause();
         tools.remove();
-        this.namePop(box, { add: true, box: b, t: time, back: () => adjusting(true) }, done);
+        this.namePop(box, { add: true, box: b, t: v ? v.currentTime : 0, pic: preview(), back: () => adjusting(true) }, done);
       };
       const mark = (this.mark = {
         end: done,
@@ -1466,6 +1498,7 @@
         if (k === '-') resize(1 / 1.2);
         if (k === 'zi') zoomBox(1.6);
         if (k === 'zo') zoomBox(1 / 1.6);
+        if (k === 'play') v.paused ? v.play().catch(() => {}) : v.pause();
         if (k === 'ok') ok();
       };
       const pos = (e) => {
@@ -1479,14 +1512,21 @@
         return p.x >= b.x - sx && p.x <= b.x + b.w + sx && p.y >= b.y - sy && p.y <= b.y + b.h + sy;
       };
       const draw = (a, c) => place({ x: Math.min(a.x, c.x), y: Math.min(a.y, c.y), w: Math.abs(a.x - c.x), h: Math.abs(a.y - c.y) });
+      // moving the box by finger is fine-grained: it goes half as far as the finger, starts only
+      // after a few pixels (no jump when touching it), and the twitch of a finger lifting off
+      // is taken back
       ov.onpointerdown = (e) => {
         e.preventDefault(); e.stopPropagation();
+        getSelection()?.removeAllRanges();
         ov.setPointerCapture(e.pointerId);
         const p = pos(e);
-        if (e.target.closest('.mark-grip') || onBox(e)) { drag = { p, b0: b, move: true }; adjusting(true); return; }
+        if (e.target.closest('.mark-grip') || onBox(e)) {
+          drag = { x: e.clientX, y: e.clientY, b0: b, move: true, live: false, k: e.pointerType === 'mouse' ? 1 : 0.5, hist: [] };
+          adjusting(true);
+          return;
+        }
         drag = { p, prev: b };
         $('#pop')?.remove();
-        tools.remove();
         draw(p, p);
       };
       ov.onpointermove = (e) => {
@@ -1495,15 +1535,28 @@
           return;
         }
         e.stopPropagation();
-        const p = pos(e);
-        if (drag.move) place({ ...drag.b0, x: drag.b0.x + p.x - drag.p.x, y: drag.b0.y + p.y - drag.p.y });
-        else draw(drag.p, p);
+        if (!drag.move) { draw(drag.p, pos(e)); return; }
+        if (!drag.live) {
+          if (Math.hypot(e.clientX - drag.x, e.clientY - drag.y) < 5) return;
+          Object.assign(drag, { live: true, x: e.clientX, y: e.clientY }); // from here, without the dead pixels
+          return;
+        }
+        const r = ov.getBoundingClientRect();
+        place({ ...drag.b0, x: drag.b0.x + ((e.clientX - drag.x) * drag.k) / r.width, y: drag.b0.y + ((e.clientY - drag.y) * drag.k) / r.height });
+        drag.hist.push({ t: e.timeStamp, b });
+        if (drag.hist.length > 30) drag.hist.shift();
       };
       ov.onpointerup = ov.onpointercancel = (e) => {
         if (!drag) return;
         e.stopPropagation();
         const d = drag;
         drag = null;
+        if (d.move && d.hist.length) {
+          // where the box was a moment before letting go, when it moved only a little since
+          const was = [...d.hist].reverse().find((h) => e.timeStamp - h.t >= 90);
+          const r = ov.getBoundingClientRect();
+          if (was && Math.hypot((b.x - was.b.x) * r.width, (b.y - was.b.y) * r.height) < 10) place(was.b);
+        }
         // a tap: the box goes there, keeping its size; the first one gets a size of its own
         if (!d.move && (b.w < 0.02 || b.h < 0.02)) around(d.p, d.prev);
         adjusting(true);
@@ -1535,7 +1588,7 @@
         total.set(p.name, (total.get(p.name) || 0) + (p.count || 0));
         if (!(people.get(p.name)?.count >= p.count)) people.set(p.name, p);
       }
-      const recent = store.get('recent-names', []).filter((n) => people.has(n));
+      const recent = store.get('recent-names', []).filter((n) => people.has(n)).slice(0, 12);
       const img = (n) => { const c = people.get(n).cover; return c ? `<img src="${faceURL(c.item, c.idx)}" alt="" loading="lazy">` : '<i></i>'; };
       const person = (n) => `<button type="button" data-name="${esc(n)}"${n === face.name ? ' class="cur"' : ''}>${img(n)}<span>${esc(n)}</span>${n === face.name ? icon('check') : ''}</button>`;
       // the list in an order of one's choice (kept): first name, last name, most photos, recently used
@@ -1570,7 +1623,7 @@
       pop.id = 'pop';
       // the face asked about; a person in a selection: its picture, and in how many photos
       const m = face.multi;
-      const pic = m ? faceURL(m.cover.item, m.cover.idx) : face.add ? '' : faceURL(this.it.id, face.idx);
+      const pic = m ? faceURL(m.cover.item, m.cover.idx) : face.add ? face.pic || '' : faceURL(this.it.id, face.idx);
       pop.innerHTML = `<div class="np-head"${sheet ? ` title="${t('Ziehen: Höhe ändern')}"` : ''}>${pic ? `<img src="${pic}" alt="">` : ''}<div><b>${face.name ? t('Ist das {name}?', { name: esc(face.name) }) : t('Wer ist das?')}</b>${m ? `<small>${pl(m.items, 'in {n} Foto', 'in {n} Fotos')}</small>` : ''}</div>${names.length > 1 ? `<button type="button" class="np-sort" data-a="sort" title="${t('Sortieren')}" aria-haspopup="menu">${icon('sort')}<span>${esc(sortLabel())}</span></button>` : ''}${sheet ? '' : `<button type="button" class="btn ghost icon np-x" data-a="cancel" title="${t('Schließen')}">${icon('x')}</button>`}</div>
         ${recent.length ? `<div class="np-recent">${recent.map(chip).join('')}</div>` : ''}
         ${names.length && !isTouch ? `<input type="search" class="np-search" placeholder="${t('Person suchen')}" autocomplete="off" enterkeyhint="done">` : ''}
@@ -1994,7 +2047,7 @@
     V.stage.addEventListener('pointercancel', end);
     // a right click opens the face menu; on touch the long press above does, the browser's menu stays away
     V.stage.addEventListener('contextmenu', (e) => {
-      if (!V.showFaces || V.it?.k !== 1 || !Account.can('user')) return;
+      if (!V.showFaces || (V.it?.k !== 1 && V.it?.k !== 2) || !Account.can('user')) return;
       e.preventDefault();
       if (lastType === 'mouse') V.faceMenu(e.clientX, e.clientY);
     });
@@ -2002,7 +2055,7 @@
     // Videos keep their own controls (tap to play, seek bar). A sideways swipe on the
     // picture still goes to the neighbours and a swipe down closes, also while playing;
     // touches on the control bar at the bottom are left alone.
-    let vs = null;
+    let vs = null, vlong = 0;
     const vreset = (animate) => {
       if (animate) V.animateZoom();
       V.media.style.transform = '';
@@ -2011,13 +2064,18 @@
     V.stage.addEventListener('pointerdown', (e) => {
       const v = e.target.closest('video[controls]');
       vs = null;
+      clearTimeout(vlong);
       if (!v || e.pointerType === 'mouse') return;
       if (e.clientY > v.getBoundingClientRect().bottom - 72) return;
       vs = { id: e.pointerId, x: e.clientX, y: e.clientY, dir: '' };
+      // a long press while the faces are shown: add one, like on a photo
+      const x = e.clientX, y = e.clientY;
+      vlong = setTimeout(() => { if (V.faceMenu(x, y, true)) { vs = null; v.pause(); } }, 450);
     });
     V.stage.addEventListener('pointermove', (e) => {
       if (!vs || e.pointerId !== vs.id) return;
       const dx = e.clientX - vs.x, dy = e.clientY - vs.y;
+      if (Math.abs(dx) + Math.abs(dy) > 8) clearTimeout(vlong);
       if (!vs.dir && Math.abs(dx) > 12 && Math.abs(dx) > 1.5 * Math.abs(dy)) vs.dir = 'x';
       else if (!vs.dir && dy > 16 && dy > 1.5 * Math.abs(dx)) vs.dir = 'y';
       if (vs.dir === 'x') V.media.style.transform = `translateX(${dx}px)`;
@@ -2027,6 +2085,7 @@
       }
     });
     const vend = (e) => {
+      clearTimeout(vlong);
       if (!vs || e.pointerId !== vs.id) return;
       const g = vs;
       vs = null;

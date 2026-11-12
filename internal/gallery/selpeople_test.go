@@ -58,3 +58,59 @@ func TestPeopleInAndLabelPersonIn(t *testing.T) {
 		t.Fatal("unknown person accepted")
 	}
 }
+
+// "Not this person" is remembered for every person a face was said not to
+// be: it joins none of them again, also when a group with it gets that name.
+func TestNotThisPersonRemembered(t *testing.T) {
+	a := normalize([]float32{1, 0, 0, 0})
+	near := normalize([]float32{0.9, 0.3, 0, 0}) // alike Anna and a bit Ben
+	b := normalize([]float32{0.3, 0.9, 0, 0})
+	face := func(e []float32) Face { return Face{Emb: e, Score: 0.9, W: .2, H: .2} }
+	snap := []faceSnap{
+		{id: "i1", taken: 1, faces: []Face{face(a)}},
+		{id: "i2", taken: 2, faces: []Face{face(b)}},
+		{id: "i3", taken: 3, faces: []Face{face(near)}},
+	}
+	s := newPeopleStore(filepath.Join(t.TempDir(), "people.json"), 0.48, 0.3, 0.75)
+	s.labels["i1:0"] = "Anna"
+	s.labels["i2:0"] = "Ben"
+	s.cluster(snap)
+	if s.byFace["i3:0"] != "n-anna" {
+		t.Fatalf("setup: %v", s.byFace)
+	}
+	s.mu.Lock()
+	s.setLabel("i3:0", "") // not Anna
+	s.mu.Unlock()
+	s.cluster(snap)
+	if s.byFace["i3:0"] != "n-ben" {
+		t.Fatalf("not Anna: joins %q", s.byFace["i3:0"])
+	}
+	s.mu.Lock()
+	s.setLabel("i3:0", "") // not Ben either
+	s.mu.Unlock()
+	if !rejects(s.labels["i3:0"], "Anna") || !rejects(s.labels["i3:0"], "Ben") {
+		t.Fatalf("label %q", s.labels["i3:0"])
+	}
+	s.cluster(snap)
+	if id := s.byFace["i3:0"]; id == "n-anna" || id == "n-ben" {
+		t.Fatalf("back with %q", id)
+	}
+	// its group named Anna: the face stays apart
+	pid := s.byFace["i3:0"]
+	s.mu.Lock()
+	s.byID[pid] = &Person{ID: pid, refs: []FaceRef{{"i3", 0}}}
+	s.mu.Unlock()
+	if _, err := s.labelPersonIn([]string{"i3"}, pid, "Anna"); err != nil {
+		t.Fatal(err)
+	}
+	if !rejects(s.labels["i3:0"], "Anna") {
+		t.Fatalf("named over: %q", s.labels["i3:0"])
+	}
+	// named by hand: that wins
+	s.mu.Lock()
+	s.setLabel("i3:0", "Anna")
+	s.mu.Unlock()
+	if s.labels["i3:0"] != "Anna" {
+		t.Fatalf("by hand: %q", s.labels["i3:0"])
+	}
+}
