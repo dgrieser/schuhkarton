@@ -476,10 +476,10 @@ body.has-scrubber .view { padding-right: 64px; }
   padding: 18px 20px 40px; color: #e6e7e9; font-size: 14px;
 }
 .v-info h3 { margin: 22px 0 8px; font-size: 11px; letter-spacing: .09em; text-transform: uppercase; color: #8b919a; font-weight: 700; }
-.v-info h3:first-child, .v-info .v-edit + h3 { margin-top: 4px; }
-/* admins: the photo's changes from a button in the details' corner */
-.v-info .v-edit { float: right; margin: -6px -8px 0 8px; color: #e6e7e9; }
-.v-info .v-edit .i { width: 20px; height: 20px; }
+.v-info h3:first-child, .v-info .v-corner + h3 { margin-top: 4px; }
+/* the details' corner: trash and (admins) the photo's changes */
+.v-info .v-corner { float: right; display: flex; margin: -6px -8px 0 8px; }
+.v-info .v-corner .vbtn { width: 38px; height: 38px; color: #e6e7e9; }
 .v-info .big { font-size: 18px; font-weight: 700; letter-spacing: -.01em; }
 .v-info .muted { color: #9aa1ab; }
 .v-info .kv { display: grid; grid-template-columns: 22px 1fr; gap: 10px; align-items: start; margin: 8px 0; }
@@ -1457,4 +1457,3 @@ body.side-mini #sideToggle { position: static; margin: -6px auto 10px; }
   .hx-row > .btn { grid-column: 2; justify-self: start; }
   .hx-th { width: 44px; height: 44px; }
 }
-body[data-role="admin"] #vDel { display: none; } /* admins: in the menu of the edit button */

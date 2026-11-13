@@ -522,10 +522,8 @@
   // ---------------------------------------------------------------------------
   // viewer buttons
   // ---------------------------------------------------------------------------
-  // one button for all changes of the photo, in the corner of its details (the sidebar, a
-  // phone: the sheet): its menu (the keys E, R and Entf still act directly)
-  $('#vInfo')?.insertAdjacentHTML('beforebegin', `
-    <button class="vbtn" id="vDel" data-need="user" title="${esc(t('In den Papierkorb (Entf)'))}">${icon('trash')}</button>`);
+  // in the corner of the photo's details (the sidebar, a phone: the sheet): the trash (every
+  // account) and one button for all other changes (admins), the keys E, R and Entf act directly
   const cur = () => (V.it ? [V.it.id] : []);
   const vMenu = (anchor) => menu(anchor, [
     { icon: 'edit', label: t('Datum, Ort, Text …'), run: () => editDialog(cur()) },
@@ -537,17 +535,18 @@
     ...(aiOn() ? [{ icon: 'spark', label: t('Neu beschreiben (KI)'), run: () => redescribe(cur()) }] : []),
     ...(ocrOn() && V.it?.k === 1 ? [{ icon: 'file', label: t('Text neu erkennen'), run: () => rerecognize(cur()) }] : []),
     ...(speechOn() && (V.it?.k === 2 || V.it?.lv) ? [{ icon: 'spark', label: t('Sprache neu erkennen'), run: () => retranscribe(cur()) }] : []),
-    { icon: 'trash', label: t('In den Papierkorb'), danger: true, run: () => remove(cur()) },
   ]);
   const renderInfo0 = V.renderInfo.bind(V);
   V.renderInfo = function renderInfo(...a) {
     renderInfo0(...a);
     const panel = $('#vInfoPanel');
-    if (!this.showInfo || !this.detail || !panel || !admin() || $('#vEdit', panel)) return;
-    panel.insertAdjacentHTML('afterbegin', `<button class="vbtn v-edit" id="vEdit" title="${esc(t('Bearbeiten'))}" aria-haspopup="menu">${icon('edit')}</button>`);
-    $('#vEdit', panel).onclick = (e) => vMenu(e.currentTarget);
+    if (!this.showInfo || !this.detail || !panel || !user() || $('.v-corner', panel)) return;
+    panel.insertAdjacentHTML('afterbegin', `<div class="v-corner">
+      <button class="vbtn" id="vDel" title="${esc(t('In den Papierkorb (Entf)'))}">${icon('trash')}</button>
+      ${admin() ? `<button class="vbtn" id="vEdit" title="${esc(t('Bearbeiten'))}" aria-haspopup="menu">${icon('edit')}</button>` : ''}</div>`);
+    $('#vDel', panel).onclick = () => remove(cur());
+    $('#vEdit', panel)?.addEventListener('click', (e) => vMenu(e.currentTarget));
   };
-  $('#vDel').onclick = () => remove(cur()); // accounts without the menu (admins have it there)
 
   // ---------------------------------------------------------------------------
   // selection bar
