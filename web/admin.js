@@ -522,14 +522,11 @@
   // ---------------------------------------------------------------------------
   // viewer buttons
   // ---------------------------------------------------------------------------
-  // one button for all changes of the photo, on every screen: its menu (the keys E, R and Entf
-  // still act directly)
-  $('#vInfo')?.insertAdjacentHTML('beforebegin', `
-    <button class="vbtn" id="vEdit" data-need="admin" title="${esc(t('Bearbeiten'))}" aria-haspopup="menu">${icon('edit')}</button>
-    <button class="vbtn" id="vDel" data-need="user" title="${esc(t('In den Papierkorb (Entf)'))}">${icon('trash')}</button>`);
+  // one button for the photo's changes in the corner of its details (the sidebar, a phone: the
+  // sheet): every account can move it to the trash, admins change more (keys E, R, Entf act directly)
   const cur = () => (V.it ? [V.it.id] : []);
   const vMenu = (anchor) => menu(anchor, [
-    { icon: 'edit', label: t('Datum, Ort, Text …'), run: () => editDialog(cur()) },
+    ...(admin() ? [{ icon: 'edit', label: t('Datum, Ort, Text …'), run: () => editDialog(cur()) },
     ...(V.it?.k === 1 ? [
       { icon: 'rotl', label: t('90° nach links'), run: () => rotate(cur(), 270) },
       { icon: 'rotate', label: t('90° nach rechts'), run: () => rotate(cur(), 90) },
@@ -538,10 +535,18 @@
     ...(aiOn() ? [{ icon: 'spark', label: t('Neu beschreiben (KI)'), run: () => redescribe(cur()) }] : []),
     ...(ocrOn() && V.it?.k === 1 ? [{ icon: 'file', label: t('Text neu erkennen'), run: () => rerecognize(cur()) }] : []),
     ...(speechOn() && (V.it?.k === 2 || V.it?.lv) ? [{ icon: 'spark', label: t('Sprache neu erkennen'), run: () => retranscribe(cur()) }] : []),
+    ] : []),
     { icon: 'trash', label: t('In den Papierkorb'), danger: true, run: () => remove(cur()) },
   ]);
-  $('#vEdit').onclick = (e) => vMenu(e.currentTarget);
-  $('#vDel').onclick = () => remove(cur()); // accounts without the menu (admins have it there)
+  const renderInfo0 = V.renderInfo.bind(V);
+  V.renderInfo = function renderInfo(...a) {
+    renderInfo0(...a);
+    const panel = $('#vInfoPanel');
+    if (!this.showInfo || !this.detail || !panel || !user() || $('.v-corner', panel)) return;
+    panel.insertAdjacentHTML('afterbegin', `<div class="v-corner">
+      <button class="vbtn" id="vEdit" title="${esc(t('Bearbeiten'))}" aria-haspopup="menu">${icon('edit')}</button></div>`);
+    $('#vEdit', panel).onclick = (e) => vMenu(e.currentTarget);
+  };
 
   // ---------------------------------------------------------------------------
   // selection bar

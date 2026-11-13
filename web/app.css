@@ -390,14 +390,20 @@ body.has-scrubber .view { padding-right: 64px; }
 .v-title { min-width: 0; flex: 1; }
 .v-title b { display: block; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .v-title span { display: block; font-size: 12.5px; color: rgba(255, 255, 255, .72); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.v-actions { margin-left: auto; display: flex; gap: 4px; }
+.v-actions { margin-left: auto; display: flex; gap: 0; }
 .vbtn {
-  width: 42px; height: 42px; border-radius: 50%; border: 0; background: transparent; color: #fff;
+  width: 38px; height: 42px; border-radius: 50%; border: 0; background: transparent; color: #fff;
   display: grid; place-items: center; transition: background .15s;
 }
 .vbtn:hover { background: rgba(255, 255, 255, .14); }
 .vbtn.on { color: var(--accent); }
 .vbtn.live-btn { width: auto; border-radius: 99px; padding: 0 12px; font: 700 11px/1 system-ui; letter-spacing: .1em; gap: 6px; display: inline-flex; align-items: center; }
+/* on the picture's top right corner (placed by the script) */
+#vLive { position: absolute; z-index: 4; height: 32px; padding: 0 11px 0 9px; background: rgba(0, 0, 0, .45); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); transition: opacity .25s, background .15s; }
+#vLive[hidden] { display: none; }
+#vLive:hover { background: rgba(0, 0, 0, .65); }
+#vLive .i { width: 18px; height: 18px; }
+#vLive.zoomed { opacity: 0; pointer-events: none; }
 .v-nav {
   position: absolute; top: 50%; z-index: 4; width: 52px; height: 52px; margin-top: -26px; border-radius: 50%;
   border: 0; background: rgba(20, 20, 20, .45); color: #fff; display: grid; place-items: center;
@@ -416,7 +422,7 @@ body.has-scrubber .view { padding-right: 64px; }
 .v-strip button.on { opacity: 1; outline: 2px solid #fff; outline-offset: 1px; }
 .v-strip button:hover { opacity: 1; transform: translateY(-2px); }
 .v-strip img { width: 100%; height: 100%; object-fit: cover; }
-.viewer.idle .v-top, .viewer.idle .v-strip, .viewer.idle .v-nav { opacity: 0; pointer-events: none; }
+.viewer.idle .v-top, .viewer.idle .v-strip, .viewer.idle .v-nav, .viewer.idle #vLive { opacity: 0; pointer-events: none; }
 .viewer.idle { cursor: none; }
 .v-faces { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
 .v-face {
@@ -435,7 +441,7 @@ body.has-scrubber .view { padding-right: 64px; }
 .v-face.flash { z-index: 1; animation: face-flash .7s ease 2; }
 @keyframes face-flash { 50% { border-color: var(--accent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 45%, transparent), 0 0 0 9999px rgba(0, 0, 0, .35); } }
 /* marking a face by hand */
-.viewer.marking .v-top, .viewer.marking .v-strip, .viewer.marking .v-nav, .viewer.marking .v-faces { opacity: 0; pointer-events: none; }
+.viewer.marking .v-top, .viewer.marking .v-strip, .viewer.marking .v-nav, .viewer.marking .v-faces, .viewer.marking #vLive { opacity: 0; pointer-events: none; }
 /* moving the box selects no text and opens no callout */
 .viewer.marking, .viewer.marking :not(input, textarea), .v-mark-tools, .v-mark-tools * { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 .v-mark { position: absolute; inset: 0; z-index: 4; cursor: crosshair; touch-action: none; background: rgba(0, 0, 0, .18); }
@@ -476,7 +482,10 @@ body.has-scrubber .view { padding-right: 64px; }
   padding: 18px 20px 40px; color: #e6e7e9; font-size: 14px;
 }
 .v-info h3 { margin: 22px 0 8px; font-size: 11px; letter-spacing: .09em; text-transform: uppercase; color: #8b919a; font-weight: 700; }
-.v-info h3:first-child { margin-top: 4px; }
+.v-info h3:first-child, .v-info .v-corner + h3 { margin-top: 4px; }
+/* the details' corner: trash and (admins) the photo's changes */
+.v-info .v-corner { float: right; display: flex; margin: -6px -8px 0 8px; }
+.v-info .v-corner .vbtn { width: 38px; height: 38px; color: #e6e7e9; }
 .v-info .big { font-size: 18px; font-weight: 700; letter-spacing: -.01em; }
 .v-info .muted { color: #9aa1ab; }
 .v-info .kv { display: grid; grid-template-columns: 22px 1fr; gap: 10px; align-items: start; margin: 8px 0; }
@@ -680,7 +689,7 @@ body > .pop.name-pop.sheet { z-index: 130; } /* a person of a selection: over th
   .tabbar a { display: grid; justify-items: center; gap: 2px; font-size: 10.5px; color: var(--muted); padding: 4px 8px; font-weight: 600; }
   .tabbar a.on { color: var(--accent); }
   .viewer { grid-template-columns: 1fr; }
-  .vbtn { width: 38px; height: 38px; }
+  .vbtn { width: 30px; height: 38px; }
   .v-top { gap: 6px; padding-left: calc(6px + env(safe-area-inset-left)); padding-right: calc(6px + env(safe-area-inset-right)); }
   .v-title b { font-size: 14px; }
   .v-info { position: absolute; left: 0; right: 0; bottom: 0; width: auto; height: var(--sheet, 50dvh); border-left: 0; border-top: 1px solid #222; border-radius: 18px 18px 0 0; z-index: 8; }
@@ -721,19 +730,33 @@ body > .pop.name-pop.sheet { z-index: 130; } /* a person of a selection: over th
 .search .field .fbtn.on { color: var(--accent); }
 .search .field .fbtn .dot { position: absolute; }
 /* the filters: the search field's lower part (left, top, width and height from the script) */
-.fpanel {
-  position: fixed; z-index: 60; overflow: auto; overscroll-behavior: contain;
-  background: var(--surface); border: 1px solid var(--line); border-top: 0; border-radius: 0 0 18px 18px; box-shadow: var(--shadow); padding: 6px 16px 16px;
+.fpanel:not([hidden]) {
+  position: fixed; z-index: 60; display: flex; flex-direction: column; overflow: hidden;
+  background: var(--surface); border: 1px solid var(--line); border-top: 0; border-radius: 0 0 12px 12px; box-shadow: var(--shadow);
   animation: fdrop .15s ease;
 }
+.fpanel .fp-body { flex: 1 1 auto; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 2px 16px 16px; }
 @keyframes fdrop { from { opacity: 0; transform: translateY(-6px); } }
-@media (min-width: 721px) { .search.fopen .field { border-radius: 12px 12px 0 0; box-shadow: none; } }
+/* desktop: the field and the filters are one box (same border, no glow, no line between) */
+@media (min-width: 721px) {
+  .search.fopen .field, .search.fopen .field:focus-within { border-color: var(--line); border-bottom-color: transparent; border-radius: 12px 12px 0 0; box-shadow: none; }
+  .fpanel:not([hidden]) { animation: none; }
+  .fpanel .fp-body { border-top: 0; }
+}
 .search .field .fbtn.open { color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
 .i.flip { transform: rotate(180deg); }
-@media (max-width: 720px) { .fpanel { border-top: 1px solid var(--line); } }
-.fpanel header { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 10px; padding: 10px 0; background: var(--surface); }
-.fpanel header b { font-size: 16px; }
-.fpanel header .count { color: var(--muted); font-size: 13px; }
+/* a phone: a bottom sheet (the grip sets its height, a flick down closes it) */
+@media (max-width: 720px) {
+  .fpanel:not([hidden]) {
+    left: 0; right: 0; bottom: 0; top: auto; width: auto; height: 72dvh; max-height: calc(100dvh - 24px);
+    border: 0; border-top: 1px solid var(--line); border-radius: 18px 18px 0 0; z-index: 60;
+    padding-bottom: env(safe-area-inset-bottom); animation: sheet .2s var(--ease);
+  }
+  .fpanel .fp-body { padding-top: 0; }
+}
+.fpanel .fp-bar { display: flex; align-items: center; gap: 10px; padding: 8px 0 0; }
+.fpanel .fp-bar .count { flex: 1; color: var(--muted); font-size: 13px; }
+.fpanel .fp-bar .btn { margin-right: -8px; }
 .fpanel h4 { margin: 14px 0 8px; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--faint); }
 .fpanel .chips { gap: 6px; }
 .fpanel .chip { cursor: pointer; }
@@ -779,6 +802,9 @@ body > .pop.name-pop.sheet { z-index: 130; } /* a person of a selection: over th
 .vmenu header .vslides { margin-left: auto; height: 36px; padding: 0 12px 0 10px; gap: 6px; font-weight: 600; }
 .vmenu header .vslides .i { width: 18px; height: 18px; }
 .vmenu header .vslides + [data-close] { margin-left: 4px; }
+/* the sort of the people and places: a glyph and an arrow, its choices in a menu */
+.btn.sort-btn { padding: 0 8px 0 10px; gap: 2px; }
+.btn.sort-btn svg:last-child { width: 16px; height: 16px; color: var(--muted); }
 /* the person page: hide and "not a face" behind one button, like the view button */
 .head .tools .view-btn.pact { display: inline-flex; margin-left: 0; padding: 0 8px 0 10px; gap: 2px; }
 .view-btn.pact svg:last-child { width: 16px; height: 16px; color: var(--muted); }
@@ -1340,7 +1366,7 @@ select.sel, .setup .user select, .setup #nrole, .adm-shift select {
    sends the full-size picture instead. Videos print the page as it is. */
 @media print {
   body:has(> #viewer:not([hidden]) .v-media > img) > :not(#viewer),
-  #viewer:not([hidden]):has(.v-media > img) :is(.v-top, .v-nav, .v-strip, .v-info, .v-grip, .v-faces, .live-v) { display: none !important; }
+  #viewer:not([hidden]):has(.v-media > img) :is(.v-top, .v-nav, .v-strip, .v-info, .v-grip, .v-faces, .live-v, #vLive) { display: none !important; }
   #viewer:not([hidden]):has(.v-media > img), #viewer:not([hidden]):has(.v-media > img) :is(.v-main, .v-stage, .v-media) {
     position: static !important; inset: auto !important; display: block !important; transform: none !important; will-change: auto !important;
     width: auto !important; height: auto !important; background: none !important; overflow: visible !important;
@@ -1437,4 +1463,3 @@ body.side-mini #sideToggle { position: static; margin: -6px auto 10px; }
   .hx-row > .btn { grid-column: 2; justify-self: start; }
   .hx-th { width: 44px; height: 44px; }
 }
-body[data-role="admin"] #vDel { display: none; } /* admins: in the menu of the edit button */
