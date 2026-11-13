@@ -252,9 +252,11 @@
   }
   // people and places: cards in an order and a size of their own, remembered per page
   const CARD = { people: { min: 88, max: 240, step: 8, def: 128 }, places: { min: 150, max: 420, step: 10, def: 210 } };
+  const CARD_SORTS = {}; // kind: [[key, label]] of its sort button
   function cardTools(kind, sorts) {
+    CARD_SORTS[kind] = sorts;
     const c = CARD[kind], sort = store.get(`sort-${kind}`, sorts[0][0]);
-    return `<select class="sel" data-sort title="${t('Sortieren')}">${sorts.map(([k, l]) => `<option value="${k}" ${k === sort ? 'selected' : ''}>${t(l)}</option>`).join('')}</select>
+    return `<button class="btn sort-btn" data-sort title="${t('Sortieren')}: ${esc(t((sorts.find(([k]) => k === sort) || sorts[0])[1]))}" aria-haspopup="menu">${icon('sort')}${icon('down')}</button>
       <label class="zoom" title="${t('Größe')}">${icon(kind === 'people' ? 'people' : 'photos')}<input type="range" min="${c.min}" max="${c.max}" step="${c.step}" value="${store.get(`csize-${kind}`, c.def)}" data-csize aria-label="${t('Größe')}"></label>`;
   }
   // the size goes to the cards in box; a new order draws them again
@@ -262,7 +264,15 @@
     const apply = (v) => box.style.setProperty('--cardw', `${v}px`);
     apply(store.get(`csize-${kind}`, CARD[kind].def));
     $('[data-csize]', head).oninput = (e) => { apply(+e.target.value); store.set(`csize-${kind}`, +e.target.value); };
-    $('[data-sort]', head).onchange = (e) => { store.set(`sort-${kind}`, e.target.value); redraw(); };
+    const b = $('[data-sort]', head);
+    b.onclick = () => {
+      const cur = store.get(`sort-${kind}`, CARD_SORTS[kind][0][0]);
+      menu(b, [{ head: t('Sortieren') }, ...CARD_SORTS[kind].map(([k, l]) => ({ icon: k === cur ? 'check' : 'none', label: t(l), run: () => {
+        store.set(`sort-${kind}`, k);
+        b.title = `${t('Sortieren')}: ${t(l)}`;
+        redraw();
+      } }))]);
+    };
   }
 
   // a hidden group with its "Wieder zeigen" button
@@ -2402,6 +2412,11 @@
     async open() {
       this.open_ = true;
       this.el.hidden = false;
+      // a phone: a bottom sheet with a grip (any height, flick down: closed)
+      $('.sheet-grip', this.el)?.remove();
+      this.el.style.height = '';
+      sheetGrip(this.el, { key: 'filter', onClose: () => this.close(), min: 160 });
+      if (!$('.fp-body', this.el)) this.el.insertAdjacentHTML('beforeend', '<div class="fp-body"></div>');
       this.mark(true);
       this.place();
       if (!this.facets) this.facets = await api(`/api/facets?lang=${LANG}`).catch(() => ({}));
@@ -2414,15 +2429,20 @@
       $('#search').classList.toggle('fopen', on);
       const b = $('#filterBtn');
       b.classList.toggle('open', on);
-      b.innerHTML = on ? icon('down', 'flip') : icon('sliders');
+      b.innerHTML = on && !phoneMQ.matches ? icon('down', 'flip') : icon('sliders');
       b.title = on ? t('Filter schließen') : t('Filter');
     },
-    // the lower part of the search field (a phone: the screen's width under the top bar)
+    // the lower part of the search field, one box with it (a phone: a sheet from the bottom,
+    // placed by the style sheet, its height from the grip)
     place() {
       if (!this.open_) return;
       const f = $('#search .field').getBoundingClientRect(), s = this.el.style;
-      if (phoneMQ.matches) Object.assign(s, { left: '6px', width: `${innerWidth - 12}px`, top: `${Math.round($('.top').getBoundingClientRect().bottom)}px` });
-      else Object.assign(s, { left: `${Math.round(f.left)}px`, width: `${Math.round(f.width)}px`, top: `${Math.round(f.bottom - 1)}px` });
+      if (phoneMQ.matches) {
+        Object.assign(s, { left: '', width: '', top: '' });
+        if (!s.height) s.maxHeight = '';
+        return;
+      }
+      Object.assign(s, { left: `${Math.round(f.left)}px`, width: `${Math.round(f.width)}px`, top: `${Math.round(f.bottom - 1)}px`, height: '' });
       s.maxHeight = `${Math.round(innerHeight - parseFloat(s.top) - 16)}px`;
     },
     count(n) { this.n = n; const c = $('.count', this.el); if (c) c.textContent = pl(n, '{n} Treffer', '{n} Treffer'); },
@@ -2460,9 +2480,10 @@
       const chip = (it) => `<button class="chip ${this.has(p, it.key, it.val) ? 'on' : ''}" data-k="${esc(it.key)}" data-v="${esc(it.val)}"
         ${it.n ? `title="${num(it.n)}"` : ''}>${it.img ? `<img src="${it.img}" alt="">` : ''}${esc(it.label)}</button>`;
       const pq = this.placeQ.toLowerCase();
-      this.el.innerHTML = `<header><b>${t('Filter')}</b><span class="count">${this.n !== null && route.view === 'suche' ? pl(this.n, '{n} Treffer', '{n} Treffer') : ''}</span>
-        <span style="flex:1"></span>${p.filters.length ? `<button class="btn ghost" data-reset>${t('Zurücksetzen')}</button>` : ''}
-        <button class="btn ghost icon" data-close title="${t('Schließen')}">${icon('x')}</button></header>
+      // no title and no close button: the filter button (a phone: the grip) closes it; a line
+      // with the hits and "reset" only while filters are on
+      $('.fp-body', this.el).innerHTML = `${p.filters.length ? `<div class="fp-bar"><span class="count">${this.n !== null && route.view === 'suche' ? pl(this.n, '{n} Treffer', '{n} Treffer') : ''}</span>
+        <button class="btn ghost" data-reset>${t('Zurücksetzen')}</button></div>` : ''}
         ${this.sections().map((sec) => {
           let items = sec.items;
           if (sec.search && pq) items = items.filter((x) => x.label.toLowerCase().includes(pq));
@@ -2473,7 +2494,6 @@
         <p class="hint">${t('Mehrere Werte einer Art bedeuten „oder“, verschiedene Arten „und“. Tippen geht auch:')}
           ${(EN ? ['summer 2019 dresden', 'place:Dresden', 'person:Anna', 'day:weekend', 'type:video', '-type:screenshot'] : ['sommer 2019 lübbecke', 'ort:Dresden', 'person:Anna', 'tag:wochenende', 'typ:video', '-typ:screenshot']).map((x) => `<code>${x}</code>`).join(', ')}.</p>`;
       for (const b of $$('[data-k]', this.el)) b.onclick = () => this.toggle(b.dataset.k, b.dataset.v);
-      $('[data-close]', this.el).onclick = () => this.close();
       $('[data-reset]', this.el)?.addEventListener('click', () => { const q = this.current(); q.filters = []; runQuery(buildQ(q)); setTimeout(() => this.draw(), 0); });
       const ps = $('[data-ps]', this.el);
       if (ps) ps.oninput = () => { this.placeQ = ps.value; const pos = ps.selectionStart; this.draw(); const n = $('[data-ps]', this.el); n.focus(); n.setSelectionRange(pos, pos); };

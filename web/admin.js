@@ -522,10 +522,9 @@
   // ---------------------------------------------------------------------------
   // viewer buttons
   // ---------------------------------------------------------------------------
-  // one button for all changes of the photo, on every screen: its menu (the keys E, R and Entf
-  // still act directly)
+  // one button for all changes of the photo, in the corner of its details (the sidebar, a
+  // phone: the sheet): its menu (the keys E, R and Entf still act directly)
   $('#vInfo')?.insertAdjacentHTML('beforebegin', `
-    <button class="vbtn" id="vEdit" data-need="admin" title="${esc(t('Bearbeiten'))}" aria-haspopup="menu">${icon('edit')}</button>
     <button class="vbtn" id="vDel" data-need="user" title="${esc(t('In den Papierkorb (Entf)'))}">${icon('trash')}</button>`);
   const cur = () => (V.it ? [V.it.id] : []);
   const vMenu = (anchor) => menu(anchor, [
@@ -540,7 +539,14 @@
     ...(speechOn() && (V.it?.k === 2 || V.it?.lv) ? [{ icon: 'spark', label: t('Sprache neu erkennen'), run: () => retranscribe(cur()) }] : []),
     { icon: 'trash', label: t('In den Papierkorb'), danger: true, run: () => remove(cur()) },
   ]);
-  $('#vEdit').onclick = (e) => vMenu(e.currentTarget);
+  const renderInfo0 = V.renderInfo.bind(V);
+  V.renderInfo = function renderInfo(...a) {
+    renderInfo0(...a);
+    const panel = $('#vInfoPanel');
+    if (!this.showInfo || !this.detail || !panel || !admin() || $('#vEdit', panel)) return;
+    panel.insertAdjacentHTML('afterbegin', `<button class="vbtn v-edit" id="vEdit" title="${esc(t('Bearbeiten'))}" aria-haspopup="menu">${icon('edit')}</button>`);
+    $('#vEdit', panel).onclick = (e) => vMenu(e.currentTarget);
+  };
   $('#vDel').onclick = () => remove(cur()); // accounts without the menu (admins have it there)
 
   // ---------------------------------------------------------------------------
