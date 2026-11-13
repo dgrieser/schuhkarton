@@ -529,6 +529,18 @@ body.has-scrubber .view { padding-right: 64px; }
 .name-pop .np-list button.hit { background: var(--p-hover); box-shadow: inset 3px 0 var(--accent); }
 .name-pop .np-list button span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .name-pop .np-list button.cur { color: var(--accent); font-weight: 650; }
+.name-pop .np-head small.np-sugstate { display: block; color: var(--accent); font-size: 12px; }
+/* suggestions on top of the list: the more alike, the stronger the glow */
+.name-pop .np-list button.sug { position: relative; }
+.name-pop .np-list button.sug-high { background: color-mix(in srgb, var(--accent) 24%, transparent); box-shadow: inset 3px 0 var(--accent), 0 0 12px color-mix(in srgb, var(--accent) 45%, transparent); font-weight: 650; }
+.name-pop .np-list button.sug-mid { background: color-mix(in srgb, var(--accent) 13%, transparent); box-shadow: inset 3px 0 color-mix(in srgb, var(--accent) 70%, transparent); }
+.name-pop .np-list button.sug-low { box-shadow: inset 3px 0 color-mix(in srgb, var(--accent) 35%, transparent); }
+.name-pop .np-list button.sug-high img { box-shadow: 0 0 0 2px var(--accent); }
+.name-pop .np-list button.sug-last { margin-bottom: 6px; }
+.name-pop .np-list button.sug-last::after { content: ''; position: absolute; left: 8px; right: 8px; bottom: -4px; border-bottom: 1px solid var(--p-in-line); }
+.name-pop .np-sug { flex: none; padding: 1px 7px; border-radius: 999px; font-size: 11px; font-style: normal; font-weight: 600; color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 50%, transparent); }
+.name-pop .np-list button.sug-high .np-sug { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
+.name-pop .np-list button.sug-low .np-sug { opacity: .75; }
 .name-pop .np-list button.np-typed { color: var(--accent); font-weight: 600; }
 .name-pop .np-typed .i { width: 34px; height: 18px; }
 .name-pop .np-add { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 42px; border: 1px dashed var(--p-dash); border-radius: 8px; background: none; color: inherit;

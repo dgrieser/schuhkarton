@@ -56,6 +56,11 @@ func (l *Library) AddFace(ctx context.Context, id string, box FaceBox, t float64
 		return 0, errors.New("box too small")
 	}
 	face := Face{X: box.X, Y: box.Y, W: box.W, H: box.H, Score: 1, Manual: true, T: float32(max(t, 0))}
+	// the name suggestions looked at this box already: their answer is the embedding
+	emb, known := l.takeSuggested(it, box, t)
+	if known {
+		face.Emb, face.NoEmb, face.EmbTry = emb, emb == nil, time.Now().Unix()
+	}
 	cropImg, _ := cropSquare(frame, px, 1.5, 200)
 	crop, err := encodeJPEG(cropImg, 88)
 	if err != nil {
@@ -74,8 +79,10 @@ func (l *Library) AddFace(ctx context.Context, id string, box FaceBox, t float64
 		os.WriteFile(p, crop, 0o644)
 	}
 	l.saveSoon()
-	l.freshEmb.Store(FaceRef{it.ID, idx}.key(), true)
-	l.kickManualEmb() // the embedding comes in the background, for this face right away
+	if !known {
+		l.freshEmb.Store(FaceRef{it.ID, idx}.key(), true)
+		l.kickManualEmb() // the embedding comes in the background, for this face right away
+	}
 	if name != "" {
 		if _, err := l.LabelFace(it.ID, idx, name); err != nil {
 			return idx, err
