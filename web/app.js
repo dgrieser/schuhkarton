@@ -1590,7 +1590,16 @@
       }
       const recent = store.get('recent-names', []).filter((n) => people.has(n)).slice(0, 12);
       const img = (n) => { const c = people.get(n).cover; return c ? `<img src="${faceURL(c.item, c.idx)}" alt="" loading="lazy">` : '<i></i>'; };
-      const person = (n) => `<button type="button" data-name="${esc(n)}"${n === face.name ? ' class="cur"' : ''}>${img(n)}<span>${esc(n)}</span>${n === face.name ? icon('check') : ''}</button>`;
+      // suggestions: the named people the face looks like (asked of the server below), on top
+      // of the list, marked by how alike: high, mid, low
+      let sugg = [];
+      const SUG = { high: t('Sehr ähnlich'), mid: t('Ähnlich'), low: t('Vielleicht') };
+      const person = (n) => {
+        const sg = sugg.find((x) => x.name === n), last = sg && sugg[sugg.length - 1] === sg;
+        const cls = [n === face.name && 'cur', sg && `sug sug-${sg.level}`, last && 'sug-last'].filter(Boolean).join(' ');
+        const badge = sg ? `<em class="np-sug" title="${t('Ähnlichkeit {p} %', { p: Math.round(Math.max(sg.score, 0) * 100) })}">${esc(SUG[sg.level] || '')}</em>` : '';
+        return `<button type="button" data-name="${esc(n)}"${cls ? ` class="${cls}"` : ''}>${img(n)}<span>${esc(n)}</span>${badge}${n === face.name ? icon('check') : ''}</button>`;
+      };
       // the list in an order of one's choice (kept): first name, last name, most photos, recently used
       const SORTS = [['first', t('Vorname')], ['last', t('Nachname')], ['count', t('Meiste Fotos')], ['recent', t('Zuletzt benutzt')]];
       let sort = SORTS.some(([k]) => k === store.get('name-sort')) ? store.get('name-sort') : 'first';
@@ -1606,7 +1615,8 @@
           count: (a, b) => (total.get(b) || 0) - (total.get(a) || 0) || abc(a, b),
           recent: (a, b) => when(b) - when(a) || abc(a, b),
         }[sort];
-        return [...people.keys()].sort(by);
+        const top = sugg.map((x) => x.name);
+        return [...top, ...[...people.keys()].filter((n) => !top.includes(n)).sort(by)];
       };
       const names = sorted();
       // the recent ones as chips with their first names (more of them fit); the same first
@@ -1624,7 +1634,7 @@
       // the face asked about; a person in a selection: its picture, and in how many photos
       const m = face.multi;
       const pic = m ? faceURL(m.cover.item, m.cover.idx) : face.add ? face.pic || '' : faceURL(this.it.id, face.idx);
-      pop.innerHTML = `<div class="np-head"${sheet ? ` title="${t('Ziehen: Höhe ändern')}"` : ''}>${pic ? `<img src="${pic}" alt="">` : ''}<div><b>${face.name ? t('Ist das {name}?', { name: esc(face.name) }) : t('Wer ist das?')}</b>${m ? `<small>${pl(m.items, 'in {n} Foto', 'in {n} Fotos')}</small>` : ''}</div>${names.length > 1 ? `<button type="button" class="np-sort" data-a="sort" title="${t('Sortieren')}" aria-haspopup="menu">${icon('sort')}<span>${esc(sortLabel())}</span></button>` : ''}${sheet ? '' : `<button type="button" class="btn ghost icon np-x" data-a="cancel" title="${t('Schließen')}">${icon('x')}</button>`}</div>
+      pop.innerHTML = `<div class="np-head"${sheet ? ` title="${t('Ziehen: Höhe ändern')}"` : ''}>${pic ? `<img src="${pic}" alt="">` : ''}<div><b>${face.name ? t('Ist das {name}?', { name: esc(face.name) }) : t('Wer ist das?')}</b>${m ? `<small>${pl(m.items, 'in {n} Foto', 'in {n} Fotos')}</small>` : ''}<small class="np-sugstate" hidden></small></div>${names.length > 1 ? `<button type="button" class="np-sort" data-a="sort" title="${t('Sortieren')}" aria-haspopup="menu">${icon('sort')}<span>${esc(sortLabel())}</span></button>` : ''}${sheet ? '' : `<button type="button" class="btn ghost icon np-x" data-a="cancel" title="${t('Schließen')}">${icon('x')}</button>`}</div>
         ${recent.length ? `<div class="np-recent">${recent.map(chip).join('')}</div>` : ''}
         ${names.length && !isTouch ? `<input type="search" class="np-search" placeholder="${t('Person suchen')}" autocomplete="off" enterkeyhint="done">` : ''}
         ${names.length ? `<div class="np-list">${names.map(person).join('')}<button type="button" class="np-typed" data-a="typed" hidden>${icon('plus')}<span></span></button></div>` : ''}
@@ -1802,6 +1812,29 @@
         if (search && !isTouch) search.focus();
         else $('.np-sort', pop).focus({ preventScroll: true });
       };
+      // the suggestions: a face marked by hand is looked at by the face service first (a moment),
+      // a found face has its features already. Meanwhile the list is there as always.
+      const it = this.it, state = $('.np-sugstate', pop);
+      const ask = m || !list || !it ? null
+        : face.add ? post(`/api/face/${it.id}/suggest`, { X: face.box.x, Y: face.box.y, W: face.box.w, H: face.box.h, t: face.t || 0 })
+          : face.idx != null ? api(`/api/face/${it.id}/${face.idx}/suggest`) : null;
+      if (!ask) return;
+      const showState = (text) => { state.textContent = text; state.hidden = !text; };
+      const slow = setTimeout(() => pop.isConnected && showState(t('Suche ähnliche Personen …')), 300);
+      ask.then((res) => {
+        clearTimeout(slow);
+        if (!pop.isConnected) return;
+        sugg = (res.suggestions || []).filter((x) => people.has(x.name));
+        showState(res.recognition === false ? '' : sugg.length ? pl(sugg.length, '{n} Vorschlag', '{n} Vorschläge') : face.add ? t('Keine ähnliche Person gefunden') : '');
+        if (!sugg.length) return;
+        const had = document.activeElement;
+        list.innerHTML = `${sorted().map(person).join('')}`;
+        list.appendChild(typed);
+        list.scrollTop = 0;
+        filter(adding() ? nameIn.value.trim() : search?.value.trim() || '');
+        if (had && !had.isConnected) pop.focus({ preventScroll: true }); // a person had the focus: drawn anew
+        position();
+      }).catch(() => { clearTimeout(slow); if (pop.isConnected) showState(''); });
     },
 
     // --- zoom & gestures (transform-origin 0 0: screen = layout box + translate + scale)

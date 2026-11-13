@@ -77,6 +77,8 @@ func New(ctx context.Context, o Options) http.Handler {
 	mux.HandleFunc("POST /api/items/people", s.itemsPeople)
 	mux.HandleFunc("POST /api/items/people/{id}", s.requireUser(s.labelPersonIn))
 	mux.HandleFunc("POST /api/face/{id}/add", s.requireUser(s.addFace))
+	mux.HandleFunc("POST /api/face/{id}/suggest", s.requireUser(s.suggestForBox))
+	mux.HandleFunc("GET /api/face/{id}/{idx}/suggest", s.requireUser(s.suggestForFace))
 	mux.HandleFunc("POST /api/fav", s.requireUser(s.fav))
 	mux.HandleFunc("POST /api/rescan", s.requireAdmin(s.rescan))
 	mux.HandleFunc("POST /api/zip", s.zip)
@@ -512,6 +514,47 @@ func (s *Server) addFace(w http.ResponseWriter, r *http.Request) {
 	key := r.PathValue("id") + ":" + strconv.Itoa(idx)
 	s.recordFaces(r, []string{r.PathValue("id")}, map[string]any{"op": "add", "to": strings.TrimSpace(req.Name), "n": 1}, map[string]string{key: "-"})
 	writeJSON(w, r, map[string]any{"ok": true, "idx": idx})
+}
+
+// suggestForBox suggests names for a box drawn by hand, before it is saved:
+// the named people it looks most alike, best first. recognition false: no
+// face recognition, so no suggestions.
+func (s *Server) suggestForBox(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		X, Y, W, H float32
+		T          float64 `json:"t"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
+	defer cancel()
+	sg, err := s.lib.SuggestForBox(ctx, r.PathValue("id"), gallery.FaceBox{X: req.X, Y: req.Y, W: req.W, H: req.H}, req.T)
+	writeSuggestions(w, r, sg, err)
+}
+
+// suggestForFace suggests names for a face of an item.
+func (s *Server) suggestForFace(w http.ResponseWriter, r *http.Request) {
+	idx, err := strconv.Atoi(r.PathValue("idx"))
+	if err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	sg, err := s.lib.SuggestForFace(r.PathValue("id"), idx)
+	writeSuggestions(w, r, sg, err)
+}
+
+func writeSuggestions(w http.ResponseWriter, r *http.Request, sg []gallery.Suggestion, err error) {
+	switch {
+	case errors.Is(err, gallery.ErrNoRecognition):
+		writeJSON(w, r, map[string]any{"recognition": false, "suggestions": []gallery.Suggestion{}})
+	case err != nil:
+		// the face service is busy or away: the list stays as it is
+		writeJSON(w, r, map[string]any{"recognition": true, "error": err.Error(), "suggestions": []gallery.Suggestion{}})
+	default:
+		writeJSON(w, r, map[string]any{"recognition": true, "suggestions": sg})
+	}
 }
 
 // itemsPeople lists the people in a selection of items, with the number of

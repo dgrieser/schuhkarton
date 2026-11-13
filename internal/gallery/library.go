@@ -316,6 +316,7 @@ type Library struct {
 	manualEmb    chan struct{} // wakes manualEmbLoop: a face was marked by hand
 	freshEmb     sync.Map      // FaceRef keys of faces just marked: looked at outside the window too
 	cropsRedone  sync.Map      // FaceRef keys whose crop redoManualCrops made again in this run
+	suggestEmb   sync.Map      // drawn box -> suggestedEmb: the embedding the name suggestions found, for AddFace
 	scannedOnce  atomic.Bool   // the first scan is through
 	firstScan    chan struct{} // closed when the first scan is through
 	firstOnce    sync.Once

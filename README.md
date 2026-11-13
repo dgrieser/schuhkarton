@@ -40,7 +40,13 @@ or another one.
   face that was not found can be framed by hand: with the
   face boxes shown, a long press (right click) on the photo opens a menu with
   *Gesicht hinzufügen*; the frame can be moved and resized (− and +, the mouse
-  wheel or the keys) before it gets a name.
+  wheel or the keys) before it gets a name. While naming a face (one framed by
+  hand or one that was found), the named people it looks like come first in
+  the list, marked *Sehr ähnlich*, *Ähnlich* or *Vielleicht* (likeness to the
+  person's centroid or to their three most alike faces, measured against
+  `faces.named_threshold`); the others follow in the chosen order. A framed
+  face is looked at by the face service for this right away, and keeps what
+  it found when it is saved.
 - **Backup:** copies photos, cache and settings to a folder (a USB disk or a
   share) in the background. It only adds and updates; nothing in the backup is
   ever deleted.
