@@ -683,7 +683,7 @@ body > .pop.name-pop.sheet { z-index: 130; } /* a person of a selection: over th
   .tabbar a { display: grid; justify-items: center; gap: 2px; font-size: 10.5px; color: var(--muted); padding: 4px 8px; font-weight: 600; }
   .tabbar a.on { color: var(--accent); }
   .viewer { grid-template-columns: 1fr; }
-  .vbtn { width: 34px; height: 38px; }
+  .vbtn { width: 30px; height: 38px; }
   .v-top { gap: 6px; padding-left: calc(6px + env(safe-area-inset-left)); padding-right: calc(6px + env(safe-area-inset-right)); }
   .v-title b { font-size: 14px; }
   .v-info { position: absolute; left: 0; right: 0; bottom: 0; width: auto; height: var(--sheet, 50dvh); border-left: 0; border-top: 1px solid #222; border-radius: 18px 18px 0 0; z-index: 8; }
