@@ -398,6 +398,12 @@ body.has-scrubber .view { padding-right: 64px; }
 .vbtn:hover { background: rgba(255, 255, 255, .14); }
 .vbtn.on { color: var(--accent); }
 .vbtn.live-btn { width: auto; border-radius: 99px; padding: 0 12px; font: 700 11px/1 system-ui; letter-spacing: .1em; gap: 6px; display: inline-flex; align-items: center; }
+/* on the picture's top right corner (placed by the script) */
+#vLive { position: absolute; z-index: 4; height: 32px; padding: 0 11px 0 9px; background: rgba(0, 0, 0, .45); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); transition: opacity .25s, background .15s; }
+#vLive[hidden] { display: none; }
+#vLive:hover { background: rgba(0, 0, 0, .65); }
+#vLive .i { width: 18px; height: 18px; }
+#vLive.zoomed { opacity: 0; pointer-events: none; }
 .v-nav {
   position: absolute; top: 50%; z-index: 4; width: 52px; height: 52px; margin-top: -26px; border-radius: 50%;
   border: 0; background: rgba(20, 20, 20, .45); color: #fff; display: grid; place-items: center;
@@ -416,7 +422,7 @@ body.has-scrubber .view { padding-right: 64px; }
 .v-strip button.on { opacity: 1; outline: 2px solid #fff; outline-offset: 1px; }
 .v-strip button:hover { opacity: 1; transform: translateY(-2px); }
 .v-strip img { width: 100%; height: 100%; object-fit: cover; }
-.viewer.idle .v-top, .viewer.idle .v-strip, .viewer.idle .v-nav { opacity: 0; pointer-events: none; }
+.viewer.idle .v-top, .viewer.idle .v-strip, .viewer.idle .v-nav, .viewer.idle #vLive { opacity: 0; pointer-events: none; }
 .viewer.idle { cursor: none; }
 .v-faces { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
 .v-face {
@@ -435,7 +441,7 @@ body.has-scrubber .view { padding-right: 64px; }
 .v-face.flash { z-index: 1; animation: face-flash .7s ease 2; }
 @keyframes face-flash { 50% { border-color: var(--accent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 45%, transparent), 0 0 0 9999px rgba(0, 0, 0, .35); } }
 /* marking a face by hand */
-.viewer.marking .v-top, .viewer.marking .v-strip, .viewer.marking .v-nav, .viewer.marking .v-faces { opacity: 0; pointer-events: none; }
+.viewer.marking .v-top, .viewer.marking .v-strip, .viewer.marking .v-nav, .viewer.marking .v-faces, .viewer.marking #vLive { opacity: 0; pointer-events: none; }
 /* moving the box selects no text and opens no callout */
 .viewer.marking, .viewer.marking :not(input, textarea), .v-mark-tools, .v-mark-tools * { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 .v-mark { position: absolute; inset: 0; z-index: 4; cursor: crosshair; touch-action: none; background: rgba(0, 0, 0, .18); }
@@ -1360,7 +1366,7 @@ select.sel, .setup .user select, .setup #nrole, .adm-shift select {
    sends the full-size picture instead. Videos print the page as it is. */
 @media print {
   body:has(> #viewer:not([hidden]) .v-media > img) > :not(#viewer),
-  #viewer:not([hidden]):has(.v-media > img) :is(.v-top, .v-nav, .v-strip, .v-info, .v-grip, .v-faces, .live-v) { display: none !important; }
+  #viewer:not([hidden]):has(.v-media > img) :is(.v-top, .v-nav, .v-strip, .v-info, .v-grip, .v-faces, .live-v, #vLive) { display: none !important; }
   #viewer:not([hidden]):has(.v-media > img), #viewer:not([hidden]):has(.v-media > img) :is(.v-main, .v-stage, .v-media) {
     position: static !important; inset: auto !important; display: block !important; transform: none !important; will-change: auto !important;
     width: auto !important; height: auto !important; background: none !important; overflow: visible !important;

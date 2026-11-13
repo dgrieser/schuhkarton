@@ -990,6 +990,7 @@
         big.src = largeURL(it);
       }
       $('#vLive').hidden = !it.lv;
+      this.placeLive();
       $('#vFav').classList.toggle('on', !!it.f);
       $('#vFav').innerHTML = icon('heart', it.f ? 'fill' : '');
       $('#vPrev').hidden = this.i === 0;
@@ -1878,6 +1879,16 @@
       z.x = fit(z.x, g.bx, g.w, g.sx, g.sw);
       z.y = fit(z.y, g.by, g.h, g.sy, g.sh);
     },
+    // the live photo button: on the picture's top right corner (below the top bar), not while zoomed
+    placeLive() {
+      const b = $('#vLive');
+      if (b.hidden) return;
+      const m = this.media, st = this.stage;
+      const right = st.offsetLeft + m.offsetLeft + m.offsetWidth, top = st.offsetTop + m.offsetTop;
+      b.style.left = `${Math.round(right - b.offsetWidth - 10)}px`;
+      b.style.top = `${Math.round(Math.max(top + 10, $('.v-top', this.el).offsetHeight + 4))}px`;
+      b.classList.toggle('zoomed', this.zoom.s !== 1);
+    },
     applyZoom() {
       const z = this.zoom;
       if (z.s === 1) z.x = z.y = 0;
@@ -1885,6 +1896,7 @@
       this.media.style.transform = z.s === 1 ? '' : `translate(${z.x}px, ${z.y}px) scale(${z.s})`;
       this.media.style.setProperty('--zs', z.s); // what keeps its size while zooming divides by it
       this.stage.style.cursor = z.s > 1 ? 'grab' : '';
+      this.placeLive();
     },
     // scales by ns around the screen point (cx, cy) and moves that point to (tx, ty); pinches may dip below 1 and snap back
     zoomAt(cx, cy, ns, tx = cx, ty = cy, min = 1) {
@@ -1951,7 +1963,9 @@
       V.el.style.setProperty('--sw', `${Math.round(r.width)}px`);
       V.el.style.setProperty('--sh', `${Math.round(r.height)}px`);
       if (V.zoom.s !== 1) V.applyZoom();
+      V.placeLive();
     }).observe(V.stage);
+    new ResizeObserver(() => V.placeLive()).observe(V.media);
     V.sheetMode.addEventListener('change', () => { if (V.sheetMode.matches && V.showInfo) V.restoreSheet(); });
     addEventListener('resize', () => { if (V.sheetMode.matches && V.showInfo) V.setSheet(V.sheetH()); });
 
