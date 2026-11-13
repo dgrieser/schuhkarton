@@ -452,7 +452,26 @@ type faceRec struct {
 	taken   int64
 	label   string
 	frame   frame
+	weak    bool // the detector was unsure or the face is small: joins a named person only when clearly alike
 }
+
+// Weak faces: measured on a real library, faces the detector found with a
+// score below 0.90 or with a short side under 80 px (in the picture as it
+// is, not as scaled for detection) were named wrong about
+// twice as often; they join a named person only weakExtra above
+// named_threshold (left out, they form groups of their own to be named).
+const (
+	weakScore = 0.90
+	weakPx    = 80
+	weakExtra = 0.12
+	// a person is matched by the better of its centroid and the mean of its
+	// knnK most alike named faces (faces change over the years: the
+	// centroid of a child lies between its ages). knnFar: a person whose
+	// centroid is more than this below the threshold is not looked at (on a
+	// real library 0.2 lost many matches of nearest faces, 0.4 two of 8,670)
+	knnK   = 3
+	knnFar = 0.4
+)
 
 // frame is one picture: a photo, or one moment of a video. A person is in a
 // frame once, except in a collage.
@@ -498,6 +517,7 @@ type faceSnap struct {
 	id    string
 	taken int64
 	faces []Face
+	w, h  int // the picture's pixel size (0: unknown)
 }
 
 // recluster rebuilds the people from a consistent snapshot of the faces.
@@ -530,7 +550,7 @@ func (l *Library) faceSnapshot() []faceSnap {
 	l.mu.RLock()
 	for _, it := range items {
 		if len(it.Faces) > 0 { // photos, and videos with faces marked by hand
-			snap = append(snap, faceSnap{it.ID, it.Taken, it.Faces})
+			snap = append(snap, faceSnap{it.ID, it.Taken, it.Faces, it.W, it.H})
 		}
 	}
 	l.mu.RUnlock()
@@ -586,6 +606,13 @@ func faceRecs(items []faceSnap, labels map[string]string) (map[string]int64, []*
 			}
 			r := &faceRec{ref: FaceRef{it.id, i}, emb: f.Emb, quality: f.Score * float32(math.Sqrt(float64(f.W*f.H))), taken: it.taken,
 				frame: frame{it.id, f.T}}
+			if !f.Manual {
+				short := float32(-1)
+				if it.w > 0 && it.h > 0 {
+					short = min(f.W*float32(it.w), f.H*float32(it.h))
+				}
+				r.weak = f.Score < weakScore || (short >= 0 && short < weakPx)
+			}
 			r.label = label
 			all = append(all, r)
 		}
@@ -662,12 +689,43 @@ func buildPeople(items []faceSnap, labels map[string]string, threshNew, threshNa
 			sim float32
 		}
 		var pairs []pair
-		for i, ms := range candidates(rest, namedList, threshNamed) {
-			for _, m := range ms {
-				if !rejects(rest[i].label, m.c.name) {
-					pairs = append(pairs, pair{i, m.c, m.sim})
+		// the named faces of each person, for the nearest-neighbour likeness
+		members := make(map[*cluster][][]float32, len(namedList))
+		for _, c := range namedList {
+			for _, r := range c.refs {
+				if len(r.emb) > 0 {
+					members[c] = append(members[c], r.emb)
 				}
 			}
+		}
+		cands := candidates(rest, namedList, threshNamed-knnFar)
+		per := make([][]pair, len(rest))
+		var wg sync.WaitGroup
+		step := max(1, (len(rest)+runtime.NumCPU()-1)/runtime.NumCPU())
+		for lo := 0; lo < len(rest); lo += step {
+			wg.Add(1)
+			go func(lo, hi int) {
+				defer wg.Done()
+				for i := lo; i < hi; i++ {
+					f := rest[i]
+					need := threshNamed
+					if f.weak {
+						need += weakExtra
+					}
+					for _, m := range cands[i] {
+						if rejects(f.label, m.c.name) {
+							continue
+						}
+						if sim := max(m.sim, knnLikeness(f.emb, members[m.c])); sim >= need {
+							per[i] = append(per[i], pair{i, m.c, sim})
+						}
+					}
+				}
+			}(lo, min(lo+step, len(rest)))
+		}
+		wg.Wait()
+		for _, ps := range per {
+			pairs = append(pairs, ps...)
 		}
 		sort.SliceStable(pairs, func(a, b int) bool { return pairs[a].sim > pairs[b].sim })
 		placed := make([]bool, len(rest))
@@ -755,6 +813,42 @@ func buildPeople(items []faceSnap, labels map[string]string, threshNew, threshNa
 		return people[a].Count > people[b].Count
 	})
 	return people, apart
+}
+
+// knnLikeness is the mean likeness of e to its knnK most alike faces of a
+// person (fewer faces count a little less: one face alone is a weaker hint).
+func knnLikeness(e []float32, faces [][]float32) float32 {
+	var best [knnK]float32
+	n := 0
+	for _, x := range faces {
+		if len(x) != len(e) {
+			continue
+		}
+		v := dot(e, x)
+		if n < knnK {
+			best[n] = v
+			n++
+		} else {
+			lo := 0
+			for j := 1; j < knnK; j++ {
+				if best[j] < best[lo] {
+					lo = j
+				}
+			}
+			if v <= best[lo] {
+				continue
+			}
+			best[lo] = v
+		}
+	}
+	if n == 0 {
+		return -2
+	}
+	var sum float32
+	for _, v := range best[:n] {
+		sum += v
+	}
+	return sum/float32(n) - 0.03*float32(knnK-n)
 }
 
 type match struct {

@@ -114,3 +114,60 @@ func TestNotThisPersonRemembered(t *testing.T) {
 		t.Fatalf("by hand: %q", s.labels["i3:0"])
 	}
 }
+
+// A face joins the named person whose most alike faces it is like, also when
+// that person's centroid lies between two looks (a child growing up); a
+// weak face (unsure detector, small) only when clearly alike.
+func TestNamedByNearestFaces(t *testing.T) {
+	young := normalize([]float32{1, 0, 0, 0})
+	old := normalize([]float32{0, 0, 1, 0})
+	ben := normalize([]float32{0.6, 0.1, 0.75, 0.2})
+	q := normalize([]float32{0.05, 0.1, 1, 0.1}) // like Anna old
+	face := func(e []float32, sc float32) Face { return Face{Emb: e, Score: sc, W: .2, H: .2} }
+	snap := []faceSnap{
+		{id: "a1", taken: 1, faces: []Face{face(young, .95)}, w: 1000, h: 1000},
+		{id: "a2", taken: 2, faces: []Face{face(young, .95)}, w: 1000, h: 1000},
+		{id: "a3", taken: 3, faces: []Face{face(old, .95)}, w: 1000, h: 1000},
+		{id: "a4", taken: 4, faces: []Face{face(old, .95)}, w: 1000, h: 1000},
+		{id: "a5", taken: 4, faces: []Face{face(old, .95)}, w: 1000, h: 1000},
+		{id: "b1", taken: 5, faces: []Face{face(ben, .95)}, w: 1000, h: 1000},
+		{id: "q", taken: 6, faces: []Face{face(q, .95)}, w: 1000, h: 1000},
+	}
+	labels := map[string]string{"a1:0": "Anna", "a2:0": "Anna", "a3:0": "Anna", "a4:0": "Anna", "a5:0": "Anna", "b1:0": "Ben"}
+	people, _ := buildPeople(snap, labels, .48, .42, .75, false)
+	who := func(people []*Person, k string) string {
+		for _, p := range people {
+			for _, r := range p.refs {
+				if r.key() == k {
+					return p.Name
+				}
+			}
+		}
+		return ""
+	}
+	// Anna's centroid is about 0.75 like q, Ben's about 0.8: by the centroid q would be Ben
+	if got := who(people, "q:0"); got != "Anna" {
+		t.Fatalf("q is %q, want Anna", got)
+	}
+	// weak (unsure detector): about 0.5 alike is not enough
+	mid := normalize([]float32{-0.3, -0.3, 0.5, 0.8}) // like Anna old (about 0.48), not like Ben
+	if s := knnLikeness(mid, [][]float32{young, young, old, old, old}); s < .42 || s >= .42+weakExtra {
+		t.Fatalf("setup: likeness %.2f", s)
+	}
+	snap[6].faces = []Face{face(mid, .85)}
+	people, _ = buildPeople(snap, labels, .48, .42, .75, false)
+	if got := who(people, "q:0"); got != "" {
+		t.Errorf("weak face joined %q", got)
+	}
+	snap[6].faces = []Face{face(mid, .95)}
+	people, _ = buildPeople(snap, labels, .48, .42, .75, false)
+	if got := who(people, "q:0"); got != "Anna" {
+		t.Errorf("strong face: %q", got)
+	}
+	// small (short side under 80 px) counts as weak too
+	snap[6].faces = []Face{{Emb: mid, Score: .95, W: .05, H: .05}}
+	people, _ = buildPeople(snap, labels, .48, .42, .75, false)
+	if got := who(people, "q:0"); got != "" {
+		t.Errorf("small face joined %q", got)
+	}
+}
