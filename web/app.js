@@ -1825,14 +1825,17 @@
         clearTimeout(slow);
         if (!pop.isConnected) return;
         sugg = (res.suggestions || []).filter((x) => people.has(x.name));
-        showState(res.recognition === false ? '' : sugg.length ? pl(sugg.length, '{n} Vorschlag', '{n} Vorschläge') : face.add ? t('Keine ähnliche Person gefunden') : '');
+        showState(res.recognition === false ? '' : sugg.length ? pl(sugg.length, '{n} Vorschlag', '{n} Vorschläge') : res.error ? t('Gesichtserkennung gerade nicht erreichbar') : face.add ? t('Keine ähnliche Person gefunden') : '');
         if (!sugg.length) return;
         const had = document.activeElement;
         list.innerHTML = `${sorted().map(person).join('')}`;
         list.appendChild(typed);
         list.scrollTop = 0;
         filter(adding() ? nameIn.value.trim() : search?.value.trim() || '');
-        if (had && !had.isConnected) pop.focus({ preventScroll: true }); // a person had the focus: drawn anew
+        if (had && !had.isConnected) { // a person had the focus: the same one, drawn anew, gets it back
+          const again = had.dataset?.name && $$('[data-name]', list).find((b) => b.dataset.name === had.dataset.name);
+          (again || pop).focus({ preventScroll: true });
+        }
         position();
       }).catch(() => { clearTimeout(slow); if (pop.isConnected) showState(''); });
     },
