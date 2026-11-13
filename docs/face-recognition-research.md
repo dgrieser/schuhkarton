@@ -154,7 +154,54 @@ Most of these checks can also be done locally for free (section 3).
 
 The name suggestions in `internal/gallery/facesuggest.go` already do the k-NN
 part. They take the better of the centroid similarity and the mean of the
-three most alike faces. Clustering itself still uses centroids only.
+three most alike faces. Since v0.9.43 grouping does the same when a face
+joins a named person, and weak faces (detector score below 0.90, or a short
+side under 80 px) need `named_threshold` + 0.12. Unnamed groups are still
+formed by centroids.
+
+## Measured (November 2026, a real family library)
+
+4,509 named faces of 32 people, SFace embeddings, leave one out (the face is
+matched against everybody else's named faces). Caveat: many names were given
+to whole groups the centroid clustering had formed, so the figures flatter
+all methods a little; they compare the methods fairly.
+
+| Matching | top 1 | top 3 | at 0.42: answered / right |
+|---|---|---|---|
+| centroid (grouping until v0.9.42) | 85.4 % | 96.3 % | 96.8 % / 86.7 % |
+| centroid of the faces within ±2 years | 88.0 % | 96.7 % | 98.0 % / 88.8 % |
+| 1 nearest face | 92.3 % | 98.8 % | 99.7 % / 92.5 % |
+| mean of the 3 nearest faces | 93.0 % | 98.7 % | 99.2 % / 93.3 % |
+| mean of the 5 nearest faces | 93.2 % | 98.6 % | 99.0 % / 93.7 % |
+| better of centroid and 3 nearest | 93.1 % | 99.0 % | 99.5 % / 93.2 % |
+
+- **Quality:** faces with a detector score below 0.90 were right 86 % of the
+  time (centroid: 69 %), the others 94.5 %; strongly turned heads 88.7 %
+  against 96.2 % for frontal ones; faces under 80 px about 83 % against 93 %.
+  Blur made no difference. Leaving weak faces out of a person's references
+  made it worse (91.1 %); a higher threshold for weak faces asking to join is
+  better: at 0.54 they were right 90.5 % (from 87.4 %), 88 % of them still
+  answered.
+- **Flip augmentation** (478 crops of 12 people re-embedded with YuNet +
+  SFace): 93.3 % with flip, 93.9 % without — no gain.
+- **Grouping, before and after** (half of the named items had their names
+  hidden, then grouped): right 77.7 % → 82.9 %, wrong 11.3 % → 6.0 %, left
+  unnamed 10.9 % → 11.1 %; a grouping run took 0.70 → 0.97 s on a laptop.
+- **AuraFace-v1** (`glintr100.onnx`, 260 MB, sha256 `a7933ea5…25c60`, same
+  478 crops, same YuNet alignment, RGB (x−127.5)/127.5):
+
+  | | centroid | 3 nearest | median margin |
+  |---|---|---|---|
+  | SFace (re-embedded) | 93.7 % | 93.9 % | +0.285 |
+  | AuraFace | 93.5 % | 94.6 % | +0.304 |
+  | AuraFace + flip | 94.1 % | 95.2 % | +0.328 |
+
+  Gains mostly on unsure and turned faces (turned: 91.2 → 93.1 %), about 1
+  point overall (3–6 of 478 faces, within noise). Per face on a 24-core
+  laptop: SFace 28 ms, AuraFace 126 ms (407 ms on one thread); on a
+  Raspberry Pi probably seconds. Its cosines run lower: about 0.35 matches
+  SFace's 0.42, about 0.40 its 0.48. Verdict: not worth the switch for now;
+  the nearest-face matching gave far more.
 
 ## Not verified
 

@@ -675,7 +675,7 @@ faces:
   workers: 6
   min_score: 0.86             # detection threshold
   cluster_threshold: 0.48     # similarity to join an unnamed group (higher: more, purer groups)
-  named_threshold: 0.42       # similarity to join a named person
+  named_threshold: 0.42       # similarity to join a named person (centroid or its 3 most alike faces; unsure or small faces need 0.12 more)
   same_photo_threshold: 0.75  # similarity for a person twice in one picture (a collage)
   python: ""                  # local
   models_dir: ""              # local
