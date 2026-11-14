@@ -25,6 +25,8 @@ type FaceInfo struct {
 	Mode        string   `json:"mode"`
 	Detection   bool     `json:"detection"`
 	Recognition bool     `json:"recognition"`
+	Aura        bool     `json:"aura,omitempty"`  // the second system (AuraFace) gives a second embedding
+	Extra       bool     `json:"extra,omitempty"` // the second, more generous search
 	Error       string   `json:"error,omitempty"`
 	Missing     []string `json:"missing,omitempty"`
 	Version     string   `json:"version,omitempty"`
@@ -33,10 +35,12 @@ type FaceInfo struct {
 // faceBackend finds faces in one item and stores their crops.
 type faceBackend interface {
 	probe() FaceInfo
-	// detect stops when ctx ends (the local helper finishes the photo it has).
-	detect(ctx context.Context, l *Library, it *Item, cropPrefix string) ([]Face, error)
-	// detectData finds faces in a JPEG (no crops kept).
-	detectData(ctx context.Context, l *Library, data []byte) ([]Face, error)
+	// detect stops when ctx ends (the local helper finishes the photo it
+	// has). extra: the faces of the second search too (Src set).
+	detect(ctx context.Context, l *Library, it *Item, cropPrefix string, extra bool) ([]Face, error)
+	// detectData finds faces in a JPEG (no crops kept); box: a face drawn
+	// by hand there, embedded as it is when no search finds it.
+	detectData(ctx context.Context, l *Library, data []byte, box *[4]float32) ([]Face, error)
 }
 
 // errTransient marks failures worth retrying later (container down).
@@ -50,18 +54,18 @@ type localFaces struct{ pool *helper.Pool }
 
 func (f *localFaces) probe() FaceInfo {
 	i := f.pool.Probe()
-	return FaceInfo{Mode: "local", Detection: i.Detection, Recognition: i.Recognition, Error: i.Error, Missing: i.Missing}
+	return FaceInfo{Mode: "local", Detection: i.Detection, Recognition: i.Recognition, Aura: i.Aura, Extra: i.Extra, Error: i.Error, Missing: i.Missing}
 }
 
-func (f *localFaces) detect(ctx context.Context, l *Library, it *Item, prefix string) ([]Face, error) {
-	hf, err := f.pool.Faces(l.Path(it), prefix)
+func (f *localFaces) detect(ctx context.Context, l *Library, it *Item, prefix string, extra bool) ([]Face, error) {
+	hf, err := f.pool.FacesWith(l.Path(it), prefix, helper.FaceOpts{Extra: extra})
 	if err != nil {
 		return nil, err
 	}
 	return fromHelper(hf), nil
 }
 
-func (f *localFaces) detectData(ctx context.Context, l *Library, data []byte) ([]Face, error) {
+func (f *localFaces) detectData(ctx context.Context, l *Library, data []byte, box *[4]float32) ([]Face, error) {
 	tmp, err := os.CreateTemp(l.opt.CacheDir, "face-*.jpg")
 	if err != nil {
 		return nil, err
@@ -73,7 +77,7 @@ func (f *localFaces) detectData(ctx context.Context, l *Library, data []byte) ([
 	}
 	tmp.Close()
 	prefix := strings.TrimSuffix(tmp.Name(), ".jpg") + "-crop"
-	hf, err := f.pool.Faces(tmp.Name(), prefix)
+	hf, err := f.pool.FacesWith(tmp.Name(), prefix, helper.FaceOpts{Box: box})
 	if matches, _ := filepath.Glob(prefix + "_*.jpg"); len(matches) > 0 {
 		for _, m := range matches {
 			os.Remove(m)
@@ -88,7 +92,7 @@ func (f *localFaces) detectData(ctx context.Context, l *Library, data []byte) ([
 func fromHelper(hf []helper.Face) []Face {
 	out := make([]Face, len(hf))
 	for i, f := range hf {
-		out[i] = Face{X: f.X, Y: f.Y, W: f.W, H: f.H, Score: f.Score, Emb: f.Emb}
+		out[i] = Face{X: f.X, Y: f.Y, W: f.W, H: f.H, Score: f.Score, Emb: f.Emb, Emb2: quant2(f.Emb2), Src: f.Src}
 	}
 	return out
 }
@@ -116,6 +120,8 @@ type WorkerInfo struct {
 	Version     string   `json:"version"`
 	Detection   bool     `json:"detection"`
 	Recognition bool     `json:"recognition"`
+	Aura        bool     `json:"aura,omitempty"`
+	Extra       bool     `json:"extra,omitempty"`
 	Missing     []string `json:"missing,omitempty"`
 	Error       string   `json:"error,omitempty"`
 	Workers     int      `json:"workers"`
@@ -179,7 +185,8 @@ func (f *remoteFaces) ask() FaceInfo {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	wi, err := ProbeWorker(ctx, f.url, f.token)
-	info := FaceInfo{Mode: "remote", Detection: wi.Detection, Recognition: wi.Recognition, Missing: wi.Missing, Version: wi.Version, Error: wi.Error}
+	info := FaceInfo{Mode: "remote", Detection: wi.Detection, Recognition: wi.Recognition, Aura: wi.Aura, Extra: wi.Extra,
+		Missing: wi.Missing, Version: wi.Version, Error: wi.Error}
 	if err != nil {
 		info.Error = fmt.Sprintf("Gesichtserkennung unter %s nicht erreichbar: %v", f.url, err)
 	}
@@ -190,18 +197,30 @@ func (f *remoteFaces) ask() FaceInfo {
 type WorkerFace struct {
 	X, Y, W, H float32
 	Score      float32 `json:"score"`
-	Emb        string  `json:"emb,omitempty"`  // base64 little-endian float32
+	Emb        string  `json:"emb,omitempty"`   // base64 little-endian float32
+	Emb2       string  `json:"emb2,omitempty"`  // the second system's, the same way
+	Extra      bool    `json:"extra,omitempty"` // found by the second search (or the box asked for)
+	Src        string  `json:"src,omitempty"`
 	Crop       string  `json:"crop,omitempty"` // base64 JPEG, 200x200
+}
+
+func (wf WorkerFace) face() Face {
+	return Face{X: wf.X, Y: wf.Y, W: wf.W, H: wf.H, Score: wf.Score, Emb: helper.DecodeEmbedding(wf.Emb),
+		Emb2: quant2(helper.DecodeEmbedding(wf.Emb2)), Src: wf.Src}
 }
 
 // detect sends a 1600 px JPEG (or the original, when Go cannot decode it)
 // and stores the returned crops next to the other face crops.
-func (f *remoteFaces) detect(ctx context.Context, l *Library, it *Item, prefix string) ([]Face, error) {
+func (f *remoteFaces) detect(ctx context.Context, l *Library, it *Item, prefix string, extra bool) ([]Face, error) {
 	body, name, err := l.faceImage(ctx, it)
 	if err != nil {
 		return nil, err
 	}
-	found, err := f.post(ctx, body, name)
+	hdr := map[string]string{}
+	if extra {
+		hdr["X-Extra"] = "1"
+	}
+	found, err := f.post(ctx, body, name, hdr)
 	if err != nil {
 		return nil, err
 	}
@@ -210,31 +229,38 @@ func (f *remoteFaces) detect(ctx context.Context, l *Library, it *Item, prefix s
 		if b, err := base64.StdEncoding.DecodeString(wf.Crop); err == nil && len(b) > 0 {
 			os.WriteFile(fmt.Sprintf("%s_%d.jpg", prefix, i), b, 0o644)
 		}
-		out = append(out, Face{X: wf.X, Y: wf.Y, W: wf.W, H: wf.H, Score: wf.Score, Emb: helper.DecodeEmbedding(wf.Emb)})
+		out = append(out, wf.face())
 	}
 	return out, nil
 }
 
-func (f *remoteFaces) detectData(ctx context.Context, l *Library, data []byte) ([]Face, error) {
-	found, err := f.post(ctx, data, "face.jpg")
+func (f *remoteFaces) detectData(ctx context.Context, l *Library, data []byte, box *[4]float32) ([]Face, error) {
+	hdr := map[string]string{}
+	if box != nil {
+		hdr["X-Box"] = fmt.Sprintf("%g,%g,%g,%g", box[0], box[1], box[2], box[3])
+	}
+	found, err := f.post(ctx, data, "face.jpg", hdr)
 	if err != nil {
 		return nil, err
 	}
 	out := make([]Face, 0, len(found))
 	for _, wf := range found {
-		out = append(out, Face{X: wf.X, Y: wf.Y, W: wf.W, H: wf.H, Score: wf.Score, Emb: helper.DecodeEmbedding(wf.Emb)})
+		out = append(out, wf.face())
 	}
 	return out, nil
 }
 
 // post sends a picture to the face container and returns what it found.
-func (f *remoteFaces) post(ctx context.Context, body []byte, name string) ([]WorkerFace, error) {
+func (f *remoteFaces) post(ctx context.Context, body []byte, name string, hdr map[string]string) ([]WorkerFace, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, f.url+"/v1/faces", bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/octet-stream")
 	req.Header.Set("X-Filename", name)
+	for k, v := range hdr {
+		req.Header.Set(k, v)
+	}
 	if f.token != "" {
 		req.Header.Set("Authorization", "Bearer "+f.token)
 	}

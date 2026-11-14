@@ -41,6 +41,8 @@ const (
 type suggestedEmb struct {
 	it    *Item
 	emb   []float32 // nil: no face found in the box
+	emb2  []int8    // the second system's (nil: none)
+	aura  bool      // the service has the second system
 	found bool      // the service answered
 	at    time.Time
 }
@@ -64,26 +66,28 @@ func (l *Library) SuggestForBox(ctx context.Context, id string, box FaceBox, t f
 	if !box.valid() {
 		return nil, errors.New("invalid box")
 	}
-	if l.faces == nil || !l.FaceStatus().Recognition {
+	fs := l.FaceStatus()
+	if l.faces == nil || !fs.Recognition {
 		return nil, ErrNoRecognition
 	}
 	l.pruneSuggested()
 	key := suggestKey(id, box, t)
 	var emb []float32
+	var emb2 []int8
 	if c, ok := l.suggestEmb.Load(key); ok && c.(suggestedEmb).it == it {
-		emb = c.(suggestedEmb).emb
+		emb, emb2 = c.(suggestedEmb).emb, c.(suggestedEmb).emb2
 	} else {
 		f := Face{X: box.X, Y: box.Y, W: box.W, H: box.H, T: float32(max(t, 0)), Manual: true}
 		var err error
-		if emb, err = l.manualEmbedding(ctx, it, f); err != nil {
+		if emb, emb2, err = l.manualEmbedding(ctx, it, f); err != nil {
 			return nil, err
 		}
-		l.suggestEmb.Store(key, suggestedEmb{it: it, emb: emb, found: true, at: time.Now()})
+		l.suggestEmb.Store(key, suggestedEmb{it: it, emb: emb, emb2: emb2, aura: fs.Aura, found: true, at: time.Now()})
 	}
-	if emb == nil {
+	if emb == nil && emb2 == nil {
 		return []Suggestion{}, nil
 	}
-	return l.suggest(emb, frame{id, float32(max(t, 0))}, FaceRef{Item: id, Idx: -1}, ""), nil
+	return l.suggest(emb, emb2, frame{id, float32(max(t, 0))}, FaceRef{Item: id, Idx: -1}, ""), nil
 }
 
 // SuggestForFace suggests names for a face of an item (one with an
@@ -99,28 +103,28 @@ func (l *Library) SuggestForFace(id string, idx int) ([]Suggestion, error) {
 		return nil, errors.New("unknown face")
 	}
 	f := faces[idx]
-	if f.Emb == nil {
+	if f.Emb == nil && f.Emb2 == nil {
 		return []Suggestion{}, nil
 	}
 	ref := FaceRef{id, idx}
 	l.people.mu.RLock()
 	label := l.people.labels[ref.key()]
 	l.people.mu.RUnlock()
-	return l.suggest(f.Emb, frame{id, f.T}, ref, label), nil
+	return l.suggest(f.Emb, f.Emb2, frame{id, f.T}, ref, label), nil
 }
 
-// takeSuggested hands AddFace the embedding found for the same box shortly
-// before (ok false: none, the face service is asked in the background).
-func (l *Library) takeSuggested(it *Item, box FaceBox, t float64) (emb []float32, ok bool) {
+// takeSuggested hands AddFace what was found for the same box shortly
+// before (nil: none, the face service is asked in the background).
+func (l *Library) takeSuggested(it *Item, box FaceBox, t float64) *suggestedEmb {
 	c, found := l.suggestEmb.LoadAndDelete(suggestKey(it.ID, box, t))
 	if !found {
-		return nil, false
+		return nil
 	}
 	s := c.(suggestedEmb)
 	if s.it != it || !s.found || time.Since(s.at) > suggestTTL {
-		return nil, false
+		return nil
 	}
-	return s.emb, true
+	return &s
 }
 
 func (l *Library) pruneSuggested() {
@@ -136,8 +140,10 @@ func (l *Library) pruneSuggested() {
 // the face itself (left out of the neighbours), fr its picture (names
 // already there are left out), label its label (names it is not are left
 // out).
-func (l *Library) suggest(emb []float32, fr frame, self FaceRef, label string) []Suggestion {
-	emb = normalize(emb)
+func (l *Library) suggest(emb []float32, emb2 []int8, fr frame, self FaceRef, label string) []Suggestion {
+	if emb != nil {
+		emb = normalize(emb)
+	}
 	type cand struct {
 		id, name string
 		cent     []float32
@@ -161,16 +167,17 @@ func (l *Library) suggest(emb []float32, fr frame, self FaceRef, label string) [
 	if it != nil {
 		itemFaces = it.Faces
 	}
-	member := func(r FaceRef) []float32 {
+	member := func(r FaceRef) *Face {
 		it := l.byID[r.Item]
 		if it == nil || r.Idx >= len(it.Faces) {
 			return nil
 		}
-		return it.Faces[r.Idx].Emb
+		return &it.Faces[r.Idx]
 	}
 	out := []Suggestion{}
 	for _, c := range cands {
-		var best []float32 // the k highest similarities to the person's faces
+		var faces1 [][]float32
+		var faces2 [][]int8
 		for _, r := range c.refs {
 			if r.Item == fr.item {
 				if r != self && r.Idx < len(itemFaces) && sameFrame(itemFaces[r.Idx], Face{T: fr.t}) {
@@ -180,35 +187,30 @@ func (l *Library) suggest(emb []float32, fr frame, self FaceRef, label string) [
 					continue
 				}
 			}
-			e := member(r)
-			if len(e) != len(emb) {
-				continue
-			}
-			v := dot(emb, e) // stored normalized
-			if len(best) < suggestKNN {
-				best = append(best, v)
-				sort.Slice(best, func(a, b int) bool { return best[a] > best[b] })
-			} else if v > best[len(best)-1] {
-				best[len(best)-1] = v
-				sort.Slice(best, func(a, b int) bool { return best[a] > best[b] })
+			if m := member(r); m != nil {
+				if len(m.Emb) == len(emb) && emb != nil {
+					faces1 = append(faces1, m.Emb)
+				}
+				if m.Emb2 != nil {
+					faces2 = append(faces2, m.Emb2)
+				}
 			}
 		}
-		score := float32(-2)
-		if len(c.cent) == len(emb) {
-			score = dot(emb, c.cent)
-		}
-		if len(best) > 0 {
-			var sum float32
-			for _, v := range best {
-				sum += v
+		// the first system: the better of centroid and nearest faces
+		s1 := float32(-2)
+		if emb != nil {
+			if len(c.cent) == len(emb) {
+				s1 = dot(emb, c.cent)
 			}
-			// one face alone is a weaker hint than several
-			knn := sum / float32(len(best))
-			if len(best) < suggestKNN {
-				knn -= 0.03 * float32(suggestKNN-len(best))
+			if len(faces1) > 0 {
+				s1 = max(s1, knnLikeness(emb, faces1))
 			}
-			score = max(score, knn)
 		}
+		s2 := float32(-2)
+		if emb2 != nil && len(faces2) > 0 {
+			s2 = knnLikeness2(emb2, faces2)
+		}
+		score := fuse(s1, s2)
 		if score < -1 || here[c.name] || rejects(label, c.name) {
 			continue
 		}

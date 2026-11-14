@@ -671,7 +671,7 @@
       const f = faceTest;
       if (!f) return;
       $('#fres', el).innerHTML = f.ok
-        ? `<span class="good">${icon('check')}${t('verbunden')} · ${f.info.recognition ? t('Erkennung und Zuordnung') : t('nur Erkennung (Modell SFace fehlt)')} · ${esc(f.info.version || '')}</span>`
+        ? `<span class="good">${icon('check')}${t('verbunden')} · ${f.info.recognition ? (f.info.aura ? t('Erkennung und Zuordnung mit zwei Modellen (SFace, AuraFace)') : t('Erkennung und Zuordnung')) : t('nur Erkennung (Modell SFace fehlt)')} · ${esc(f.info.version || '')}</span>`
         : `<span class="bad">${icon('warn')}${esc(f.error ? t(f.error) : (f.info?.missing || []).join(', ') || t('keine Erkennung möglich'))}</span>`;
     };
     showRes();

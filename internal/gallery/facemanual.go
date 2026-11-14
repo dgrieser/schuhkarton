@@ -57,9 +57,11 @@ func (l *Library) AddFace(ctx context.Context, id string, box FaceBox, t float64
 	}
 	face := Face{X: box.X, Y: box.Y, W: box.W, H: box.H, Score: 1, Manual: true, T: float32(max(t, 0))}
 	// the name suggestions looked at this box already: their answer is the embedding
-	emb, known := l.takeSuggested(it, box, t)
+	sg := l.takeSuggested(it, box, t)
+	known := sg != nil
 	if known {
-		face.Emb, face.NoEmb, face.EmbTry = emb, emb == nil, time.Now().Unix()
+		face.EmbTry = time.Now().Unix()
+		setManualEmb(&face, sg.emb, sg.emb2, sg.aura)
 	}
 	cropImg, _ := cropSquare(frame, px, 1.5, 200)
 	crop, err := encodeJPEG(cropImg, 88)
@@ -266,7 +268,11 @@ func (l *Library) redoManualCrops(ctx context.Context) (bool, time.Duration) {
 }
 
 // wantsEmb tells whether a hand-marked face still waits for its embedding.
-func (f Face) wantsEmb() bool { return f.Manual && f.Emb == nil && !f.NoEmb }
+// wantsEmb: a face drawn by hand that still waits for an embedding (aura:
+// the service has the second system, so the second one too).
+func (f Face) wantsEmb(aura bool) bool {
+	return f.Manual && ((f.Emb == nil && !f.NoEmb) || (aura && f.Emb2 == nil && !f.NoEmb2))
+}
 
 // manualEmbPass looks for the embeddings of the hand-marked faces that
 // need one. A face just marked is looked at right away (somebody waits for
@@ -276,10 +282,12 @@ func (l *Library) manualEmbPass(ctx context.Context) time.Duration {
 	if l.faces == nil {
 		return 0
 	}
-	if !l.FaceStatus().Recognition {
+	fs := l.FaceStatus()
+	if !fs.Recognition {
 		// no embeddings now (the service is away, or has no recognition model): look again later
 		return manualEmbRetry
 	}
+	aura := fs.Aura
 	type job struct {
 		it    *Item
 		idx   int
@@ -305,7 +313,7 @@ func (l *Library) manualEmbPass(ctx context.Context) time.Duration {
 	l.mu.RLock()
 	for _, it := range l.items {
 		for i, f := range it.Faces {
-			if !f.wantsEmb() {
+			if !f.wantsEmb(aura) {
 				continue
 			}
 			_, fresh := l.freshEmb.Load(FaceRef{it.ID, i}.key())
@@ -344,7 +352,7 @@ func (l *Library) manualEmbPass(ctx context.Context) time.Duration {
 				jctx, cancel = context.WithDeadline(ctx, end)
 			}
 		}
-		emb, err := l.manualEmbedding(jctx, j.it, j.f)
+		emb, emb2, err := l.manualEmbedding(jctx, j.it, j.f)
 		closed := jctx.Err() != nil && ctx.Err() == nil
 		cancel()
 		if ctx.Err() != nil {
@@ -359,16 +367,12 @@ func (l *Library) manualEmbPass(ctx context.Context) time.Duration {
 		}
 		l.mu.Lock()
 		// the same face still (no new scan of the file, same box)
-		if l.byID[j.it.ID] == j.it && j.idx < len(j.it.Faces) && sameBox(j.it.Faces[j.idx], j.f) && j.it.Faces[j.idx].wantsEmb() {
+		if l.byID[j.it.ID] == j.it && j.idx < len(j.it.Faces) && sameBox(j.it.Faces[j.idx], j.f) && j.it.Faces[j.idx].wantsEmb(aura) {
 			faces := append([]Face(nil), j.it.Faces...)
 			f := &faces[j.idx]
 			f.EmbTry = time.Now().Unix()
-			switch {
-			case err != nil:
-			case emb != nil:
-				f.Emb = emb
-			default:
-				f.NoEmb = true
+			if err == nil {
+				setManualEmb(f, emb, emb2, aura)
 			}
 			j.it.Faces = faces
 			changed = true
@@ -390,43 +394,64 @@ func (l *Library) manualEmbPass(ctx context.Context) time.Duration {
 	return wait
 }
 
-// manualEmbedding asks the face service for the embedding of a hand-marked
-// face: it looks at the box with room around it, and only a face found
-// there counts. nil without an error: no face there.
-func (l *Library) manualEmbedding(ctx context.Context, it *Item, f Face) ([]float32, error) {
+// setManualEmb takes what the service found for a face drawn by hand.
+func setManualEmb(f *Face, emb []float32, emb2 []int8, aura bool) {
+	if emb != nil {
+		f.Emb = emb
+	} else if f.Emb == nil {
+		f.NoEmb = true
+	}
+	if emb2 != nil {
+		f.Emb2 = emb2
+	} else if aura && f.Emb2 == nil {
+		f.NoEmb2 = true
+	}
+}
+
+// manualEmbedding asks the face service for the embeddings of a hand-marked
+// face: it looks at the box with room around it, and a face found there
+// counts. Where no search finds one, the box itself is embedded by the
+// second system (emb2 only: the first one needs the face's points). nil
+// without an error: nothing there.
+func (l *Library) manualEmbedding(ctx context.Context, it *Item, f Face) ([]float32, []int8, error) {
 	frame, err := l.frameImage(ctx, it, float64(f.T))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	px := boxPixels(frame.Bounds(), f.X, f.Y, f.W, f.H)
 	if px.Dx() < 4 || px.Dy() < 4 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	regionImg, sq := cropSquare(frame, px, 2.2, 0)
 	region, err := encodeJPEG(regionImg, 90)
 	if err != nil {
-		return nil, err
-	}
-	dctx, cancel := context.WithTimeout(ctx, 60*time.Second)
-	defer cancel()
-	found, err := l.faces.detectData(dctx, l, region)
-	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	side := float32(sq.Dx())
 	drawn := Face{X: float32(px.Min.X-sq.Min.X) / side, Y: float32(px.Min.Y-sq.Min.Y) / side,
 		W: float32(px.Dx()) / side, H: float32(px.Dy()) / side}
+	dctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	found, err := l.faces.detectData(dctx, l, region, &[4]float32{drawn.X, drawn.Y, drawn.W, drawn.H})
+	if err != nil {
+		return nil, nil, err
+	}
 	if m := matchingFace(found, drawn); m != nil {
-		return m.Emb, nil
+		return m.Emb, m.Emb2, nil
+	}
+	for _, m := range found {
+		if m.Src == "box" {
+			return nil, m.Emb2, nil
+		}
 	}
 	// a face there, but without an embedding: the service cannot recognize
 	// right now (no model), so this is asked again, not taken as "no face"
 	for _, m := range found {
 		if m.Emb == nil && boxIoU(m, drawn) > 0.25 {
-			return nil, errors.New("Gesicht gefunden, aber ohne Merkmale (fehlt das Erkennungsmodell?)")
+			return nil, nil, errors.New("Gesicht gefunden, aber ohne Merkmale (fehlt das Erkennungsmodell?)")
 		}
 	}
-	return nil, nil
+	return nil, nil, nil
 }
 
 func sameBox(a, b Face) bool {
@@ -540,6 +565,9 @@ func mergeFaces(old, found []Face, labeled map[int]bool, same float32) (out []Fa
 				if m.Emb == nil && f.Emb != nil {
 					m.Emb = f.Emb // now it counts for recognition too
 				}
+				if m.Emb2 == nil && f.Emb2 != nil {
+					m.Emb2 = f.Emb2
+				}
 			case !sameFrame(f, *m) && samePerson(f, *m, same):
 				covered = true // already there from another frame of the video
 			}
@@ -616,7 +644,7 @@ func matchingFace(faces []Face, drawn Face) *Face {
 	var best *Face
 	var bestIoU float32 = 0.25
 	for i := range faces {
-		if f := &faces[i]; f.Emb != nil {
+		if f := &faces[i]; f.Emb != nil && f.Src != "box" {
 			if v := boxIoU(*f, drawn); v > bestIoU {
 				best, bestIoU = f, v
 			}

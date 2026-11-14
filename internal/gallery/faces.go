@@ -157,6 +157,7 @@ func (l *Library) PersonItems(id string) []string {
 // NamePerson names (or renames) a person; using an existing name merges.
 // An empty name removes the names of its faces; "~" hides the person.
 func (l *Library) NamePerson(id, name string) error {
+	l.promoteNow.Store(true)
 	name = strings.TrimSpace(name)
 	if name == labelHidden {
 		_, err := l.HidePerson(id)
@@ -193,6 +194,7 @@ func (l *Library) NamePerson(id, name string) error {
 // (remembered as "not this person"), "~" hides the face, "-" marks it as
 // no face at all. It returns the label the face had before (for undo).
 func (l *Library) LabelFace(item string, idx int, name string) (string, error) {
+	l.promoteNow.Store(true)
 	s := l.people
 	k := FaceRef{item, idx}.key()
 	s.mu.Lock()
@@ -292,6 +294,7 @@ func (s *peopleStore) peopleIn(ids []string) []SelPerson {
 // returns the labels the faces had before (for RestoreFaceLabels); their
 // number is the number of faces changed.
 func (l *Library) LabelPersonIn(ids []string, person, name string) (map[string]string, error) {
+	l.promoteNow.Store(true)
 	prev, err := l.people.labelPersonIn(ids, person, strings.TrimSpace(name))
 	if err != nil || len(prev) == 0 {
 		return prev, err
@@ -452,7 +455,9 @@ type faceRec struct {
 	taken   int64
 	label   string
 	frame   frame
-	weak    bool // the detector was unsure or the face is small: joins a named person only when clearly alike
+	weak    bool      // the detector was unsure or the face is small: joins a named person only when clearly alike
+	emb2    []float32 // the second system's embedding, unit length (nil: none)
+	hint    string    // taken in from the second search for this person (Face.Hint)
 }
 
 // Weak faces: measured on a real library, faces the detector found with a
@@ -540,6 +545,11 @@ func (l *Library) recluster() {
 	if apart, changed := l.people.cluster(l.faceSnapshot()); changed {
 		l.logf("faces: %d faces kept apart from a person already in their picture (same_photo_threshold %.2f)", apart, l.people.threshSame)
 	}
+	// faces of the second search whose person is known now join it (right
+	// away after somebody named a face)
+	if l.promoteExtras(l.promoteNow.Swap(false)) {
+		l.people.cluster(l.faceSnapshot())
+	}
 	l.kickXMP() // names go into the files
 }
 
@@ -601,11 +611,11 @@ func faceRecs(items []faceSnap, labels map[string]string) (map[string]int64, []*
 			// (hidden too, so it can be shown again with its group); a face
 			// marked by hand always takes part (it cannot join anybody by
 			// likeness, but can be listed and shown again)
-			if f.Emb == nil && !f.Manual && (label == "" || label == labelNoFace || strings.HasPrefix(label, "!")) {
+			if f.Emb == nil && f.Emb2 == nil && !f.Manual && (label == "" || label == labelNoFace || strings.HasPrefix(label, "!")) {
 				continue
 			}
 			r := &faceRec{ref: FaceRef{it.id, i}, emb: f.Emb, quality: f.Score * float32(math.Sqrt(float64(f.W*f.H))), taken: it.taken,
-				frame: frame{it.id, f.T}}
+				frame: frame{it.id, f.T}, emb2: unit2(f.Emb2), hint: f.Hint}
 			if !f.Manual {
 				short := float32(-1)
 				if it.w > 0 && it.h > 0 {
@@ -690,12 +700,23 @@ func buildPeople(items []faceSnap, labels map[string]string, threshNew, threshNa
 		}
 		var pairs []pair
 		// the named faces of each person, for the nearest-neighbour likeness
+		// (of both systems)
 		members := make(map[*cluster][][]float32, len(namedList))
+		members2 := make(map[*cluster][][]float32, len(namedList))
 		for _, c := range namedList {
 			for _, r := range c.refs {
 				if len(r.emb) > 0 {
 					members[c] = append(members[c], r.emb)
 				}
+				if len(r.emb2) > 0 {
+					members2[c] = append(members2[c], r.emb2)
+				}
+			}
+		}
+		cent2 := make(map[*cluster][]float32, len(namedList))
+		for _, c := range namedList {
+			if cv, n := centroid2(c.refs); n > 0 {
+				cent2[c] = cv
 			}
 		}
 		cands := candidates(rest, namedList, threshNamed-knnFar)
@@ -708,17 +729,75 @@ func buildPeople(items []faceSnap, labels map[string]string, threshNew, threshNa
 				defer wg.Done()
 				for i := lo; i < hi; i++ {
 					f := rest[i]
-					need := threshNamed
-					if f.weak {
-						need += weakExtra
+					// taken in from the second search for this person: joins it
+					if c := named[f.hint]; c != nil && !rejects(f.label, f.hint) {
+						per[i] = append(per[i], pair{i, c, 2})
+						continue
 					}
-					for _, m := range cands[i] {
-						if rejects(f.label, m.c.name) {
-							continue
+					// both systems where both know the face and the person (their
+					// mean, and clearly ahead of the next person), else the one
+					// that does
+					type cand struct {
+						c     *cluster
+						sim   float32
+						fused bool
+					}
+					var cs []cand
+					score := func(c *cluster, s1 float32) cand {
+						if len(f.emb2) > 0 && len(members2[c]) > 0 {
+							return cand{c, fuse(s1, knnLikeness(f.emb2, members2[c])), true}
 						}
-						if sim := max(m.sim, knnLikeness(f.emb, members[m.c])); sim >= need {
-							per[i] = append(per[i], pair{i, m.c, sim})
+						return cand{c, s1, false}
+					}
+					if len(f.emb) == 0 { // only the second system knows it (a box drawn by hand)
+						if len(f.emb2) > 0 {
+							for _, c := range namedList {
+								cs = append(cs, score(c, -2))
+							}
 						}
+					} else {
+						seen := map[*cluster]bool{}
+						for _, m := range cands[i] {
+							seen[m.c] = true
+							cs = append(cs, score(m.c, max(m.sim, knnLikeness(f.emb, members[m.c]))))
+						}
+						// people only the second system finds alike take part too
+						if len(f.emb2) > 0 {
+							for _, c := range namedList {
+								if !seen[c] && len(cent2[c]) > 0 && dot(f.emb2, cent2[c]) >= threshNamed/on2-knnFar {
+									s1 := float32(-1)
+									if len(c.cent) == len(f.emb) {
+										s1 = max(dot(f.emb, c.cent), knnLikeness(f.emb, members[c]))
+									}
+									cs = append(cs, score(c, s1))
+								}
+							}
+						}
+					}
+					// people it was said not to be take no part (nor in the margin)
+					kept := cs[:0]
+					for _, x := range cs {
+						if !rejects(f.label, x.c.name) {
+							kept = append(kept, x)
+						}
+					}
+					cs = kept
+					sort.Slice(cs, func(a, b int) bool { return cs[a].sim > cs[b].sim })
+					for k, x := range cs {
+						need := threshNamed
+						switch {
+						case f.weak && x.fused:
+							need += weakFused
+						case f.weak:
+							need += weakExtra
+						}
+						if x.sim < need {
+							break // sorted: the rest are lower
+						}
+						if x.fused && k == 0 && len(cs) > 1 && x.sim-cs[1].sim < fusedMargin {
+							break // two people about as alike: left to the user
+						}
+						per[i] = append(per[i], pair{i, x.c, x.sim})
 					}
 				}
 			}(lo, min(lo+step, len(rest)))
@@ -792,6 +871,10 @@ func buildPeople(items []faceSnap, labels map[string]string, threshNew, threshNa
 			}
 		}
 	}
+
+	// 4. an unnamed group that both systems find clearly alike a named
+	// person goes into it (two different systems seldom err alike)
+	clusters = mergeIntoNamed(clusters, namedList)
 
 	// build people
 	mk := func(c *cluster, id, name string) {

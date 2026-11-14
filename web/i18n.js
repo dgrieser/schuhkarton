@@ -548,6 +548,7 @@ window.I18N.en = {
   "{n} Vorschläge": "{n} suggestions",
   "Keine ähnliche Person gefunden": "No similar person found",
   "Gesichtserkennung gerade nicht erreichbar": "Face recognition not reachable right now",
+  "Erkennung und Zuordnung mit zwei Modellen (SFace, AuraFace)": "Detection and grouping with two models (SFace, AuraFace)",
   "Person suchen": "Find a person",
   "Neue Person …": "New person …",
   "Name der neuen Person": "Name of the new person",

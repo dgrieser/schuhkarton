@@ -122,6 +122,17 @@ type Face struct {
 	// that the face service found no face in the box (so there is none)
 	EmbTry int64
 	NoEmb  bool
+	// Emb2 is the second system's embedding of the face (AuraFace, 512-d),
+	// kept as signed bytes: only its direction counts (cos2). NoEmb2: the
+	// face service has that system, and found nothing to embed here.
+	Emb2   []int8
+	NoEmb2 bool
+	// Src: found by the second search ("yunet+retina", "retina", "yunet-low") or a box
+	// drawn by hand that was embedded as it is ("box"); "" the main search.
+	// Hint: a face of the second search taken in because the second system
+	// knew the person; it joins that person unless said not to be.
+	Src  string
+	Hint string
 }
 
 // Item is one photo or video.
@@ -172,6 +183,11 @@ type Item struct {
 	MetaFaces []MetaFace // named faces read from the file that no detected face took over yet
 	FacesDone bool
 	Faces     []Face
+	// Extra: faces only the second search found, kept aside (not shown, not
+	// grouped) until the second system knows whose they are (faces2.go).
+	// FaceGen: what the faces were looked for with (faceGen bits).
+	Extra   []Face
+	FaceGen uint8
 
 	key string // cache key, derived from path, size and mtime
 }
@@ -317,6 +333,9 @@ type Library struct {
 	freshEmb     sync.Map      // FaceRef keys of faces just marked: looked at outside the window too
 	cropsRedone  sync.Map      // FaceRef keys whose crop redoManualCrops made again in this run
 	suggestEmb   sync.Map      // drawn box -> suggestedEmb: the embedding the name suggestions found, for AddFace
+	promotedAt   atomic.Int64  // when promoteExtras last looked (unix seconds)
+	promoteNow   atomic.Bool   // a face was named: promoteExtras looks at once
+	extrasNew    atomic.Bool   // a scan found faces of the second search
 	scannedOnce  atomic.Bool   // the first scan is through
 	firstScan    chan struct{} // closed when the first scan is through
 	firstOnce    sync.Once
