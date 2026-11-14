@@ -392,10 +392,17 @@ body.has-scrubber .view { padding-right: 64px; }
 .v-title span { display: block; font-size: 12.5px; color: rgba(255, 255, 255, .72); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .v-actions { margin-left: auto; display: flex; gap: 0; }
 .vbtn {
+  --ring: 40px; position: relative; isolation: isolate;
   width: 38px; height: 42px; border-radius: 50%; border: 0; background: transparent; color: #fff;
-  display: grid; place-items: center; transition: background .15s;
+  display: grid; place-items: center;
 }
-.vbtn:hover { background: rgba(255, 255, 255, .14); }
+/* the hover circle: always round, even when the buttons sit closer than they are wide */
+.vbtn:not(.live-btn)::before {
+  content: ""; position: absolute; z-index: -1; left: 50%; top: 50%; width: var(--ring); height: var(--ring);
+  margin: calc(var(--ring) / -2) 0 0 calc(var(--ring) / -2); border-radius: 50%; background: transparent; transition: background .15s;
+}
+@media (hover: hover) { .vbtn:not(.live-btn):hover::before { background: rgba(255, 255, 255, .14); } }
+.vbtn:not(.live-btn):active::before { background: rgba(255, 255, 255, .2); }
 .vbtn.on { color: var(--accent); }
 .vbtn.live-btn { width: auto; border-radius: 99px; padding: 0 12px; font: 700 11px/1 system-ui; letter-spacing: .1em; gap: 6px; display: inline-flex; align-items: center; }
 /* on the picture's top right corner (placed by the script) */
@@ -477,6 +484,9 @@ body.has-scrubber .view { padding-right: 64px; }
 .v-info h3:has(> .mark-face) { display: flex; align-items: center; }
 .v-info h3 .mark-face { display: inline-flex; align-items: center; gap: 4px; margin: 0 0 0 8px; font-size: 12px; line-height: 1; text-transform: none; letter-spacing: 0; }
 .v-info h3 .mark-face .i { width: 15px; height: 15px; }
+/* the place: its name and the coordinates under the heading, the map below when opened */
+.v-info .place { margin: 8px 0; font-size: 15px; line-height: 1.5; }
+.v-info .minimap[hidden] { display: none; }
 .v-info {
   width: 380px; height: 100vh; overflow-y: auto; background: #111214; border-left: 1px solid #222;
   padding: 18px 20px 40px; color: #e6e7e9; font-size: 14px;
@@ -485,7 +495,7 @@ body.has-scrubber .view { padding-right: 64px; }
 .v-info h3:first-child, .v-info .v-corner + h3 { margin-top: 4px; }
 /* the details' corner: trash and (admins) the photo's changes */
 .v-info .v-corner { float: right; display: flex; margin: -6px -8px 0 8px; }
-.v-info .v-corner .vbtn { width: 38px; height: 38px; color: #e6e7e9; }
+.v-info .v-corner .vbtn { --ring: 38px; width: 38px; height: 38px; color: #e6e7e9; }
 .v-info .big { font-size: 18px; font-weight: 700; letter-spacing: -.01em; }
 .v-info .muted { color: #9aa1ab; }
 .v-info .kv { display: grid; grid-template-columns: 22px 1fr; gap: 10px; align-items: start; margin: 8px 0; }
@@ -541,15 +551,14 @@ body.has-scrubber .view { padding-right: 64px; }
 .name-pop .np-head small.np-sugstate { display: block; color: var(--accent); font-size: 12px; }
 /* suggestions on top of the list: the more alike, the stronger the glow */
 .name-pop .np-list button.sug { position: relative; }
-.name-pop .np-list button.sug-high { background: color-mix(in srgb, var(--accent) 24%, transparent); box-shadow: inset 3px 0 var(--accent), 0 0 12px color-mix(in srgb, var(--accent) 45%, transparent); font-weight: 650; }
-.name-pop .np-list button.sug-mid { background: color-mix(in srgb, var(--accent) 13%, transparent); box-shadow: inset 3px 0 color-mix(in srgb, var(--accent) 70%, transparent); }
-.name-pop .np-list button.sug-low { box-shadow: inset 3px 0 color-mix(in srgb, var(--accent) 35%, transparent); }
-.name-pop .np-list button.sug-high img { box-shadow: 0 0 0 2px var(--accent); }
+.name-pop .np-list:has(> .sug) { padding-top: 6px; }
+/* a suggestion: its picture glows from behind, brighter the more alike (--g 0..1 from the script) */
+.name-pop .np-list button.sug :is(img, i) {
+  box-shadow: 0 0 0 calc(1px + 1.5px * var(--g, 0)) color-mix(in srgb, var(--accent) calc(30% + 70% * var(--g, 0)), transparent),
+    0 0 calc(3px + 8px * var(--g, 0)) calc(1px + 2px * var(--g, 0)) color-mix(in srgb, var(--accent) calc(20% + 65% * var(--g, 0)), transparent);
+}
 .name-pop .np-list button.sug-last { margin-bottom: 6px; }
 .name-pop .np-list button.sug-last::after { content: ''; position: absolute; left: 8px; right: 8px; bottom: -4px; border-bottom: 1px solid var(--p-in-line); }
-.name-pop .np-sug { flex: none; padding: 1px 7px; border-radius: 999px; font-size: 11px; font-style: normal; font-weight: 600; color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 50%, transparent); }
-.name-pop .np-list button.sug-high .np-sug { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
-.name-pop .np-list button.sug-low .np-sug { opacity: .75; }
 .name-pop .np-list button.np-typed { color: var(--accent); font-weight: 600; }
 .name-pop .np-typed .i { width: 34px; height: 18px; }
 .name-pop .np-add { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 42px; border: 1px dashed var(--p-dash); border-radius: 8px; background: none; color: inherit;
@@ -616,6 +625,8 @@ body > .pop.name-pop.sheet { z-index: 130; } /* a person of a selection: over th
 .toast.on { opacity: 1; transform: translateX(-50%) translateY(0); }
 .toast.act { display: flex; align-items: center; gap: 10px; padding: 6px 6px 6px 18px; }
 .toast.act.on { pointer-events: auto; }
+/* a touch screen: every toast can be swiped away (the script moves it) */
+@media (pointer: coarse) { .toast.on { pointer-events: auto; touch-action: none; -webkit-user-select: none; user-select: none; } }
 .toast span { flex: 1; min-width: 0; }
 .toast button {
   flex: none; white-space: nowrap;
@@ -689,7 +700,7 @@ body > .pop.name-pop.sheet { z-index: 130; } /* a person of a selection: over th
   .tabbar a { display: grid; justify-items: center; gap: 2px; font-size: 10.5px; color: var(--muted); padding: 4px 8px; font-weight: 600; }
   .tabbar a.on { color: var(--accent); }
   .viewer { grid-template-columns: 1fr; }
-  .vbtn { width: 30px; height: 38px; }
+  .vbtn { --ring: 34px; width: 30px; height: 38px; }
   .v-top { gap: 6px; padding-left: calc(6px + env(safe-area-inset-left)); padding-right: calc(6px + env(safe-area-inset-right)); }
   .v-title b { font-size: 14px; }
   .v-info { position: absolute; left: 0; right: 0; bottom: 0; width: auto; height: var(--sheet, 50dvh); border-left: 0; border-top: 1px solid #222; border-radius: 18px 18px 0 0; z-index: 8; }
@@ -1166,7 +1177,6 @@ select.sel, .setup .user select, .setup #nrole, .adm-shift select {
 .v-media .live-v { background: #000; object-fit: contain; }
 
 /* --- notes (viewer details) -------------------------------------------------------------- */
-.vbtn { position: relative; }
 .v-notes h3 em { font-style: normal; color: var(--accent); margin-left: 4px; }
 .v-info .v-notes > h3:first-child { margin-top: 22px; }
 .v-notes .nt { margin: 8px 0; padding: 10px 12px; border-radius: 10px; background: #1a1c1f; border: 1px solid #26292e; }

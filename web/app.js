@@ -51,12 +51,57 @@
   // ms: how long it stays (default: longer with a button). The one kind of message everywhere.
   function toast(msg, action, onAction, ms) {
     const el = $('#toast');
+    swipeToast(el);
+    clearTimeout(el.goneT);
+    el.style.transform = el.style.opacity = el.style.transition = '';
     el.innerHTML = `<span>${esc(msg)}</span>${action ? `<button type="button">${esc(action)}</button>` : ''}`;
     el.classList.toggle('act', !!action);
     el.classList.add('on');
     clearTimeout(toastT);
     toastT = setTimeout(() => el.classList.remove('on'), ms || (action ? 10000 : 2400));
     if (action) $('button', el).onclick = () => { el.classList.remove('on'); onAction(); };
+  }
+
+  // on a touch screen a toast can be swiped away: sideways or down (once per element)
+  function swipeToast(el) {
+    if (el.swipe || !isTouch) return;
+    el.swipe = true;
+    let st = null;
+    const at = (dx, dy) => `translateX(calc(-50% + ${dx}px)) translateY(${dy}px)`;
+    el.addEventListener('pointerdown', (e) => {
+      if (!el.classList.contains('on') || e.target.closest('button')) return;
+      st = { x: e.clientX, y: e.clientY, t: performance.now(), dx: 0, dy: 0, id: e.pointerId };
+      el.setPointerCapture(e.pointerId);
+      el.style.transition = 'none';
+      clearTimeout(toastT); // held: it does not go on its own meanwhile
+    });
+    el.addEventListener('pointermove', (e) => {
+      if (!st || e.pointerId !== st.id) return;
+      st.dx = e.clientX - st.x;
+      st.dy = e.clientY - st.y;
+      // sideways freely, down freely, up only a little (resisting)
+      const dy = st.dy < 0 ? st.dy / 4 : st.dy, far = Math.max(Math.abs(st.dx) / el.offsetWidth, dy / el.offsetHeight / 1.5);
+      el.style.transform = at(st.dx, dy);
+      el.style.opacity = String(clamp(1 - far * 0.8, 0.2, 1));
+    });
+    const end = (e) => {
+      if (!st || e.pointerId !== st.id) return;
+      const { dx, dy } = st, dt = Math.max(1, performance.now() - st.t);
+      st = null;
+      const side = Math.abs(dx) > Math.max(60, el.offsetWidth * 0.3) || (Math.abs(dx) > 20 && Math.abs(dx) / dt > 0.5);
+      const down = !side && (dy > Math.max(30, el.offsetHeight * 0.6) || (dy > 12 && dy / dt > 0.4));
+      el.style.transition = 'transform .2s ease, opacity .2s ease';
+      if (side || down) {
+        el.style.transform = side ? at(Math.sign(dx) * (innerWidth / 2 + el.offsetWidth), dy > 0 ? dy : 0) : at(0, el.offsetHeight + 60);
+        el.style.opacity = '0';
+        el.goneT = setTimeout(() => { el.classList.remove('on'); el.style.transform = el.style.opacity = el.style.transition = ''; }, 200);
+      } else {
+        el.style.transform = el.style.opacity = '';
+        toastT = setTimeout(() => el.classList.remove('on'), 3000);
+      }
+    };
+    el.addEventListener('pointerup', end);
+    el.addEventListener('pointercancel', end);
   }
 
   // copies text to the clipboard (without the clipboard API: through a hidden field) and says so
@@ -919,7 +964,7 @@
   const Viewer = {
     el: $('#viewer'), media: $('#vMedia'), stage: $('#vStage'),
     list: [], i: 0, it: null, detail: null,
-    showInfo: store.get('info', !isTouch), showFaces: false,
+    showInfo: store.get('info', !isTouch), showFaces: false, mapOpen: false,
     zoom: { s: 1, x: 0, y: 0 }, slideT: 0, idleT: 0, open_: false,
     mark: null, // a face being marked by hand: { key(e), end() }
 
@@ -1103,10 +1148,10 @@
         <h3>${t('Aufnahme')}</h3>
         <div class="big">${fmtLong(d.taken)}</div>
         <div class="muted">${d.takenSrc === 'folder' || d.takenSrc === 'mtime' ? t('Datum ungefähr (aus Ordner bzw. Datei)') : t('{time} Uhr', { time: fmtTime(d.taken) })}</div>
-        ${d.place || d.gps ? `<h3>${t('Ort')}</h3>
-          <div class="kv">${icon('pin')}<div>${d.place ? `<a class="link" href="#/ort/${encodeURIComponent(d.place)}">${esc(d.place)}</a>` : t('Ohne Ortsname')}
-          ${d.gps ? `<div class="muted">${d.lat.toFixed(5)}, ${d.lon.toFixed(5)}${d.alt ? ` · ${Math.round(d.alt)} m` : ''}</div>` : ''}</div></div>
-          ${d.gps ? '<div class="minimap" id="vMap"></div>' : ''}` : ''}
+        ${d.place || d.gps ? `<h3>${t('Ort')}${d.gps ? ` <button class="link ai-redo mark-face" data-maptoggle aria-expanded="${this.mapOpen ? 'true' : 'false'}">${icon('pin')}<span>${this.mapOpen ? t('Karte schließen') : t('Karte öffnen')}</span></button>` : ''}</h3>
+          <div class="place">${d.place ? `<a class="link" href="#/ort/${encodeURIComponent(d.place)}">${esc(d.place)}</a>` : t('Ohne Ortsname')}
+          ${d.gps ? `<div class="muted">${d.lat.toFixed(5)}, ${d.lon.toFixed(5)}${d.alt ? ` · ${Math.round(d.alt)} m` : ''}</div>` : ''}</div>
+          ${d.gps ? `<div class="minimap" id="vMap"${this.mapOpen ? '' : ' hidden'}></div>` : ''}` : ''}
         ${faces || Account.can('user') ? `<h3>${t('Personen')}${Account.can('user') ? ` <button class="link ai-redo mark-face" data-markface title="${t('Ein Gesicht selbst einrahmen, z.B. wenn es nicht erkannt wurde')}">${icon('face-plus')}<span>${t('Gesicht markieren')}</span></button>` : ''}</h3>${faces ? `<div class="faces">${faces}</div>` : ''}` : ''}
         ${ai ? `<h3>${t('Beschreibung')} <span class="ai-badge" title="${t('Von einem KI-Modell geschrieben')}">${t('KI')}</span></h3>
           ${aiText ? `<div class="ai-desc">${aiText}</div>` : ''}
@@ -1126,11 +1171,26 @@
         <div class="kv">${icon('file')}<div>${esc(d.name)}<div class="muted">${[fmtSize(d.size), mp, d.duration ? fmtDur(d.duration) : '', d.codec].filter(Boolean).map(esc).join(' · ')}</div></div></div>
         <div class="kv">${icon('folder')}<div><a class="link" href="#/alben/${encodeURIComponent(d.album)}">${esc(d.album)}</a><div><code>${esc(d.path)}</code></div></div></div>
         <div class="kv">${icon('download')}<div><a class="link" href="/o/${it.id}?dl=1">${t('Original herunterladen')}</a> · <a class="link" href="/o/${it.id}" target="_blank" rel="noopener">${t('öffnen')}</a>${it.k === 2 ? '' : ` · <a class="link" href="/print/${it.id}?v=${it.v}" data-print>${t('drucken')}</a>`}</div></div>`;
-      if (d.gps && window.L) {
-        const mm = L.map($('#vMap', p), { zoomControl: false, attributionControl: false }).setView([d.lat, d.lon], 13);
+      // the map: closed at first, the link next to "Ort" opens and closes it (kept for the next photos);
+      // drawn only once open, Leaflet needs a visible box
+      const mapBox = $('#vMap', p);
+      let mapDrawn = false;
+      const drawMap = () => {
+        if (mapDrawn || !mapBox || mapBox.hidden || !window.L) return;
+        mapDrawn = true;
+        const mm = L.map(mapBox, { zoomControl: false, attributionControl: false }).setView([d.lat, d.lon], 13);
         tileLayer().addTo(mm);
         L.circleMarker([d.lat, d.lon], { radius: 7, color: '#fff', weight: 2, fillColor: '#f3b549', fillOpacity: 1 }).addTo(mm);
-      }
+      };
+      drawMap();
+      $('[data-maptoggle]', p)?.addEventListener('click', (e) => {
+        this.mapOpen = !this.mapOpen;
+        const b = e.currentTarget;
+        b.setAttribute('aria-expanded', this.mapOpen ? 'true' : 'false');
+        $('span', b).textContent = this.mapOpen ? t('Karte schließen') : t('Karte öffnen');
+        mapBox.hidden = !this.mapOpen;
+        drawMap();
+      });
       $('[data-markface]', p)?.addEventListener('click', () => this.markFace());
       $('[data-redesc]', p)?.addEventListener('click', () => window.SK?.redescribe?.([it.id]));
       $('[data-reocr]', p)?.addEventListener('click', () => window.SK?.rerecognize?.([it.id]));
@@ -1602,14 +1662,20 @@
       const recent = store.get('recent-names', []).filter((n) => people.has(n)).slice(0, 12);
       const img = (n) => { const c = people.get(n).cover; return c ? `<img src="${faceURL(c.item, c.idx)}" alt="" loading="lazy">` : '<i></i>'; };
       // suggestions: the named people the face looks like (asked of the server below), on top
-      // of the list, marked by how alike: high, mid, low
+      // of the list; their picture glows from behind, the more alike the brighter (--g 0..1:
+      // the level, and within it the score among the suggestions)
       let sugg = [];
       const SUG = { high: t('Sehr ähnlich'), mid: t('Ähnlich'), low: t('Vielleicht') };
+      const glow = (sg) => {
+        const lo = Math.min(...sugg.map((x) => x.score)), hi = Math.max(...sugg.map((x) => x.score));
+        const rel = hi > lo ? (sg.score - lo) / (hi - lo) : 1;
+        return clamp(({ high: 0.7, mid: 0.4, low: 0.12 }[sg.level] ?? 0.12) + 0.3 * rel, 0, 1).toFixed(2);
+      };
       const person = (n) => {
         const sg = sugg.find((x) => x.name === n), last = sg && sugg[sugg.length - 1] === sg;
         const cls = [n === face.name && 'cur', sg && `sug sug-${sg.level}`, last && 'sug-last'].filter(Boolean).join(' ');
-        const badge = sg ? `<em class="np-sug" title="${t('Ähnlichkeit {p} %', { p: Math.round(Math.max(sg.score, 0) * 100) })}">${esc(SUG[sg.level] || '')}</em>` : '';
-        return `<button type="button" data-name="${esc(n)}"${cls ? ` class="${cls}"` : ''}>${img(n)}<span>${esc(n)}</span>${badge}${n === face.name ? icon('check') : ''}</button>`;
+        const extra = sg ? ` style="--g:${glow(sg)}" title="${esc(SUG[sg.level] || '')} · ${t('Ähnlichkeit {p} %', { p: Math.round(Math.max(sg.score, 0) * 100) })}"` : '';
+        return `<button type="button" data-name="${esc(n)}"${cls ? ` class="${cls}"` : ''}${extra}>${img(n)}<span>${esc(n)}</span>${n === face.name ? icon('check') : ''}</button>`;
       };
       // the list in an order of one's choice (kept): first name, last name, most photos, recently used
       const SORTS = [['first', t('Vorname')], ['last', t('Nachname')], ['count', t('Meiste Fotos')], ['recent', t('Zuletzt benutzt')]];
