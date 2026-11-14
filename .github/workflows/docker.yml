@@ -21,7 +21,7 @@ concurrency:
 jobs:
   image:
     name: Build and push schuhkarton-faces
-    runs-on: [self-hosted, Linux, X64, ubuntu]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -55,6 +55,8 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: VERSION=${{ github.ref_type == 'tag' && github.ref_name || 'dev' }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
   # The container at mittwald runs :latest; its webhook (a GET to the secret
   # MITTWALD_WEBHOOK_URL) pulls it again and restarts it. Only when what the
@@ -65,7 +67,7 @@ jobs:
     name: Redeploy the face container at mittwald
     needs: image
     if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: [self-hosted, Linux, X64, ubuntu]
+    runs-on: ubuntu-latest
     permissions:
       contents: write # moves the faces-deployed tag
     steps:

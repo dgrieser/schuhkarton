@@ -11,7 +11,7 @@ permissions:
 jobs:
   goreleaser:
     name: GoReleaser
-    runs-on: [self-hosted, Linux, X64, ubuntu]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
@@ -20,14 +20,12 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-          cache: false # The self-hosted runner retains its local Go caches.
 
       - name: Test
         run: go test ./...
 
       # The Linux binaries embed a static heif-dec (internal/gallery/heifdec;
-      # the files in the repository are empty). Docker keeps the layers, so
-      # it is only built again when deploy/heif-dec changes.
+      # the files in the repository are empty).
       - name: Build static heif-dec
         run: |
           docker buildx build --output type=local,dest=internal/gallery/heifdec deploy/heif-dec
@@ -43,10 +41,3 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      # the workspace stays on the self-hosted runner: back to the empty files
-      - name: Restore heif-dec placeholders
-        if: always()
-        run: |
-          git update-index --no-assume-unchanged internal/gallery/heifdec/linux_*.gz
-          git checkout -- internal/gallery/heifdec
