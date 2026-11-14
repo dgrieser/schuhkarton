@@ -444,8 +444,9 @@ type Worker struct {
 	Token   string `yaml:"token" json:"token"`
 	Workers int    `yaml:"workers" json:"workers"`
 	// AuraWorkers: processes of the second recognition model (it is used
-	// when its file is among the models); each holds the model (~250 MB in
-	// memory), so they are few. Negative: not used.
+	// when its file is among the models); each takes about 500 MB of
+	// memory, so they are few. Negative: not used. The worker lowers this
+	// and Workers to what the container's memory limit holds.
 	AuraWorkers int `yaml:"aura_workers" json:"auraWorkers"`
 }
 
@@ -619,7 +620,7 @@ func (c *Config) normalize() {
 		c.Worker.Workers = d.Worker.Workers
 	}
 	if c.Worker.AuraWorkers == 0 {
-		c.Worker.AuraWorkers = 2
+		c.Worker.AuraWorkers = 1
 	}
 	// folder names: base name, unique
 	seen := map[string]bool{}
