@@ -919,7 +919,7 @@
   const Viewer = {
     el: $('#viewer'), media: $('#vMedia'), stage: $('#vStage'),
     list: [], i: 0, it: null, detail: null,
-    showInfo: store.get('info', !isTouch), showFaces: false,
+    showInfo: store.get('info', !isTouch), showFaces: false, mapOpen: false,
     zoom: { s: 1, x: 0, y: 0 }, slideT: 0, idleT: 0, open_: false,
     mark: null, // a face being marked by hand: { key(e), end() }
 
@@ -1103,10 +1103,10 @@
         <h3>${t('Aufnahme')}</h3>
         <div class="big">${fmtLong(d.taken)}</div>
         <div class="muted">${d.takenSrc === 'folder' || d.takenSrc === 'mtime' ? t('Datum ungefähr (aus Ordner bzw. Datei)') : t('{time} Uhr', { time: fmtTime(d.taken) })}</div>
-        ${d.place || d.gps ? `<h3>${t('Ort')}</h3>
-          <div class="kv">${icon('pin')}<div>${d.place ? `<a class="link" href="#/ort/${encodeURIComponent(d.place)}">${esc(d.place)}</a>` : t('Ohne Ortsname')}
-          ${d.gps ? `<div class="muted">${d.lat.toFixed(5)}, ${d.lon.toFixed(5)}${d.alt ? ` · ${Math.round(d.alt)} m` : ''}</div>` : ''}</div></div>
-          ${d.gps ? '<div class="minimap" id="vMap"></div>' : ''}` : ''}
+        ${d.place || d.gps ? `<h3>${t('Ort')}${d.gps ? ` <button class="link ai-redo mark-face" data-maptoggle aria-expanded="${this.mapOpen ? 'true' : 'false'}">${icon('pin')}<span>${this.mapOpen ? t('Karte schließen') : t('Karte öffnen')}</span></button>` : ''}</h3>
+          <div class="place">${d.place ? `<a class="link" href="#/ort/${encodeURIComponent(d.place)}">${esc(d.place)}</a>` : t('Ohne Ortsname')}
+          ${d.gps ? `<div class="muted">${d.lat.toFixed(5)}, ${d.lon.toFixed(5)}${d.alt ? ` · ${Math.round(d.alt)} m` : ''}</div>` : ''}</div>
+          ${d.gps ? `<div class="minimap" id="vMap"${this.mapOpen ? '' : ' hidden'}></div>` : ''}` : ''}
         ${faces || Account.can('user') ? `<h3>${t('Personen')}${Account.can('user') ? ` <button class="link ai-redo mark-face" data-markface title="${t('Ein Gesicht selbst einrahmen, z.B. wenn es nicht erkannt wurde')}">${icon('face-plus')}<span>${t('Gesicht markieren')}</span></button>` : ''}</h3>${faces ? `<div class="faces">${faces}</div>` : ''}` : ''}
         ${ai ? `<h3>${t('Beschreibung')} <span class="ai-badge" title="${t('Von einem KI-Modell geschrieben')}">${t('KI')}</span></h3>
           ${aiText ? `<div class="ai-desc">${aiText}</div>` : ''}
@@ -1126,11 +1126,26 @@
         <div class="kv">${icon('file')}<div>${esc(d.name)}<div class="muted">${[fmtSize(d.size), mp, d.duration ? fmtDur(d.duration) : '', d.codec].filter(Boolean).map(esc).join(' · ')}</div></div></div>
         <div class="kv">${icon('folder')}<div><a class="link" href="#/alben/${encodeURIComponent(d.album)}">${esc(d.album)}</a><div><code>${esc(d.path)}</code></div></div></div>
         <div class="kv">${icon('download')}<div><a class="link" href="/o/${it.id}?dl=1">${t('Original herunterladen')}</a> · <a class="link" href="/o/${it.id}" target="_blank" rel="noopener">${t('öffnen')}</a>${it.k === 2 ? '' : ` · <a class="link" href="/print/${it.id}?v=${it.v}" data-print>${t('drucken')}</a>`}</div></div>`;
-      if (d.gps && window.L) {
-        const mm = L.map($('#vMap', p), { zoomControl: false, attributionControl: false }).setView([d.lat, d.lon], 13);
+      // the map: closed at first, the link next to "Ort" opens and closes it (kept for the next photos);
+      // drawn only once open, Leaflet needs a visible box
+      const mapBox = $('#vMap', p);
+      let mapDrawn = false;
+      const drawMap = () => {
+        if (mapDrawn || !mapBox || mapBox.hidden || !window.L) return;
+        mapDrawn = true;
+        const mm = L.map(mapBox, { zoomControl: false, attributionControl: false }).setView([d.lat, d.lon], 13);
         tileLayer().addTo(mm);
         L.circleMarker([d.lat, d.lon], { radius: 7, color: '#fff', weight: 2, fillColor: '#f3b549', fillOpacity: 1 }).addTo(mm);
-      }
+      };
+      drawMap();
+      $('[data-maptoggle]', p)?.addEventListener('click', (e) => {
+        this.mapOpen = !this.mapOpen;
+        const b = e.currentTarget;
+        b.setAttribute('aria-expanded', this.mapOpen ? 'true' : 'false');
+        $('span', b).textContent = this.mapOpen ? t('Karte schließen') : t('Karte öffnen');
+        mapBox.hidden = !this.mapOpen;
+        drawMap();
+      });
       $('[data-markface]', p)?.addEventListener('click', () => this.markFace());
       $('[data-redesc]', p)?.addEventListener('click', () => window.SK?.redescribe?.([it.id]));
       $('[data-reocr]', p)?.addEventListener('click', () => window.SK?.rerecognize?.([it.id]));
@@ -1602,14 +1617,20 @@
       const recent = store.get('recent-names', []).filter((n) => people.has(n)).slice(0, 12);
       const img = (n) => { const c = people.get(n).cover; return c ? `<img src="${faceURL(c.item, c.idx)}" alt="" loading="lazy">` : '<i></i>'; };
       // suggestions: the named people the face looks like (asked of the server below), on top
-      // of the list, marked by how alike: high, mid, low
+      // of the list; their picture glows from behind, the more alike the brighter (--g 0..1:
+      // the level, and within it the score among the suggestions)
       let sugg = [];
       const SUG = { high: t('Sehr ähnlich'), mid: t('Ähnlich'), low: t('Vielleicht') };
+      const glow = (sg) => {
+        const lo = Math.min(...sugg.map((x) => x.score)), hi = Math.max(...sugg.map((x) => x.score));
+        const rel = hi > lo ? (sg.score - lo) / (hi - lo) : 1;
+        return clamp(({ high: 0.7, mid: 0.4, low: 0.12 }[sg.level] ?? 0.12) + 0.3 * rel, 0, 1).toFixed(2);
+      };
       const person = (n) => {
         const sg = sugg.find((x) => x.name === n), last = sg && sugg[sugg.length - 1] === sg;
         const cls = [n === face.name && 'cur', sg && `sug sug-${sg.level}`, last && 'sug-last'].filter(Boolean).join(' ');
-        const badge = sg ? `<em class="np-sug" title="${t('Ähnlichkeit {p} %', { p: Math.round(Math.max(sg.score, 0) * 100) })}">${esc(SUG[sg.level] || '')}</em>` : '';
-        return `<button type="button" data-name="${esc(n)}"${cls ? ` class="${cls}"` : ''}>${img(n)}<span>${esc(n)}</span>${badge}${n === face.name ? icon('check') : ''}</button>`;
+        const extra = sg ? ` style="--g:${glow(sg)}" title="${esc(SUG[sg.level] || '')} · ${t('Ähnlichkeit {p} %', { p: Math.round(Math.max(sg.score, 0) * 100) })}"` : '';
+        return `<button type="button" data-name="${esc(n)}"${cls ? ` class="${cls}"` : ''}${extra}>${img(n)}<span>${esc(n)}</span>${n === face.name ? icon('check') : ''}</button>`;
       };
       // the list in an order of one's choice (kept): first name, last name, most photos, recently used
       const SORTS = [['first', t('Vorname')], ['last', t('Nachname')], ['count', t('Meiste Fotos')], ['recent', t('Zuletzt benutzt')]];

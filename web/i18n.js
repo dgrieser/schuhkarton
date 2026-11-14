@@ -392,6 +392,8 @@ window.I18N.en = {
   "Name ändern …": "Change the name …",
   "Benennen …": "Add a name …",
   "Gesicht markieren": "Mark a face",
+  "Karte öffnen": "Open map",
+  "Karte schließen": "Close map",
   "Ein Gesicht selbst einrahmen, z.B. wenn es nicht erkannt wurde": "Frame a face yourself, e.g. when it was not found",
   "Rahmen um das Gesicht ziehen oder auf das Gesicht tippen": "Drag a frame around the face or tap it",
   "Feinabstimmung": "Fine tuning",
