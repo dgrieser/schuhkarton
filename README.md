@@ -563,7 +563,20 @@ it is back.
 
 The image also brings a second recognition model, AuraFace-v1 (Apache-2.0,
 ~250 MB, run by onnxruntime in `worker.aura_workers` processes of its own,
-2 by default), and RetinaFace mobilenet 0.25 (MIT) as a second face detector.
+1 by default), and RetinaFace mobilenet 0.25 (MIT) as a second face detector.
+A main process takes up to about 500 MB of memory, one of the second model
+about 500 MB: the worker reads the container's limits (cgroup) and starts no
+more main processes than it has CPUs, and no more processes than fit into its
+memory (the second model only when one main process fits beside it). With 4
+vCPUs and 4 GB that is 4 main processes and 1 of the second model, about
+2.8 GB; the gallery's `faces.workers` then best matches the 4.
+
+`GET /v1/metrics` (with the token) shows, for debugging, the requests (count,
+running, answers by status), how long the steps take (search, both
+embeddings: p50/p95/max of the last 500), the faces answered, each pool's
+processes (running, busy, starts, crashes, timeouts, memory each) and the
+container's limits and use (memory now and at peak, kills for memory, CPU
+throttling).
 In the same request the container then:
 
 - embeds every face with both models at the same time (SFace in the main
@@ -747,7 +760,7 @@ worker:                       # for "schuhkarton worker"
   listen: 0.0.0.0:8089
   token: ""
   workers: 12
-  aura_workers: 2             # processes of the second recognition model (~250 MB each); -1: not used
+  aura_workers: 1             # processes of the second recognition model (~500 MB each); -1: not used
 ```
 
 Thumbnail sizes apply to new thumbnails; to rebuild all of them, delete

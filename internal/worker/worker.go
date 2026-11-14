@@ -10,6 +10,7 @@
 //	                X-Extra: 1 adds the faces of a second, more generous
 //	                search ("extra": true); X-Box: x,y,w,h (fractions) embeds
 //	                a box drawn by hand that no search found.
+//	GET  /v1/metrics  for debugging: requests, timings, processes, memory
 //	GET  /healthz
 //
 // With a token, requests need "Authorization: Bearer <token>".
@@ -56,6 +57,7 @@ type Server struct {
 	opt  Options
 	pool *helper.Pool
 	aura *helper.Pool // nil: no second system
+	m    *metrics
 }
 
 // New prepares the worker; Python starts on the first request or probe.
@@ -64,9 +66,26 @@ func New(opt Options) *Server {
 		opt.TempDir = filepath.Join(os.TempDir(), "schuhkarton-worker")
 	}
 	os.MkdirAll(opt.TempDir, 0o700)
-	s := &Server{opt: opt}
+	if !hasAura(opt.Models) {
+		opt.AuraWorkers = 0
+	}
+	// no more main processes than the container has CPUs (they only wait
+	// for each other), and no more processes than its memory holds (a
+	// process killed for memory fails the requests it had)
+	if cpus := cpuLimit(); cpus > 0 && opt.Workers > cpus {
+		log.Printf("%d CPUs: %d Prozesse statt %d", cpus, cpus, opt.Workers)
+		opt.Workers = cpus
+	}
+	if limit := memLimit(); limit > 0 {
+		w, a := fitMemory(limit, opt.Workers, max(0, opt.AuraWorkers))
+		if w != opt.Workers || a != max(0, opt.AuraWorkers) {
+			log.Printf("Speicher %d MB: %d Prozesse statt %d, zweites Modell %d statt %d", limit>>20, w, opt.Workers, a, max(0, opt.AuraWorkers))
+		}
+		opt.Workers, opt.AuraWorkers = w, a
+	}
+	s := &Server{opt: opt, m: newMetrics()}
 	flags := []string{"--no-aura"} // the main processes stay small (or it is not used)
-	if opt.AuraWorkers > 0 && hasAura(opt.Models) {
+	if opt.AuraWorkers > 0 {
 		s.aura = helper.New(helper.Options{Python: opt.Python, ScriptDir: filepath.Join(opt.TempDir, "aura"), Models: opt.Models,
 			Size: opt.AuraWorkers, MinScore: opt.MinScore, Flags: []string{"--only-aura"}})
 	}
@@ -114,7 +133,8 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok\n")) })
 	mux.HandleFunc("GET /v1/info", s.auth(func(w http.ResponseWriter, r *http.Request) { writeJSON(w, s.Info()) }))
-	mux.HandleFunc("POST /v1/faces", s.auth(s.faces))
+	mux.HandleFunc("POST /v1/faces", s.auth(s.counted(s.faces)))
+	mux.HandleFunc("GET /v1/metrics", s.auth(s.metricsHandler))
 	return mux
 }
 
@@ -128,6 +148,30 @@ func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 			}
 		}
 		next(w, r)
+	}
+}
+
+// statusWriter remembers the status code of an answer.
+type statusWriter struct {
+	http.ResponseWriter
+	code int
+}
+
+func (w *statusWriter) WriteHeader(code int) {
+	w.code = code
+	w.ResponseWriter.WriteHeader(code)
+}
+
+// counted counts a request for the metrics: how many, how long, with what answer.
+func (s *Server) counted(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		t0 := time.Now()
+		s.m.inflight.Add(1)
+		sw := &statusWriter{ResponseWriter: w, code: http.StatusOK}
+		next(sw, r)
+		s.m.inflight.Add(-1)
+		s.m.took("request", t0)
+		s.m.done(sw.code)
 	}
 }
 
@@ -167,7 +211,9 @@ func (s *Server) faces(w http.ResponseWriter, r *http.Request) {
 	}
 	two := s.auraOK() && s.pool.Probe().Recognition // both systems need the first one's alignment
 	opts.Split = two
+	t0 := time.Now()
 	found, err := s.pool.FacesWith(src, prefix, opts)
+	s.m.took("detect", t0)
 	if err == nil && two {
 		err = s.embedBoth(found)
 	}
@@ -180,6 +226,15 @@ func (s *Server) faces(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := make([]gallery.WorkerFace, len(found))
+	for _, fc := range found {
+		src := "main"
+		if fc.Src == "box" {
+			src = "box"
+		} else if fc.Extra {
+			src = "extra"
+		}
+		s.m.found(src, 1)
+	}
 	for i, fc := range found {
 		out[i] = gallery.WorkerFace{X: fc.X, Y: fc.Y, W: fc.W, H: fc.H, Score: fc.Score, Emb: helper.EncodeEmbedding(fc.Emb),
 			Emb2: helper.EncodeEmbedding(fc.Emb2), Extra: fc.Extra, Src: fc.Src}
@@ -205,10 +260,15 @@ func (s *Server) embedBoth(found []helper.Face) error {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
+		t := time.Now()
 		e2, err2 = s.aura.Embed("aura", aligned)
+		s.m.took("aura", t)
 	}()
+	t := time.Now()
 	e1, err1 := s.pool.Embed("sface", aligned)
+	s.m.took("sface", t)
 	<-done
+	s.m.took("embedBoth", t)
 	if err1 != nil {
 		return err1
 	}

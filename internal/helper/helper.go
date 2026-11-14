@@ -18,7 +18,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -79,14 +81,19 @@ type Pool struct {
 	mu      sync.Mutex
 	idle    chan *proc
 	started int
+	live    map[*proc]bool // running processes (for Stats)
+
+	// counters for Stats
+	starts, startErrs, crashes, timeouts, calls, callErrs atomic.Int64
 
 	infoMu sync.Mutex
 	info   *Info
+	infoAt time.Time
 }
 
 // New prepares a pool; processes start on first use.
 func New(opt Options) *Pool {
-	p := &Pool{opt: opt, idle: make(chan *proc, 256)}
+	p := &Pool{opt: opt, idle: make(chan *proc, 256), live: map[*proc]bool{}}
 	p.opt.Size = max(1, p.opt.Size)
 	if opt.Python != "" {
 		p.script = filepath.Join(opt.ScriptDir, "helper.py")
@@ -103,16 +110,17 @@ func New(opt Options) *Pool {
 
 func (p *Pool) setInfo(i *Info) {
 	p.infoMu.Lock()
-	p.info = i
+	p.info, p.infoAt = i, time.Now()
 	p.infoMu.Unlock()
 }
 
-// Probe starts one process (if none ran yet) and reports its features.
+// Probe starts one process (if none ran yet) and reports its features. A
+// failed start is tried again after a minute (memory may be free again).
 func (p *Pool) Probe() Info {
 	p.infoMu.Lock()
-	known := p.info
+	known, at := p.info, p.infoAt
 	p.infoMu.Unlock()
-	if known != nil {
+	if known != nil && (known.Error == "" || p.opt.Python == "" || time.Since(at) < time.Minute) {
 		return *known
 	}
 	h, err := p.get()
@@ -163,6 +171,10 @@ func (p *Pool) start() (*proc, error) {
 	}
 	info.Python = p.opt.Python
 	p.setInfo(&info)
+	p.starts.Add(1)
+	p.mu.Lock()
+	p.live[h] = true
+	p.mu.Unlock()
 	return h, nil
 }
 
@@ -178,6 +190,7 @@ func (p *Pool) get() (*proc, error) {
 		p.mu.Unlock()
 		h, err := p.start()
 		if err != nil {
+			p.startErrs.Add(1)
 			p.mu.Lock()
 			p.started--
 			p.mu.Unlock()
@@ -196,7 +209,50 @@ func (p *Pool) discard(h *proc) {
 	h.cmd.Wait()
 	p.mu.Lock()
 	p.started--
+	delete(p.live, h)
 	p.mu.Unlock()
+}
+
+// Stats is what a pool did, for debugging.
+type Stats struct {
+	Size      int     `json:"size"`
+	Running   int     `json:"running"`
+	Busy      int     `json:"busy"`
+	Starts    int64   `json:"starts"`
+	StartErrs int64   `json:"startErrors"`
+	Crashes   int64   `json:"crashes"`  // a process died or broke the protocol
+	Timeouts  int64   `json:"timeouts"` // a request took over 2 minutes: the process was killed
+	Calls     int64   `json:"calls"`
+	CallErrs  int64   `json:"callErrors"` // answered with an error (the process goes on)
+	RSSMB     []int64 `json:"rssMB"`      // resident memory of each running process
+}
+
+// Stats reports the pool's processes and counters.
+func (p *Pool) Stats() Stats {
+	p.mu.Lock()
+	st := Stats{Size: p.opt.Size, Running: len(p.live), Busy: max(0, len(p.live)-len(p.idle))}
+	for h := range p.live {
+		st.RSSMB = append(st.RSSMB, rssMB(h.cmd.Process.Pid))
+	}
+	p.mu.Unlock()
+	st.Starts, st.StartErrs, st.Crashes, st.Timeouts = p.starts.Load(), p.startErrs.Load(), p.crashes.Load(), p.timeouts.Load()
+	st.Calls, st.CallErrs = p.calls.Load(), p.callErrs.Load()
+	return st
+}
+
+// rssMB reads the resident memory of a process (Linux; -1 elsewhere).
+func rssMB(pid int) int64 {
+	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/status", pid))
+	if err != nil {
+		return -1
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		if f := strings.Fields(line); len(f) >= 2 && f[0] == "VmRSS:" {
+			kb, _ := strconv.ParseInt(f[1], 10, 64)
+			return kb >> 10
+		}
+	}
+	return -1
 }
 
 func (p *Pool) call(req any, res any) error {
@@ -218,9 +274,11 @@ func (p *Pool) call(req any, res any) error {
 		line, err := h.out.ReadBytes('\n')
 		ch <- result{line, err}
 	}()
+	p.calls.Add(1)
 	select {
 	case r := <-ch:
 		if r.err != nil {
+			p.crashes.Add(1)
 			p.discard(h)
 			return r.err
 		}
@@ -231,10 +289,12 @@ func (p *Pool) call(req any, res any) error {
 		}
 		json.Unmarshal(r.line, &status)
 		if !status.OK {
+			p.callErrs.Add(1)
 			return errors.New(status.Error)
 		}
 		return json.Unmarshal(r.line, res)
 	case <-time.After(2 * time.Minute):
+		p.timeouts.Add(1)
 		p.discard(h)
 		return errors.New("helper timeout")
 	}
