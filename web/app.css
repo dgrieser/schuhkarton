@@ -625,6 +625,8 @@ body > .pop.name-pop.sheet { z-index: 130; } /* a person of a selection: over th
 .toast.on { opacity: 1; transform: translateX(-50%) translateY(0); }
 .toast.act { display: flex; align-items: center; gap: 10px; padding: 6px 6px 6px 18px; }
 .toast.act.on { pointer-events: auto; }
+/* a touch screen: every toast can be swiped away (the script moves it) */
+@media (pointer: coarse) { .toast.on { pointer-events: auto; touch-action: none; -webkit-user-select: none; user-select: none; } }
 .toast span { flex: 1; min-width: 0; }
 .toast button {
   flex: none; white-space: nowrap;

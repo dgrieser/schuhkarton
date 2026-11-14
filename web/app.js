@@ -51,12 +51,57 @@
   // ms: how long it stays (default: longer with a button). The one kind of message everywhere.
   function toast(msg, action, onAction, ms) {
     const el = $('#toast');
+    swipeToast(el);
+    clearTimeout(el.goneT);
+    el.style.transform = el.style.opacity = el.style.transition = '';
     el.innerHTML = `<span>${esc(msg)}</span>${action ? `<button type="button">${esc(action)}</button>` : ''}`;
     el.classList.toggle('act', !!action);
     el.classList.add('on');
     clearTimeout(toastT);
     toastT = setTimeout(() => el.classList.remove('on'), ms || (action ? 10000 : 2400));
     if (action) $('button', el).onclick = () => { el.classList.remove('on'); onAction(); };
+  }
+
+  // on a touch screen a toast can be swiped away: sideways or down (once per element)
+  function swipeToast(el) {
+    if (el.swipe || !isTouch) return;
+    el.swipe = true;
+    let st = null;
+    const at = (dx, dy) => `translateX(calc(-50% + ${dx}px)) translateY(${dy}px)`;
+    el.addEventListener('pointerdown', (e) => {
+      if (!el.classList.contains('on') || e.target.closest('button')) return;
+      st = { x: e.clientX, y: e.clientY, t: performance.now(), dx: 0, dy: 0, id: e.pointerId };
+      el.setPointerCapture(e.pointerId);
+      el.style.transition = 'none';
+      clearTimeout(toastT); // held: it does not go on its own meanwhile
+    });
+    el.addEventListener('pointermove', (e) => {
+      if (!st || e.pointerId !== st.id) return;
+      st.dx = e.clientX - st.x;
+      st.dy = e.clientY - st.y;
+      // sideways freely, down freely, up only a little (resisting)
+      const dy = st.dy < 0 ? st.dy / 4 : st.dy, far = Math.max(Math.abs(st.dx) / el.offsetWidth, dy / el.offsetHeight / 1.5);
+      el.style.transform = at(st.dx, dy);
+      el.style.opacity = String(clamp(1 - far * 0.8, 0.2, 1));
+    });
+    const end = (e) => {
+      if (!st || e.pointerId !== st.id) return;
+      const { dx, dy } = st, dt = Math.max(1, performance.now() - st.t);
+      st = null;
+      const side = Math.abs(dx) > Math.max(60, el.offsetWidth * 0.3) || (Math.abs(dx) > 20 && Math.abs(dx) / dt > 0.5);
+      const down = !side && (dy > Math.max(30, el.offsetHeight * 0.6) || (dy > 12 && dy / dt > 0.4));
+      el.style.transition = 'transform .2s ease, opacity .2s ease';
+      if (side || down) {
+        el.style.transform = side ? at(Math.sign(dx) * (innerWidth / 2 + el.offsetWidth), dy > 0 ? dy : 0) : at(0, el.offsetHeight + 60);
+        el.style.opacity = '0';
+        el.goneT = setTimeout(() => { el.classList.remove('on'); el.style.transform = el.style.opacity = el.style.transition = ''; }, 200);
+      } else {
+        el.style.transform = el.style.opacity = '';
+        toastT = setTimeout(() => el.classList.remove('on'), 3000);
+      }
+    };
+    el.addEventListener('pointerup', end);
+    el.addEventListener('pointercancel', end);
   }
 
   // copies text to the clipboard (without the clipboard API: through a hidden field) and says so
