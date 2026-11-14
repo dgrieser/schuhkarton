@@ -73,10 +73,10 @@ type fakeFaces struct{ calls atomic.Int32 }
 func (f *fakeFaces) probe() FaceInfo {
 	return FaceInfo{Mode: "fake", Detection: true, Recognition: true}
 }
-func (f *fakeFaces) detect(ctx context.Context, l *Library, it *Item, prefix string) ([]Face, error) {
+func (f *fakeFaces) detect(ctx context.Context, l *Library, it *Item, prefix string, extra bool) ([]Face, error) {
 	return nil, nil
 }
-func (f *fakeFaces) detectData(ctx context.Context, l *Library, data []byte) ([]Face, error) {
+func (f *fakeFaces) detectData(ctx context.Context, l *Library, data []byte, box *[4]float32) ([]Face, error) {
 	f.calls.Add(1)
 	return []Face{
 		{X: .1, Y: .2, W: .2, H: .3, Score: .95, Emb: []float32{1, 0}},

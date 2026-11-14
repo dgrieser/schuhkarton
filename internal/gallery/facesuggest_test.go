@@ -89,16 +89,16 @@ func TestSuggestLevels(t *testing.T) {
 	l := &Library{people: s, byID: map[string]*Item{}}
 	// centroid of Carla's faces at (0.6, 0.8): a face at (1, 0) is 0.6 alike
 	s.people = []*Person{{ID: "n-carla", Name: "Carla", cent: []float32{.6, .8}}}
-	sg := l.suggest([]float32{1, 0}, frame{"x", 0}, FaceRef{"x", -1}, "")
+	sg := l.suggest([]float32{1, 0}, nil, frame{"x", 0}, FaceRef{"x", -1}, "")
 	if len(sg) != 1 || sg[0].Level != "high" {
 		t.Errorf("%+v", sg)
 	}
 	s.people[0].cent = []float32{.35, .9367}
-	if sg := l.suggest([]float32{1, 0}, frame{"x", 0}, FaceRef{"x", -1}, ""); len(sg) != 1 || sg[0].Level != "low" {
+	if sg := l.suggest([]float32{1, 0}, nil, frame{"x", 0}, FaceRef{"x", -1}, ""); len(sg) != 1 || sg[0].Level != "low" {
 		t.Errorf("%+v", sg)
 	}
 	s.people[0].cent = []float32{0, 1}
-	if sg := l.suggest([]float32{1, 0}, frame{"x", 0}, FaceRef{"x", -1}, ""); len(sg) != 0 {
+	if sg := l.suggest([]float32{1, 0}, nil, frame{"x", 0}, FaceRef{"x", -1}, ""); len(sg) != 0 {
 		t.Errorf("%+v", sg)
 	}
 }

@@ -922,7 +922,7 @@ func runWorker(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	srv := worker.New(worker.Options{Listen: w.Listen, Token: w.Token, Python: py, Models: dirs,
-		Workers: w.Workers, MinScore: cfg.Faces.MinScore})
+		Workers: w.Workers, MinScore: cfg.Faces.MinScore, AuraWorkers: max(0, w.AuraWorkers)})
 	return srv.Run(ctx)
 }
 

@@ -517,6 +517,10 @@ func (l *Library) faceFile(key string, idx int) string {
 	return filepath.Join(l.opt.CacheDir, "faces", key[:2], fmt.Sprintf("%s_%d.jpg", key, idx))
 }
 
+func (l *Library) extraFile(key string, idx int) string {
+	return filepath.Join(l.opt.CacheDir, "faces", key[:2], fmt.Sprintf("%s_e%d.jpg", key, idx))
+}
+
 // rekey gives an item the cache key that matches its file, path and
 // rotation, and moves the cached thumbnails, previews and face crops along.
 // rot > 0 turns the cached images clockwise on the way.
@@ -560,6 +564,9 @@ func (l *Library) rekey(it *Item, oldKey string, rot int) {
 	l.tiers.mu.Unlock()
 	for i := range len(it.Faces) {
 		move(l.faceFile(oldKey, i), l.faceFile(newKey, i), rot != 0)
+	}
+	for i := range len(it.Extra) { // the faces of the second search, kept aside
+		move(l.extraFile(oldKey, i), l.extraFile(newKey, i), rot != 0)
 	}
 	l.mu.Lock()
 	it.key = newKey

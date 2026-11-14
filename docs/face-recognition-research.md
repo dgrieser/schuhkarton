@@ -228,3 +228,53 @@ all methods a little; they compare the methods fairly.
   [OpenCV 5 face tutorial](https://docs.opencv.org/5.0/tutorials/dnn/dnn_face/dnn_face.html)
 - Detection comparison (YOLO AGPL): [overview](https://ufme-docs.pages.dev/research/sota-detection),
   [YOLOv11n-face](https://hackernoon.com/yolov11n-face-detection-lightweight-face-detection-with-yolov11)
+
+## Both systems together (November 2026)
+
+Measured on the same library (478 named crops of 12 people; 250 original
+photos with named faces), then built in v0.9.46.
+
+**Naming with both models** (leave one out; FAR = how often a face still got
+somebody else's name above the threshold with its own person removed, a
+stand-in for strangers and relatives):
+
+| rule | top 1 | at 0.42: precision / coverage / FAR |
+|---|---|---|
+| SFace | 93.3 % | 94.6 / 96.7 / 30.3 |
+| AuraFace ×1.2 | 93.9 % | 95.6 / 95.4 / 30.8 |
+| mean of both | 94.1 % | 96.1 / 95.8 / 28.0 |
+| mean, 0.05 ahead of the next person | | 98.2 / 90.6 |
+
+The gain is in unsure faces (detector score low third: precision 90.6 →
+95.2 %).
+
+**A second search** (extra = no stored face there, IoU < 0.3, not half
+inside one; share of real faces eyeballed on samples of 60):
+
+| search | extras in 250 photos | real |
+|---|---|---|
+| YuNet ≥ 0.6, ≥ 20 px | 67 | 72 % |
+| YuNet on a 2x zoom | 123 | 40 % |
+| RetinaFace ≥ 0.6 | 98 | 65 % |
+| YuNet ≥ 0.6 confirmed by RetinaFace ≥ 0.9 | 35 | 86 % |
+| RetinaFace ≥ 0.95 | 41 | 23 of 25 |
+
+Junk: dogs, dolls, teddies, hands, food, backs of heads, faces in pictures.
+Many real extras are not tiny: clear faces of 30–42 px that fail the size
+rule, and selfies YuNet scores 0.6–0.86. The 2x zoom costs 4–5 times more and
+finds mostly junk of its own, so it is not used.
+
+**Taking extras in** (197 extras, references from other photos, names already
+in the photo blocked): AuraFace 3 nearest ≥ 0.40, 0.05 ahead of the next
+person, SFace agreeing → 15 taken in, all right by eye (without the margin:
+17, two of them sibling mix-ups).
+
+**Faces drawn by hand** (16 with references): SFace and AuraFace each name 8
+right, but different ones; the mean helps.
+
+**Time per photo** (laptop, one thread): YuNet 86 ms, RetinaFace 118 ms, SFace
+14 ms per face, AuraFace 198 ms per face — AuraFace is the cost that counts.
+
+RetinaFace model: yakhyo/retinaface-pytorch v0.0.1 `retinaface_mv1_0.25.onnx`
+(MIT; biubug6's architecture, retrained), 1,736,694 bytes, sha256
+`b7a7acab55e104dce6f32cdfff929bd83946da5cd869b9e2e9bdffafd1b7e4a5`.

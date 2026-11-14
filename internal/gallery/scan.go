@@ -240,7 +240,7 @@ func (l *Library) Scan(ctx context.Context) error {
 		if o := old[id]; o != nil && o.Size == f.size && o.MTime == f.mtime && o.FacesDone {
 			// the same file, read again only for its metadata (a sidecar
 			// the share hung on): the faces found in it stay
-			it.Faces, it.FacesDone = o.Faces, true
+			it.Faces, it.FacesDone, it.Extra, it.FaceGen = o.Faces, true, o.Extra, o.FaceGen
 		} else if o != nil && hasManualFace(o.Faces) {
 			// faces marked by hand cannot be found again: they stay at their
 			// index with their crops (detection runs again and fills in

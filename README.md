@@ -561,6 +561,34 @@ stores the faces, embeddings and crops in its cache. Clustering into people
 happens in the gallery. If the container is unreachable, the scan resumes when
 it is back.
 
+The image also brings a second recognition model, AuraFace-v1 (Apache-2.0,
+~250 MB, run by onnxruntime in `worker.aura_workers` processes of its own,
+2 by default), and RetinaFace mobilenet 0.25 (MIT) as a second face detector.
+In the same request the container then:
+
+- embeds every face with both models at the same time (SFace in the main
+  processes, AuraFace in its own);
+- runs a second, more generous search: YuNet down to 0.6 confirmed by
+  RetinaFace at 0.9, or RetinaFace alone at 0.95. Its faces come back marked
+  as extra.
+
+The gallery then:
+
+- keeps the extra faces aside and takes one in only when AuraFace finds it
+  clearly like a named person (at least 0.40 for the three most alike faces,
+  0.05 ahead of the next person) and SFace agrees;
+- names faces by the mean of both models (AuraFace's likeness ×1.2, its scale
+  runs lower), with a margin of 0.05 over the next person;
+- embeds a box drawn by hand that no search finds with AuraFace;
+- folds an unnamed group into a named person when both models find their
+  centroids alike (0.50 and 0.45) and they share no picture.
+
+SFace stays in the lead: it alone forms the unnamed groups. With an older
+container, or without the models, everything works as before. Faces scanned
+before are scanned again in the background window once the container has the
+second model. Measurements are in
+[docs/face-recognition-research.md](docs/face-recognition-research.md).
+
 Each release tag pushes a new `:latest`. When the repository secret
 `MITTWALD_WEBHOOK_URL` is set, the image workflow then calls that URL (a GET)
 to have a hosted container pull the image again and restart, but only when
@@ -719,6 +747,7 @@ worker:                       # for "schuhkarton worker"
   listen: 0.0.0.0:8089
   token: ""
   workers: 12
+  aura_workers: 2             # processes of the second recognition model (~250 MB each); -1: not used
 ```
 
 Thumbnail sizes apply to new thumbnails; to rebuild all of them, delete

@@ -126,7 +126,7 @@ func (l *Library) searchFrame(ctx context.Context, it *Item, t float64) (image.I
 		}
 		return nil, nil, err
 	}
-	found, err := l.faces.detectData(ctx, l, data)
+	found, err := l.faces.detectData(ctx, l, data, nil)
 	if err != nil || len(found) == 0 {
 		if ctx.Err() != nil {
 			return nil, nil, ctx.Err()

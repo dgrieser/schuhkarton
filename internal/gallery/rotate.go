@@ -149,6 +149,9 @@ func (l *Library) rotateLocked(ids []string, deg int, by string, rec *Change) (E
 		for i := range it.Faces {
 			it.Faces[i] = rotateBox(it.Faces[i], deg)
 		}
+		for i := range it.Extra {
+			it.Extra[i] = rotateBox(it.Extra[i], deg)
+		}
 		l.mu.Unlock()
 		l.rekey(it, oldKey, deg)
 		changed = append(changed, it)

@@ -49,6 +49,7 @@ type Options struct {
 	Models    []string // folders searched for the ONNX models
 	Size      int      // processes
 	MinScore  float64  // face detection score threshold
+	Flags     []string // more arguments for helper.py ("--no-aura", "--only-aura")
 }
 
 // Info is what a started helper reports.
@@ -56,6 +57,8 @@ type Info struct {
 	Python      string            `json:"python"`
 	Detection   bool              `json:"detection"`
 	Recognition bool              `json:"recognition"`
+	Aura        bool              `json:"aura"`  // a second embedding per face (AuraFace)
+	Extra       bool              `json:"extra"` // the second, more generous search
 	Heic        bool              `json:"heic"`
 	Missing     []string          `json:"missing,omitempty"`
 	Versions    map[string]string `json:"versions,omitempty"`
@@ -129,6 +132,7 @@ func (p *Pool) start() (*proc, error) {
 		return nil, errors.New("kein Python gefunden")
 	}
 	args := []string{"-u", p.script, "--min-score", strconv.FormatFloat(p.opt.MinScore, 'f', 3, 64)}
+	args = append(args, p.opt.Flags...)
 	args = append(args, p.opt.Models...)
 	cmd := exec.Command(p.opt.Python, args...)
 	cmd.Env = append(os.Environ(), "OMP_NUM_THREADS=1", "OPENBLAS_NUM_THREADS=1")
@@ -272,22 +276,76 @@ type Face struct {
 	X, Y, W, H float32
 	Score      float32
 	Emb        []float32 // normalized SFace embedding, nil without recognition
+	Emb2       []float32 // normalized AuraFace embedding, nil without that model
+	// Extra: found only by the second search (or the box asked for), Src
+	// tells by what: "yunet+retina", "retina", "yunet-low", "box"
+	Extra bool
+	Src   string
+	// Aligned: with FaceOpts.Split, the 112x112 aligned face (raw BGR,
+	// base64) to be embedded by Embed instead
+	Aligned string
+}
+
+// FaceOpts asks for more than the main search.
+type FaceOpts struct {
+	Extra bool        // the second, more generous search
+	Box   *[4]float32 // a face drawn by hand (x, y, w, h as fractions): embedded itself when no search finds it
+	Split bool        // no embeddings: the aligned faces instead (Face.Aligned), for Embed
 }
 
 type rawFace struct {
 	X, Y, W, H, Score float32
-	Emb               string
+	Emb, Emb2         string
+	Extra             bool
+	Src               string
+	Aligned           string
 }
 
 // Faces finds faces in src and writes square crops to <cropPrefix>_<n>.jpg.
 func (p *Pool) Faces(src, cropPrefix string) ([]Face, error) {
+	return p.FacesWith(src, cropPrefix, FaceOpts{})
+}
+
+// FacesWith is Faces with the second search or a box asked for.
+func (p *Pool) FacesWith(src, cropPrefix string, o FaceOpts) ([]Face, error) {
+	req := map[string]any{"op": "faces", "src": src, "crops": cropPrefix}
+	if o.Extra {
+		req["extra"] = true
+	}
+	if o.Box != nil {
+		req["box"] = o.Box[:]
+	}
+	if o.Split {
+		req["split"] = true
+	}
 	var res struct{ Faces []rawFace }
-	if err := p.call(map[string]any{"op": "faces", "src": src, "crops": cropPrefix}, &res); err != nil {
+	if err := p.call(req, &res); err != nil {
 		return nil, err
 	}
 	out := make([]Face, 0, len(res.Faces))
 	for _, f := range res.Faces {
-		out = append(out, Face{X: f.X, Y: f.Y, W: f.W, H: f.H, Score: f.Score, Emb: DecodeEmbedding(f.Emb)})
+		out = append(out, Face{X: f.X, Y: f.Y, W: f.W, H: f.H, Score: f.Score, Emb: DecodeEmbedding(f.Emb), Emb2: DecodeEmbedding(f.Emb2),
+			Extra: f.Extra, Src: f.Src, Aligned: f.Aligned})
+	}
+	return out, nil
+}
+
+// Embed embeds aligned faces (Face.Aligned) with one system: "sface" or
+// "aura" (a pool started with --only-aura).
+func (p *Pool) Embed(model string, aligned []string) ([][]float32, error) {
+	if len(aligned) == 0 {
+		return nil, nil
+	}
+	var res struct{ Embs []string }
+	if err := p.call(map[string]any{"op": "embed", "model": model, "crops": aligned}, &res); err != nil {
+		return nil, err
+	}
+	if len(res.Embs) != len(aligned) {
+		return nil, errors.New("helper: embeddings missing")
+	}
+	out := make([][]float32, len(res.Embs))
+	for i, e := range res.Embs {
+		out[i] = DecodeEmbedding(e)
 	}
 	return out, nil
 }

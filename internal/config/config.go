@@ -443,6 +443,10 @@ type Worker struct {
 	Listen  string `yaml:"listen" json:"listen"`
 	Token   string `yaml:"token" json:"token"`
 	Workers int    `yaml:"workers" json:"workers"`
+	// AuraWorkers: processes of the second recognition model (it is used
+	// when its file is among the models); each holds the model (~250 MB in
+	// memory), so they are few. Negative: not used.
+	AuraWorkers int `yaml:"aura_workers" json:"auraWorkers"`
 }
 
 // Defaults returns the built-in configuration.
@@ -613,6 +617,9 @@ func (c *Config) normalize() {
 	c.Worker.Listen = cmpOr(c.Worker.Listen, d.Worker.Listen)
 	if c.Worker.Workers <= 0 {
 		c.Worker.Workers = d.Worker.Workers
+	}
+	if c.Worker.AuraWorkers == 0 {
+		c.Worker.AuraWorkers = 2
 	}
 	// folder names: base name, unique
 	seen := map[string]bool{}

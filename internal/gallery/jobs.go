@@ -190,6 +190,9 @@ func (l *Library) generate(ctx context.Context) {
 	})
 	wg.Wait()
 	if len(faces) > 0 {
+		if l.extrasNew.Swap(false) {
+			l.promoteNow.Store(true) // the extra faces found in this pass are looked at now
+		}
 		l.recluster()
 		l.bump()
 	}
@@ -229,7 +232,8 @@ func (l *Library) mediaTodo() (thumbs, previews, faces []*Item) {
 			}
 		}
 		if faceOK && (it.Kind == Photo || (it.Kind == Video && it.LivePhoto == "" && l.media.ffmpeg != "")) {
-			done := it.FacesDone && (!recog || !needsEmbedding(it.Faces))
+			want := faceGenWant(fs, it)
+			done := it.FacesDone && (!recog || !needsEmbedding(it.Faces)) && it.FaceGen&want == want
 			if done || off {
 				nFace++
 			} else {
@@ -262,12 +266,13 @@ func (l *Library) scanFaces(ctx context.Context, it *Item) bool {
 	// labeled keep their index and crop, found ones move to where they end up
 	tmp := prefix + "-new"
 	labeled := l.people.labeled(it.ID)
+	want := faceGenWant(l.FaceStatus(), it)
 	var faces []Face
 	var err error
 	if it.Kind == Video {
 		faces, err = l.detectVideo(ctx, it, tmp, l.ItemFaces(it), labeled)
 	} else {
-		faces, err = l.faces.detect(ctx, l, it, tmp)
+		faces, err = l.faces.detect(ctx, l, it, tmp, want&genExtra != 0)
 	}
 	if err != nil {
 		if ctx.Err() != nil {
@@ -282,9 +287,40 @@ func (l *Library) scanFaces(ctx context.Context, it *Item) bool {
 		}
 		faces = nil
 	}
+	// the faces of the second search go aside, under crops of their own
+	var main, extra []Face
+	var extraAt []int
+	for i, f := range faces {
+		if f.Src != "" {
+			extra, extraAt = append(extra, f), append(extraAt, i)
+			continue
+		}
+		main = append(main, f)
+	}
+	if len(extra) > 0 {
+		faces = main
+		k := 0
+		for i := range len(main) + len(extra) {
+			from := fmt.Sprintf("%s_%d.jpg", tmp, i)
+			if k < len(extraAt) && extraAt[k] == i {
+				os.Rename(from, fmt.Sprintf("%s_e%d.jpg", prefix, k))
+				k++
+				continue
+			}
+			if j := i - k; j != i {
+				os.Rename(from, fmt.Sprintf("%s_%d.jpg", tmp, j)) // the main ones close up
+			}
+		}
+	}
 	l.mu.Lock()
 	merged, place := mergeFaces(it.Faces, faces, labeled, l.people.threshNew)
-	it.Faces, it.FacesDone = merged, true
+	it.Faces, it.FacesDone, it.FaceGen = merged, true, want
+	if it.Kind == Photo && want&genExtra != 0 && err == nil {
+		it.Extra = extra
+		if len(extra) > 0 {
+			l.extrasNew.Store(true)
+		}
+	}
 	l.mu.Unlock()
 	for i, to := range place {
 		from := fmt.Sprintf("%s_%d.jpg", tmp, i)

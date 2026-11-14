@@ -121,10 +121,10 @@ type regionFaces struct {
 func (f *regionFaces) probe() FaceInfo {
 	return FaceInfo{Mode: "fake", Detection: true, Recognition: true}
 }
-func (f *regionFaces) detect(ctx context.Context, l *Library, it *Item, prefix string) ([]Face, error) {
+func (f *regionFaces) detect(ctx context.Context, l *Library, it *Item, prefix string, extra bool) ([]Face, error) {
 	return nil, nil
 }
-func (f *regionFaces) detectData(ctx context.Context, l *Library, data []byte) ([]Face, error) {
+func (f *regionFaces) detectData(ctx context.Context, l *Library, data []byte, box *[4]float32) ([]Face, error) {
 	f.calls.Add(1)
 	if f.away.Load() {
 		return nil, fmt.Errorf("%w: test", errTransient)
@@ -257,10 +257,10 @@ type noModelFaces struct{ calls atomic.Int32 }
 func (f *noModelFaces) probe() FaceInfo {
 	return FaceInfo{Mode: "fake", Detection: true, Recognition: true}
 }
-func (f *noModelFaces) detect(ctx context.Context, l *Library, it *Item, prefix string) ([]Face, error) {
+func (f *noModelFaces) detect(ctx context.Context, l *Library, it *Item, prefix string, extra bool) ([]Face, error) {
 	return nil, nil
 }
-func (f *noModelFaces) detectData(ctx context.Context, l *Library, data []byte) ([]Face, error) {
+func (f *noModelFaces) detectData(ctx context.Context, l *Library, data []byte, box *[4]float32) ([]Face, error) {
 	f.calls.Add(1)
 	return []Face{{X: .3, Y: .3, W: .4, H: .4, Score: .9}}, nil
 }
