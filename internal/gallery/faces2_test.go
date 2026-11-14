@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -205,5 +206,30 @@ func TestManualBoxSecondOnly(t *testing.T) {
 	setManualEmb(&f, emb, emb2, true)
 	if !f.NoEmb || f.NoEmb2 || f.Emb2 == nil || f.wantsEmb(true) {
 		t.Errorf("%+v", f)
+	}
+}
+
+// What goes to the face container: the large preview when it is there, else
+// the original as it is, else a JPEG made here (a photo turned by hand).
+func TestFaceUpload(t *testing.T) {
+	l, root := testLib(t, "a.jpg", "b.jpg", "c.jpg")
+	ctx := context.Background()
+	a, b, c := byRel(l, "a.jpg"), byRel(l, "b.jpg"), byRel(l, "c.jpg")
+	orig, _ := os.ReadFile(root + "/b.jpg")
+	if got, name, err := l.faceUpload(ctx, b); err != nil || name != "face.jpg" || len(got) != len(orig) {
+		t.Errorf("original: %d bytes %q %v, want %d", len(got), name, err, len(orig))
+	}
+	p := l.CachePath(a, VarLarge)
+	os.MkdirAll(filepath.Dir(p), 0o755)
+	os.WriteFile(p, []byte("preview"), 0o644)
+	if got, _, _ := l.faceUpload(ctx, a); string(got) != "preview" {
+		t.Errorf("preview not taken: %d bytes", len(got))
+	}
+	if _, err := l.Rotate([]string{c.ID}, 90, "anna"); err != nil {
+		t.Fatal(err)
+	}
+	c = byRel(l, "c.jpg")
+	if got, _, err := l.faceUpload(ctx, c); err != nil || len(got) == len(orig) {
+		t.Errorf("turned photo sent as it is: %d bytes %v", len(got), err)
 	}
 }

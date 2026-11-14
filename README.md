@@ -556,8 +556,12 @@ docker run -d --name schuhkarton-faces --restart unless-stopped -p 8089:8089 \
 
 or with [deploy/compose.yaml](deploy/compose.yaml). Then choose
 *Einstellungen → Gesichter → Container* and enter `http://<host>:8089` and the
-token. The gallery sends one 1600 px JPEG per photo (HEIC as the original) and
-stores the faces, embeddings and crops in its cache. Clustering into people
+token. The gallery sends per photo the cheapest it has: the large preview when
+it is in the cache, else the original as it is (JPEG, PNG, HEIC up to 25 MB;
+the container decodes it much faster than a Raspberry Pi: there making a
+1600 px JPEG took 4.5–14 s, sending the original 1.5–2 s), else a 1600 px JPEG
+made here (RAW, other formats, photos turned by hand). It stores the faces,
+embeddings and crops in its cache. Clustering into people
 happens in the gallery. If the container is unreachable, the scan resumes when
 it is back.
 

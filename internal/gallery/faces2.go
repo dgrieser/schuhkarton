@@ -18,7 +18,7 @@ import (
 // embedding and, for photos, the second search, when the service has them.
 func faceGenWant(fs FaceInfo, it *Item) uint8 {
 	var g uint8
-	if fs.Aura {
+	if fs.Aura && it.Kind == Photo { // a video is not read again for it (frames are dear here); new ones get it anyway
 		g |= genAura
 	}
 	if fs.Extra && fs.Aura && it.Kind == Photo { // the extra faces are of use only with the second system
