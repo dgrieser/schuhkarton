@@ -821,9 +821,9 @@ give place and category.
 
 ## Release
 
-The workflows run on a self-hosted runner (labels `self-hosted, Linux, X64,
-ubuntu`), like rootle's. Without one, `GITHUB_TOKEN=$(gh auth token) make
-release` publishes a release from a clean checkout of the tag.
+The workflows run on GitHub-hosted runners (`ubuntu-latest`). Without CI,
+`GITHUB_TOKEN=$(gh auth token) make release` publishes a release from a clean
+checkout of the tag.
 
 Pushing a tag `v*` runs GoReleaser (`.goreleaser.yaml`). It builds the
 binaries for Linux (amd64, arm64, armv7), macOS (amd64, arm64) and Windows
