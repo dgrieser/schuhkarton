@@ -209,10 +209,10 @@ func (wf WorkerFace) face() Face {
 		Emb2: quant2(helper.DecodeEmbedding(wf.Emb2)), Src: wf.Src}
 }
 
-// detect sends a 1600 px JPEG (or the original, when Go cannot decode it)
-// and stores the returned crops next to the other face crops.
+// detect sends the picture (see faceUpload) and stores the returned crops
+// next to the other face crops.
 func (f *remoteFaces) detect(ctx context.Context, l *Library, it *Item, prefix string, extra bool) ([]Face, error) {
-	body, name, err := l.faceImage(ctx, it)
+	body, name, err := l.faceUpload(ctx, it)
 	if err != nil {
 		return nil, err
 	}
@@ -295,8 +295,43 @@ func (f *remoteFaces) post(ctx context.Context, body []byte, name string, hdr ma
 	return res.Faces, nil
 }
 
-// faceImage returns what is sent to the face container: an oriented JPEG
-// of at most 1600 px, made here when Go can decode the file.
+// maxUpload: originals up to this size go to the face container as they are.
+const maxUpload = 25 << 20
+
+// uploadAsIs: formats the face container decodes and turns itself the way
+// the gallery shows them (EXIF orientation; HEIF's own rotation).
+var uploadAsIs = map[string]bool{".jpg": true, ".jpeg": true, ".png": true, ".heic": true, ".heif": true}
+
+// faceUpload is what goes to the face container, the cheapest way for a
+// small machine: the large preview when it is made already (no read from
+// the share, no decoding), else the original as it is when the container
+// decodes it the same way (it decodes much faster, the machine here only
+// reads and sends the file), else a JPEG made here (faceImage).
+func (l *Library) faceUpload(ctx context.Context, it *Item) ([]byte, string, error) {
+	// shown as the gallery shows it, turns included; not when previews are
+	// smaller than the 1600 px faces are looked for in
+	if l.opt.PreviewSize >= 1600 {
+		if p, _ := l.cached(it, VarLarge, true); p != "" {
+			if b, err := os.ReadFile(p); err == nil {
+				return b, "face.jpg", nil
+			}
+		}
+	}
+	if it.Kind == Photo && it.Rot == 0 && uploadAsIs[it.Ext()] && it.Size > 0 && it.Size <= maxUpload {
+		if err := l.unreadable(it); err != nil {
+			return nil, "", err
+		}
+		b, err := os.ReadFile(l.Path(it))
+		if err == nil {
+			return b, "face" + it.Ext(), nil
+		}
+	}
+	return l.faceImage(ctx, it)
+}
+
+// faceImage returns an oriented JPEG of at most 1600 px of a photo, made
+// here when Go can decode the file (what faces are looked for in, and what
+// the face container gets when faceUpload has nothing cheaper).
 func (l *Library) faceImage(ctx context.Context, it *Item) ([]byte, string, error) {
 	if err := l.unreadable(it); err != nil { // the share hangs on it
 		return nil, "", err
