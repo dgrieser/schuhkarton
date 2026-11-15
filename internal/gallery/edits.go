@@ -396,7 +396,7 @@ func (l *Library) refresh(changed []*Item) {
 	l.mu.Unlock()
 	pairLive(all)
 	l.setItems(all)
-	l.saveIndex()
+	l.saveSoon() // in a moment: writing the index takes seconds on a small machine
 }
 
 // --- exiftool -------------------------------------------------------------------

@@ -3,6 +3,10 @@ package gallery
 import (
 	"math"
 	"os"
+	"runtime"
+	"sort"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -183,21 +187,30 @@ func (l *Library) promoteExtras(force bool) bool {
 		}
 	}
 	s.mu.RUnlock()
+	// what is looked at, copied under the lock (the rest runs without it:
+	// it takes long on a small machine, and the library must not wait)
+	type extraOf struct {
+		it    *Item
+		extra []Face // the list as it is (a scan replaces it, never changes it)
+		here  map[string]bool
+	}
+	type rawRef struct {
+		name string
+		cnt1 []float32
+		f2   [][]int8
+		f1   [][]float32
+	}
+	var raws []rawRef
+	var todo []extraOf
 	l.mu.RLock()
-	var refs []ref
-	anyExtra := false
 	for _, it := range l.items {
 		if len(it.Extra) > 0 {
-			anyExtra = true
-			break
+			todo = append(todo, extraOf{it: it, extra: it.Extra})
 		}
 	}
-	if anyExtra {
-		l.promotedAt.Store(time.Now().Unix()) // the pause starts with a pass that had something to look at
+	if len(todo) > 0 {
 		for _, p := range persons {
-			r := ref{name: p.Name, cnt1: p.cent}
-			sum := []float32(nil)
-			// the newest faces first (refs are by item, newest items first)
+			r := rawRef{name: p.Name, cnt1: p.cent}
 			for _, fr := range p.refs {
 				it := l.byID[fr.Item]
 				if it == nil || fr.Idx >= len(it.Faces) {
@@ -205,24 +218,48 @@ func (l *Library) promoteExtras(force bool) bool {
 				}
 				f := it.Faces[fr.Idx]
 				if len(f.Emb2) > 0 && len(r.f2) < promoteRef {
-					u := unit2(f.Emb2)
-					r.f2 = append(r.f2, u)
-					if sum == nil {
-						sum = make([]float32, len(u))
-					}
-					for i, x := range u {
-						sum[i] += x
-					}
+					r.f2 = append(r.f2, f.Emb2)
 				}
 				if len(f.Emb) > 0 && len(r.f1) < promoteRef {
 					r.f1 = append(r.f1, f.Emb)
 				}
 			}
-			if len(r.f2) >= promoteMinRefs {
-				r.cent = normalize(sum)
-				refs = append(refs, r)
+			raws = append(raws, r)
+		}
+	}
+	l.mu.RUnlock()
+	if len(todo) == 0 {
+		return false
+	}
+	l.promotedAt.Store(time.Now().Unix()) // the pause starts with a pass that had something to look at
+	for k := range todo {
+		here := map[string]bool{}
+		for i := range l.ItemFaces(todo[k].it) {
+			if _, name := l.FacePerson(todo[k].it.ID, i); name != "" {
+				here[name] = true
 			}
 		}
+		todo[k].here = here
+	}
+	var refs []ref
+	for _, r := range raws {
+		if len(r.f2) < promoteMinRefs {
+			continue
+		}
+		x := ref{name: r.name, cnt1: r.cnt1, f1: r.f1}
+		sum := []float32(nil)
+		for _, q := range r.f2 {
+			u := unit2(q)
+			x.f2 = append(x.f2, u)
+			if sum == nil {
+				sum = make([]float32, len(u))
+			}
+			for i, v := range u {
+				sum[i] += v
+			}
+		}
+		x.cent = normalize(sum)
+		refs = append(refs, x)
 	}
 	type move struct {
 		it   *Item
@@ -230,58 +267,97 @@ func (l *Library) promoteExtras(force bool) bool {
 		name string
 		f    Face // as it was: a scan may have replaced the list meanwhile
 	}
-	var moves []move
-	for _, it := range l.items {
-		if len(it.Extra) == 0 {
-			continue
-		}
-		here := map[string]bool{}
-		for i := range it.Faces {
-			if p := l.Person(l.PersonOf(it.ID, i)); p != nil && p.Name != "" {
-				here[p.Name] = true
-			}
-		}
-		for i, f := range it.Extra {
-			if len(f.Emb2) == 0 {
-				continue
-			}
-			e2 := unit2(f.Emb2)
-			best, bestS, nextS := -1, float32(-2), float32(-2)
-			for j, r := range refs {
-				if dot(e2, r.cent) < promote2-0.2 {
-					continue
+	// each extra face on its own, side by side
+	found := make([][]move, len(todo))
+	var wg sync.WaitGroup
+	next := atomic.Int64{}
+	for range runtime.NumCPU() {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				k := int(next.Add(1) - 1)
+				if k >= len(todo) {
+					return
 				}
-				v := knnLikeness(e2, r.f2)
-				switch {
-				case v > bestS:
-					best, bestS, nextS = j, v, bestS
-				case v > nextS:
-					nextS = v
+				t := todo[k]
+				here := map[string]bool{}
+				for n := range t.here {
+					here[n] = true
 				}
-			}
-			if best < 0 || bestS < promote2 || bestS-nextS < promoteMargin || here[refs[best].name] {
-				continue
-			}
-			// the first system agrees
-			if len(f.Emb) > 0 {
-				e1 := normalize(f.Emb)
-				like := func(r ref) float32 { return max(dot(e1, r.cnt1), knnLikeness(e1, r.f1)) }
-				mine, top := like(refs[best]), true
-				for j, r := range refs {
-					if j != best && like(r) > mine {
-						top = false
-						break
+				for i, f := range t.extra {
+					if len(f.Emb2) == 0 {
+						continue
 					}
-				}
-				if !top && mine < promoteAgree1 {
-					continue
+					e2 := unit2(f.Emb2)
+					// the people most alike by centroid, then face by face
+					type cand struct {
+						j int
+						c float32
+					}
+					var cs []cand
+					for j, r := range refs {
+						if c := dot(e2, r.cent); c >= promote2-0.2 {
+							cs = append(cs, cand{j, c})
+						}
+					}
+					sort.Slice(cs, func(a, b int) bool { return cs[a].c > cs[b].c })
+					if len(cs) > knnTop {
+						cs = cs[:knnTop]
+					}
+					best, bestS, nextS := -1, float32(-2), float32(-2)
+					for _, c := range cs {
+						v := knnLikeness(e2, refs[c.j].f2)
+						switch {
+						case v > bestS:
+							best, bestS, nextS = c.j, v, bestS
+						case v > nextS:
+							nextS = v
+						}
+					}
+					if best < 0 || bestS < promote2 || bestS-nextS < promoteMargin || here[refs[best].name] {
+						continue
+					}
+					// the first system agrees: the same person most alike (of the
+					// people most alike by its centroids), or alike enough
+					if len(f.Emb) > 0 {
+						e1 := normalize(f.Emb)
+						like := func(r ref) float32 { return max(dot(e1, r.cnt1), knnLikeness(e1, r.f1)) }
+						mine := like(refs[best])
+						if mine < promoteAgree1 {
+							var c1 []cand
+							for j, r := range refs {
+								if j != best && len(r.cnt1) == len(e1) {
+									c1 = append(c1, cand{j, dot(e1, r.cnt1)})
+								}
+							}
+							sort.Slice(c1, func(a, b int) bool { return c1[a].c > c1[b].c })
+							if len(c1) > knnTop {
+								c1 = c1[:knnTop]
+							}
+							top := true
+							for _, c := range c1 {
+								if like(refs[c.j]) > mine {
+									top = false
+									break
+								}
+							}
+							if !top {
+								continue
+							}
+						}
+					}
+					found[k] = append(found[k], move{t.it, i, refs[best].name, f})
+					here[refs[best].name] = true
 				}
 			}
-			moves = append(moves, move{it, i, refs[best].name, f})
-			here[refs[best].name] = true
-		}
+		}()
 	}
-	l.mu.RUnlock()
+	wg.Wait()
+	var moves []move
+	for _, ms := range found {
+		moves = append(moves, ms...)
+	}
 	if len(moves) == 0 {
 		return false
 	}

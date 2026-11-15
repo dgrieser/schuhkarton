@@ -137,6 +137,38 @@ func (l *Library) Person(id string) *Person {
 	return l.people.byID[id]
 }
 
+// FacePerson is the person a face is shown as: the name given to it by
+// hand at once (before grouping again caught up), else its group. id may
+// be one grouping makes only on its next run.
+func (l *Library) FacePerson(item string, idx int) (id, name string) {
+	s := l.people
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	k := FaceRef{item, idx}.key()
+	label := s.labels[k]
+	id = s.byFace[k]
+	p := s.byID[id]
+	switch {
+	case label == labelHidden || label == labelNoFace:
+		return "", ""
+	case label != "" && !strings.HasPrefix(label, "!"):
+		if p != nil && p.Name == label {
+			return id, label
+		}
+		return "n-" + slug(label), label
+	case rejects(label, func() string {
+		if p != nil {
+			return p.Name
+		}
+		return ""
+	}()):
+		return "", "" // said not to be the person it is still grouped with
+	case p != nil:
+		return id, p.Name
+	}
+	return id, ""
+}
+
 // PersonOf returns the person id of a face ("" if none).
 func (l *Library) PersonOf(item string, idx int) string {
 	l.people.mu.RLock()
@@ -185,7 +217,7 @@ func (l *Library) NamePerson(id, name string) error {
 	if err := s.save(); err != nil {
 		return err
 	}
-	l.recluster()
+	l.recluster() // the page reloads the people right after: they must be there
 	l.bump()
 	return nil
 }
@@ -204,8 +236,7 @@ func (l *Library) LabelFace(item string, idx int, name string) (string, error) {
 	if err := s.save(); err != nil {
 		return prev, err
 	}
-	l.recluster()
-	l.bump()
+	l.regroup()
 	return prev, nil
 }
 
@@ -302,7 +333,7 @@ func (l *Library) LabelPersonIn(ids []string, person, name string) (map[string]s
 	if err := l.people.save(); err != nil {
 		return prev, err
 	}
-	l.recluster()
+	l.recluster() // the page reloads the people right after: they must be there
 	l.bump()
 	return prev, nil
 }
@@ -354,7 +385,7 @@ func (l *Library) NoFacePerson(id string) (map[string]string, error) {
 	if err := s.save(); err != nil {
 		return prev, err
 	}
-	l.recluster()
+	l.recluster() // the page reloads the people right after: they must be there
 	l.bump()
 	return prev, nil
 }
@@ -384,8 +415,7 @@ func (l *Library) RestoreFaceLabels(labels map[string]string) error {
 	if err := s.save(); err != nil {
 		return err
 	}
-	l.recluster()
-	l.bump()
+	l.regroup()
 	return nil
 }
 
@@ -532,13 +562,30 @@ func (l *Library) reclusterSoon() {
 	if l.reclusterQueued.Swap(true) {
 		return
 	}
-	go func() {
+	l.Go(func() { // Close waits for it (its changes go into the last save)
 		l.reclusterRun.Lock()
 		defer l.reclusterRun.Unlock()
 		l.reclusterQueued.Store(false)
+		if l.closing.Load() {
+			return // grouped again at the next start
+		}
 		l.recluster()
 		l.bump()
-	}()
+	})
+}
+
+// regroup groups the faces again after somebody named a face: right here
+// (tools, tests), or, while the library serves, in the background (it
+// takes long on a small machine; the name given counts at once, see
+// FacePerson). Changes to whole groups regroup right away (the page reloads
+// the people at once).
+func (l *Library) regroup() {
+	if l.opt.AsyncRegroup {
+		l.reclusterSoon()
+		return
+	}
+	l.recluster()
+	l.bump()
 }
 
 func (l *Library) recluster() {
@@ -701,6 +748,8 @@ func buildPeople(items []faceSnap, labels map[string]string, threshNew, threshNa
 		var pairs []pair
 		// the named faces of each person, for the nearest-neighbour likeness
 		// (of both systems)
+		// (of both systems; all of them: nearest faces are what counts, a
+		// sample of them named on a real library twice as many wrong)
 		members := make(map[*cluster][][]float32, len(namedList))
 		members2 := make(map[*cluster][][]float32, len(namedList))
 		for _, c := range namedList {
@@ -756,10 +805,28 @@ func buildPeople(items []faceSnap, labels map[string]string, threshNew, threshNa
 							}
 						}
 					} else {
+						// the people alike by their centroids, the most alike first;
+						// only the knnTop best are looked at face by face (on a
+						// real library the others never won)
+						type pre struct {
+							c      *cluster
+							s1, by float32
+						}
+						var ps []pre
 						seen := map[*cluster]bool{}
+						add := func(c *cluster, s1 float32) {
+							seen[c] = true
+							if rejects(f.label, c.name) {
+								return // said not to be: takes no place among the few looked at
+							}
+							by := s1
+							if len(f.emb2) > 0 && len(cent2[c]) > 0 {
+								by = fuse(s1, dot(f.emb2, cent2[c]))
+							}
+							ps = append(ps, pre{c, s1, by})
+						}
 						for _, m := range cands[i] {
-							seen[m.c] = true
-							cs = append(cs, score(m.c, max(m.sim, knnLikeness(f.emb, members[m.c]))))
+							add(m.c, m.sim)
 						}
 						// people only the second system finds alike take part too
 						if len(f.emb2) > 0 {
@@ -767,11 +834,18 @@ func buildPeople(items []faceSnap, labels map[string]string, threshNew, threshNa
 								if !seen[c] && len(cent2[c]) > 0 && dot(f.emb2, cent2[c]) >= threshNamed/on2-knnFar {
 									s1 := float32(-1)
 									if len(c.cent) == len(f.emb) {
-										s1 = max(dot(f.emb, c.cent), knnLikeness(f.emb, members[c]))
+										s1 = dot(f.emb, c.cent)
 									}
-									cs = append(cs, score(c, s1))
+									add(c, s1)
 								}
 							}
+						}
+						sort.Slice(ps, func(a, b int) bool { return ps[a].by > ps[b].by })
+						if len(ps) > knnTop {
+							ps = ps[:knnTop]
+						}
+						for _, x := range ps {
+							cs = append(cs, score(x.c, max(x.s1, knnLikeness(f.emb, members[x.c]))))
 						}
 					}
 					// people it was said not to be take no part (nor in the margin)
@@ -897,6 +971,12 @@ func buildPeople(items []faceSnap, labels map[string]string, threshNew, threshNa
 	})
 	return people, apart
 }
+
+// knnTop: the people, most alike by centroid, nearest-neighbour likeness
+// looks at for one face (on a real library the others never won: the same
+// faces named, 4x quicker). Fewer, or fewer faces per person, or the second
+// system for fewer of them, named more faces wrong.
+const knnTop = 4
 
 // knnLikeness is the mean likeness of e to its knnK most alike faces of a
 // person (fewer faces count a little less: one face alone is a weaker hint).

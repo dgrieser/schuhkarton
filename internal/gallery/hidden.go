@@ -49,7 +49,7 @@ func (l *Library) HidePerson(id string) (string, error) {
 	if err := s.save(); err != nil {
 		return "", err
 	}
-	l.recluster()
+	l.recluster() // the page reloads the people right after: they must be there
 	l.bump()
 	return hid, nil
 }
@@ -97,7 +97,7 @@ func (l *Library) ShowHidden(id string) error {
 	if err := s.save(); err != nil {
 		return err
 	}
-	l.recluster()
+	l.recluster() // the page reloads the people right after: they must be there
 	l.bump()
 	return nil
 }

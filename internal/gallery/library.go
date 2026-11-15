@@ -45,8 +45,11 @@ type Root struct {
 type Options struct {
 	Roots    []Root
 	CacheDir string
-	Exclude  []string // glob patterns matched against file and folder names
-	Workers  int
+	// AsyncRegroup: faces are grouped again in the background after names
+	// change (the server; tools and tests wait for it)
+	AsyncRegroup bool
+	Exclude      []string // glob patterns matched against file and folder names
+	Workers      int
 
 	ExifTool string // path to exiftool; empty: dates from names and folders only
 
@@ -831,7 +834,10 @@ func (l *Library) saveIndex() {
 		failed(err)
 		return
 	}
-	zw := gzip.NewWriter(f)
+	// the fastest compression: on a small machine the default took 2.4x as
+	// long for an index a seventh smaller (most of it is face embeddings,
+	// which hardly compress)
+	zw, _ := gzip.NewWriterLevel(f, gzip.BestSpeed)
 	_, err = buf.WriteTo(zw)
 	if err == nil {
 		err = zw.Close()

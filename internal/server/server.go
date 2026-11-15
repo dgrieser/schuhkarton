@@ -271,7 +271,7 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 		}
 		seen := map[string]bool{}
 		for i := range s.lib.ItemFaces(it) {
-			if pid := s.lib.PersonOf(it.ID, i); pid != "" && !seen[pid] {
+			if pid, _ := s.lib.FacePerson(it.ID, i); pid != "" && !seen[pid] {
 				seen[pid] = true
 				c.Pp = append(c.Pp, pid)
 			}
@@ -300,10 +300,8 @@ func (s *Server) item(w http.ResponseWriter, r *http.Request) {
 		if s.lib.IsNoFace(it.ID, i) {
 			continue // marked as no face
 		}
-		fc := face{X: f.X, Y: f.Y, W: f.W, H: f.H, Idx: i, Person: s.lib.PersonOf(it.ID, i), Manual: f.Manual, T: f.T}
-		if p := s.lib.Person(fc.Person); p != nil {
-			fc.Name = p.Name
-		}
+		fc := face{X: f.X, Y: f.Y, W: f.W, H: f.H, Idx: i, Manual: f.Manual, T: f.T}
+		fc.Person, fc.Name = s.lib.FacePerson(it.ID, i) // a name just given shows before grouping caught up
 		faces = append(faces, fc)
 	}
 	ext := strings.ToLower(path.Ext(it.Rel))
