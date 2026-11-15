@@ -90,8 +90,7 @@ func (l *Library) AddFace(ctx context.Context, id string, box FaceBox, t float64
 			return idx, err
 		}
 	} else {
-		l.recluster()
-		l.bump()
+		l.regroup()
 	}
 	return idx, nil
 }
@@ -465,7 +464,12 @@ func (l *Library) frameImage(ctx context.Context, it *Item, t float64) (image.Im
 	var err error
 	if it.Kind == Video {
 		data, err = l.videoFrame(ctx, it, t, 1600)
-	} else {
+	} else if p := l.largeForFaces(); p != nil && p(it) != "" {
+		// the large preview the viewer showed: no decoding of the original
+		// (seconds on a small machine) while somebody waits
+		data, err = os.ReadFile(p(it))
+	}
+	if it.Kind != Video && data == nil {
 		data, _, err = l.faceImage(ctx, it)
 	}
 	if err != nil {

@@ -308,11 +308,9 @@ var uploadAsIs = map[string]bool{".jpg": true, ".jpeg": true, ".png": true, ".he
 // decodes it the same way (it decodes much faster, the machine here only
 // reads and sends the file), else a JPEG made here (faceImage).
 func (l *Library) faceUpload(ctx context.Context, it *Item) ([]byte, string, error) {
-	// shown as the gallery shows it, turns included; not when previews are
-	// smaller than the 1600 px faces are looked for in
-	if l.opt.PreviewSize >= 1600 {
-		if p, _ := l.cached(it, VarLarge, true); p != "" {
-			if b, err := os.ReadFile(p); err == nil {
+	if p := l.largeForFaces(); p != nil {
+		if path := p(it); path != "" {
+			if b, err := os.ReadFile(path); err == nil {
 				return b, "face.jpg", nil
 			}
 		}
@@ -327,6 +325,19 @@ func (l *Library) faceUpload(ctx context.Context, it *Item) ([]byte, string, err
 		}
 	}
 	return l.faceImage(ctx, it)
+}
+
+// largeForFaces finds the cached large preview of a photo for face work:
+// shown as the gallery shows it, turns included. nil when previews are
+// smaller than the 1600 px faces are looked for in.
+func (l *Library) largeForFaces() func(it *Item) string {
+	if l.opt.PreviewSize < 1600 {
+		return nil
+	}
+	return func(it *Item) string {
+		p, _ := l.cached(it, VarLarge, true)
+		return p
+	}
 }
 
 // faceImage returns an oriented JPEG of at most 1600 px of a photo, made

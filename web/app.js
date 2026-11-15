@@ -2939,6 +2939,18 @@
           if (route.view !== 'person' || route.arg !== id) return;
           if (to && to !== id && S.peopleById.has(to)) { location.replace(`#/person/${encodeURIComponent(to)}`); return; }
         }
+        // a name just given: its group is made in the background in a moment
+        if (id.startsWith('n-') && (S.personWait?.id !== id || Date.now() - S.personWait.since < 120000)) {
+          if (S.personWait?.id !== id) S.personWait = { id, since: Date.now() };
+          view.innerHTML = `<div class="empty"><h2>${t('Wird gruppiert …')}</h2><p>${t('Die Person erscheint gleich.')}</p></div>`;
+          setTimeout(async () => {
+            if (route.view !== 'person' || route.arg !== id) return;
+            await loadPeople().catch(() => {});
+            if (S.peopleById.has(id)) await loadItems().catch(() => {}); // its photos come with it
+            if (route.view === 'person' && route.arg === id) rerender();
+          }, 3000);
+          return;
+        }
         view.innerHTML = `<div class="empty"><h2>${t('Person nicht gefunden')}</h2><p><a class="link" href="#/personen">${t('Zur Übersicht')}</a></p></div>`;
         return;
       }

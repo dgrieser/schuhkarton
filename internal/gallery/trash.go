@@ -337,7 +337,7 @@ func (l *Library) Restore(ids []string) (EditResult, error) {
 		l.mu.Unlock()
 		pairLive(all)
 		l.setItems(all)
-		l.saveIndex()
+		l.saveSoon()
 		l.recluster()
 		l.bump()
 	}

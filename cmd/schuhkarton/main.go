@@ -599,7 +599,9 @@ func samePort(a, b string) bool {
 }
 
 func (r *runner) start(cfg *config.Config) error {
-	lib, err := gallery.Open(libOptions(cfg))
+	opts := libOptions(cfg)
+	opts.AsyncRegroup = true // a name given shows at once; the groups follow in the background
+	lib, err := gallery.Open(opts)
 	if err != nil {
 		return err
 	}
