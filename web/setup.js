@@ -12,6 +12,12 @@
   const clone = (o) => JSON.parse(JSON.stringify(o));
   const LANG = window.skLang || 'de';
   const t = window.skT || ((s) => s);
+  // progress as a ring: a thin track, the share done drawn around it from the top (f: 0 … 1)
+  const ring = (f, cls = '') => {
+    const p = Math.max(0, Math.min(100, (Number(f) || 0) * 100));
+    return `<svg class="ring ${cls}" viewBox="0 0 24 24" aria-hidden="true"><circle class="rt" cx="12" cy="12" r="9.5" pathLength="100"/>`
+      + `<circle class="rv${p < 0.5 ? ' zero' : ''}" cx="12" cy="12" r="9.5" pathLength="100" stroke-dasharray="${p.toFixed(1)} 100"/></svg>`;
+  };
 
   // a request that takes a while shows the small loading animation in the footer (after 400 ms)
   let busyN = 0, busyT = 0;
@@ -995,7 +1001,7 @@
       }
       if (st[`${p}Fail`]) lines.push(pl(st[`${p}Fail`], '{n} fehlgeschlagen', '{n} fehlgeschlagen'));
       if (st[`${p}Tokens`]) lines.push(t('{n} Tokens bisher', { n: num(st[`${p}Tokens`]) }));
-      return `<p>${done}</p><div class="bar"><i style="width:${Math.min(100, (n / todo) * 100)}%"></i></div>
+      return `<div class="ring-row">${ring(n / todo)}<p>${done}</p></div>
         ${lines.length ? `<p class="muted small">${lines.join(' · ')}</p>` : ''}`;
     };
     const parts = [];
@@ -1327,7 +1333,7 @@
           ${row(t('Konten'), [S.needAdmin ? `${t('Admin')}: ${esc(admin.name)}` : '', C.access.anonymous ? t('ansehen ohne Konto') : t('nur mit Konto'), C.access.register ? t('Registrieren mit Freigabe') : t('Konten nur durch Admins')].filter(Boolean).join(' · '))}
           ${row(t('Datei'), `<code>${esc(S.configPath)}</code>`)}
         </div>
-        <div id="prog" hidden><div class="bar"><i></i></div><p class="muted" id="progText"></p></div>
+        <div id="prog" hidden><div class="ring-row">${ring(0.05, 'big')}<p class="muted" id="progText"></p></div></div>
       </section>`;
   }
 
@@ -1347,7 +1353,10 @@
       // HTTPS on or off: the old address stops answering once the switch is done
       // (503: still restarting, e.g. copying a cache; the switch comes after that)
       try { p = await api('/api/setup/progress'); } catch (e) { if (tlsFlip() && e.status !== 503) followTLS('/'); else setTimeout(poll, 1000); return; }
-      $('#prog .bar i').style.width = p.total ? `${(p.done / p.total) * 100}%` : p.finished ? '100%' : '30%';
+      const rv = $('#prog .rv');
+      const pc = p.total ? (p.done / p.total) * 100 : p.finished ? 100 : 30;
+      rv.setAttribute('stroke-dasharray', `${pc.toFixed(1)} 100`);
+      rv.classList.toggle('zero', pc < 0.5);
       $('#progText').textContent = `${t(p.phase || '')}${p.total ? ` ${num(p.done)} / ${num(p.total)}` : ''}`;
       if (p.finished) {
         if (p.error) { $('#progText').innerHTML = `<span class="bad">${esc(t(p.error))}</span>`; btn.disabled = false; return; }

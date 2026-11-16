@@ -8,6 +8,12 @@
   const $$ = (s, el = document) => [...el.querySelectorAll(s)];
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const icon = (name, cls = '') => `<svg class="i ${cls}"><use href="#i-${name}"/></svg>`;
+  // progress as a ring: a thin track, the share done drawn around it from the top (f: 0 … 1)
+  const ring = (f, cls = '') => {
+    const p = Math.max(0, Math.min(100, (Number(f) || 0) * 100));
+    return `<svg class="ring ${cls}" viewBox="0 0 24 24" aria-hidden="true"><circle class="rt" cx="12" cy="12" r="9.5" pathLength="100"/>`
+      + `<circle class="rv${p < 0.5 ? ' zero' : ''}" cx="12" cy="12" r="9.5" pathLength="100" stroke-dasharray="${p.toFixed(1)} 100"/></svg>`;
+  };
   // forms that only group fields (password managers): Enter submits nothing
   document.addEventListener('submit', (e) => { if (e.target.matches?.('form[data-nosubmit]')) e.preventDefault(); });
   const store = {
@@ -3196,8 +3202,8 @@
     // drawn anew every few seconds: a focused toggle keeps the focus
     const focused = document.activeElement?.matches?.('[data-status-toggle]');
     $('#status').innerHTML = `<button class="status-head" data-status-toggle aria-expanded="${open}" title="${esc(t(open ? 'Einklappen' : 'Ausklappen'))}">
-        <span class="txt">${v.head}</span>${v.bad ? `<span class="bad n" title="${esc(t('Probleme, Details beim Ausklappen'))}">${icon('warn')}</span>` : ''}${icon('down', 'chev')}</button>
-      ${open ? v.rows.join('') : v.frac === null ? '' : `<span class="bar"><i style="width:${v.frac * 100}%"></i></span>`}`;
+        ${!open && v.frac !== null ? ring(v.frac) : ''}<span class="txt">${v.head}</span>${v.bad ? `<span class="bad n" title="${esc(t('Probleme, Details beim Ausklappen'))}">${icon('warn')}</span>` : ''}${icon('down', 'chev')}</button>
+      ${open ? v.rows.join('') : ''}`;
     if (focused) $('[data-status-toggle]')?.focus();
   }
   $('#status').addEventListener('click', (e) => {
@@ -3255,7 +3261,7 @@
         first ??= a / b;
         jobs++;
         fracSum += a / b;
-        rows.push(`<div class="row"><span>${label} ${num(a)} / ${num(b)}</span><span class="bar"><i style="width:${(a / b) * 100}%"></i></span></div>`);
+        rows.push(`<div class="row prog">${ring(a / b)}<span>${label} ${num(a)} / ${num(b)}</span></div>`);
         if (note) rows.push(`<div class="row sub">${note}</div>`);
       };
       if (scanning) {
@@ -3317,7 +3323,7 @@
       drawStatus();
       const mini = $('#statusMini');
       mini.hidden = first === null;
-      mini.style.setProperty('--p', Math.round((first ?? 0) * 100));
+      mini.innerHTML = first === null ? '' : ring(first);
       const all = document.createElement('div');
       all.innerHTML = rows.join('');
       mini.title = first === null ? '' : $$('.row', all).map((r) => [...r.children].map((c) => c.textContent).filter(Boolean).join(' · ')).join('\n');
@@ -3399,7 +3405,7 @@
   $('#menu').onclick = () => $('#side').classList.toggle('open');
   $('#slideBtn').onclick = () => slideshow();
   document.addEventListener('click', (e) => {
-    if ($('#side').classList.contains('open') && !e.target.closest('#side') && !e.target.closest('#menu') && !e.target.closest('.pop')) $('#side').classList.remove('open');
+    if ($('#side').classList.contains('open') && e.target.isConnected && !e.target.closest('#side') && !e.target.closest('#menu') && !e.target.closest('.pop')) $('#side').classList.remove('open');
   });
 
   // ---------------------------------------------------------------------------
@@ -3480,7 +3486,7 @@
     t, LANG, S, VIEWS, Viewer, Gallery, Account, api, post, toast, esc, icon, $, $$, num, plural, pl, clamp, debounce,
     fmtLong, fmtTime, fmtMonth, thumbURL, largeURL, tileLayer, galleryView,
     route: () => route, render, rerender, loadItems, loadPeople, scheduleReload, selectionChanged, endSelection, updateCounts, sheetGrip, phoneMQ,
-    fmtSize, fmtDay, shown, isTyping, menu, pageSelection, pageSelActive: () => !!pageSel, loader, loading, Busy,
+    fmtSize, fmtDay, shown, isTyping, menu, pageSelection, pageSelActive: () => !!pageSel, loader, loading, Busy, ring,
   };
 
   // ---------------------------------------------------------------------------

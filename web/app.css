@@ -102,10 +102,23 @@ body:has(#view .loading) .top .activity { opacity: 0; visibility: hidden; }
 .status-mini { display: none; }
 .status { font-size: 12px; color: var(--muted); display: grid; gap: 6px; }
 .status .row { display: grid; gap: 3px; }
-.status .bar { height: 3px; border-radius: 3px; background: var(--surface2); overflow: hidden; }
-.status .bar i { display: block; height: 100%; background: var(--accent); border-radius: 3px; transition: width .6s var(--ease); }
+/* progress: rings, not bars (a thin track, the share done drawn around it) */
+.ring { width: 18px; height: 18px; flex: none; transform: rotate(-90deg); overflow: visible; }
+.ring circle { fill: none; stroke-width: 3; }
+.ring .rt { stroke: var(--surface2); }
+.ring .rv { stroke: var(--accent); stroke-linecap: round; transition: stroke-dasharray .6s var(--ease); }
+.ring .rv.zero { stroke: none; }
+.ring.big { width: 40px; height: 40px; }
+.ring.big circle { stroke-width: 2.4; }
+.ring-row { display: flex; align-items: center; gap: 12px; }
+.status .row.prog { display: flex; align-items: center; gap: 8px; }
+.status .row.prog > span { min-width: 0; }
+.status .row.prog .ring { width: 16px; height: 16px; }
+.status .row.prog + .row.prog { margin-top: 2px; }
+.status-head .ring { width: 16px; height: 16px; }
+.status-mini .ring { width: 26px; height: 26px; }
+.status-mini .ring circle { stroke-width: 3.4; }
 .status .row button.link { justify-self: start; border: 0; background: none; padding: 0; color: var(--accent); font: inherit; font-size: 11.5px; cursor: pointer; }
-.status > .bar { display: block; } /* the folded panel's bar, also where .status is not a grid (phones) */
 .status-head { display: flex; align-items: center; gap: 6px; width: 100%; padding: 2px 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .status-head .txt { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .status-head .cnt { font-style: normal; font-size: 11px; padding: 0 6px; border-radius: 999px; background: var(--surface2); color: var(--muted); }
@@ -662,9 +675,7 @@ body > .pop.name-pop.sheet { z-index: 130; } /* a person of a selection: over th
   .nav a { justify-content: center; padding: 11px; }
   .side-tools { flex-direction: column; }
   .status-mini:not([hidden]) {
-    display: block; width: 26px; height: 26px; margin: 2px auto; border-radius: 50%;
-    background: conic-gradient(var(--accent) calc(var(--p, 0) * 1%), var(--surface2) 0);
-    -webkit-mask: radial-gradient(circle, transparent 8px, #000 8.5px); mask: radial-gradient(circle, transparent 8px, #000 8.5px);
+    display: grid; place-items: center; width: 26px; height: 26px; margin: 2px auto;
   }
   .mapwrap { grid-template-columns: 1fr 300px; }
 }
@@ -954,10 +965,8 @@ input:disabled, select:disabled { opacity: .6; }
 .setup .sumrow > span { color: var(--muted); }
 .setup .sumrow b { font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
 .setup #prog { margin-top: 16px; }
-.setup #prog .bar { height: 6px; border-radius: 3px; background: var(--surface2); overflow: hidden; }
-.setup #prog .bar i { display: block; height: 100%; width: 10%; background: var(--accent); transition: width .5s var(--ease); }
-.setup #aprog .bar { height: 6px; margin: 8px 0; border-radius: 3px; background: var(--surface2); overflow: hidden; }
-.setup #aprog .bar i { display: block; height: 100%; background: var(--accent); transition: width .5s var(--ease); }
+.setup #aprog .ring-row { margin: 4px 0 8px; }
+.setup #aprog .ring { width: 28px; height: 28px; }
 .setup #aprog p { margin: 0; }
 .setup .ocr-test { white-space: pre-line; }
 .setup-foot {
@@ -1245,9 +1254,8 @@ select.sel, .setup .user select, .setup #nrole, .adm-shift select {
 .mk-card .mk-n svg { width: 12px; height: 12px; }
 
 /* --- duplicates ---------------------------------------------------------------------------- */
-.dp-scan { display: grid; gap: 6px; margin: 0 0 14px; font-size: 13px; color: var(--muted); }
-.dp-scan .bar { display: block; height: 4px; border-radius: 3px; background: var(--surface2); overflow: hidden; }
-.dp-scan .bar i { display: block; height: 100%; background: var(--accent); transition: width .6s var(--ease); }
+.dp-scan { display: flex; align-items: center; gap: 10px; margin: 0 0 14px; font-size: 13px; color: var(--muted); }
+.dp-scan .ring { width: 22px; height: 22px; }
 .dp-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 12px; }
 .dp-chip em { font-style: normal; color: var(--muted); margin-left: 4px; }
 .dp-chip.on { background: color-mix(in srgb, var(--accent) 18%, var(--surface)); border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); color: var(--text); }
@@ -1382,9 +1390,8 @@ select.sel, .setup .user select, .setup #nrole, .adm-shift select {
 .ru-fmt code { justify-self: start; }
 .ru-fmt span { margin: -4px 0 4px; font-size: 13px; }
 .ru-fmt > code + span { grid-column: auto; }
-.ru-job { display: grid; gap: 6px; margin: 0 0 14px; font-size: 13px; color: var(--muted); max-width: 900px; }
-.ru-job .bar { display: block; height: 4px; border-radius: 3px; background: var(--surface2); overflow: hidden; }
-.ru-job .bar i { display: block; height: 100%; background: var(--accent); transition: width .6s var(--ease); }
+.ru-job { display: flex; align-items: center; gap: 10px; margin: 0 0 14px; font-size: 13px; color: var(--muted); max-width: 900px; }
+.ru-job .ring { width: 22px; height: 22px; }
 .ru-bar {
   position: sticky; bottom: 0; z-index: 5; max-width: 900px; margin: 18px 0 0; padding: 12px 0 calc(12px + env(safe-area-inset-bottom));
   display: flex; align-items: center; gap: 8px; background: var(--bg); border-top: 1px solid var(--line);
@@ -1460,9 +1467,7 @@ body.selecting:has(#selbar:not([hidden])) .toast { bottom: calc(var(--selh, 0px)
   body.side-mini .nav a { justify-content: center; padding: 11px; }
   body.side-mini .side-tools { flex-direction: column; }
   body.side-mini .status-mini:not([hidden]) {
-    display: block; width: 26px; height: 26px; margin: 2px auto; border-radius: 50%;
-    background: conic-gradient(var(--accent) calc(var(--p, 0) * 1%), var(--surface2) 0);
-    -webkit-mask: radial-gradient(circle, transparent 8px, #000 8.5px); mask: radial-gradient(circle, transparent 8px, #000 8.5px);
+    display: grid; place-items: center; width: 26px; height: 26px; margin: 2px auto;
   }
   body.side-mini .acc-me { flex-direction: column; gap: 2px; padding: 6px 0; background: none; align-items: center; }
   body.side-mini :is(.acc-me > span, .acc-me .acc-dn, .acc-login span) { display: none; }

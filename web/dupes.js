@@ -186,7 +186,7 @@
         <div class="sub">${st.mode === 'off' ? esc(t('Die Suche nach Duplikaten ist ausgeschaltet (Einstellungen → Fotos).'))
           : total ? esc(t('{n} Gruppen · bis zu {s} frei', { n: num(total), s: size(st.save) })) : esc(t('Keine Duplikate gefunden'))}</div></div>
         <div class="tools"><button class="btn" data-rescan title="${esc(t('Alles neu vergleichen'))}">${icon('refresh')}<span>${esc(t('Neu prüfen'))}</span></button></div></div>
-      ${scanning ? `<div class="dp-scan"><span>${esc(t('Fotos werden verglichen'))} · ${num(st.done)} / ${num(st.todo)}</span><span class="bar"><i style="width:${st.todo ? (st.done / st.todo) * 100 : 5}%"></i></span></div>` : ''}
+      ${scanning ? `<div class="dp-scan">${SK.ring(st.todo ? st.done / st.todo : 0)}<span>${esc(t('Fotos werden verglichen'))} · ${num(st.done)} / ${num(st.todo)}</span></div>` : ''}
       <div class="dp-chips">${chip('all', 'Alle', total)}${chip('identisch', 'Identisch', c.identisch || 0)}${chip('gleich', 'Gleich', c.gleich || 0)}${chip('aehnlich', 'Ähnlich', c.aehnlich || 0)}</div>
       ${D.filter !== 'all' ? `<p class="dp-hint">${esc(t(CLASS_HINT[D.filter]))}</p>` : ''}
       ${sure.length > 1 ? `<div class="dp-bulk">${icon('spark')}<div class="grow"><b>${esc(t('Alle Vorschläge übernehmen'))}</b>
