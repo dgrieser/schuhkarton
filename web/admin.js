@@ -628,7 +628,7 @@
         <p><a class="btn primary" href="${esc(SK.Account.loginURL())}">${esc(t('Anmelden'))}</a></p></div>`;
       return;
     }
-    view.innerHTML = `<div class="head"><div><h1>${esc(t('Papierkorb'))}</h1><div class="sub">${esc(t('Wird geladen …'))}</div></div></div>`;
+    view.innerHTML = `<div class="head"><div><h1>${esc(t('Papierkorb'))}</h1><div class="sub">${esc(t('Wird geladen …'))}</div></div></div>${SK.loading()}`;
     const res = await trashCount();
     if (!res) { $('.sub', view).textContent = t('Papierkorb nicht erreichbar'); return; }
     if (SK.route().view !== 'papierkorb') return;
@@ -783,7 +783,7 @@
     view.innerHTML = `<div class="head"><div><h1>${esc(t('Änderungen'))}</h1><div class="sub">${esc(t('Wird geladen …'))}</div></div>
       <div class="tools"><select class="sel" data-kind title="${esc(t('Art'))}">${KINDS.map(([k, l]) => `<option value="${k}">${esc(t(l))}</option>`).join('')}</select>
         <select class="sel" data-by title="${esc(t('Wer'))}"><option value="">${esc(t('Alle'))}</option><option value="-">${esc(t('Schuhkarton'))}</option></select></div></div>
-      <div class="hx" data-hx></div><div class="hx-more"><button class="btn" data-more hidden>${esc(t('Ältere laden'))}</button></div>`;
+      <div class="hx" data-hx>${SK.loading()}</div><div class="hx-more"><button class="btn" data-more hidden>${esc(t('Ältere laden'))}</button></div>`;
     const box = $('[data-hx]', view);
     // the photos it was about; gone ones from the trash, else their names
     const thumbs = (c) => {

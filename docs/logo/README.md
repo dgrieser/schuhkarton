@@ -10,6 +10,12 @@ shows is set under *Einstellungen → Aussehen* or with `ui.logo` (default
 hourly, daily or weekly) in a random order that never shows one twice in a
 row.
 
+`NAME-loading.svg` in `web/logo/` is the loading animation the UI shows
+instead of a spinner: the box is closed, opens quickly while the photos rise
+and star and rays appear, closes slowly and stays closed for a second (3.2 s
+a loop; CSS inside the SVG, so it also runs in an `<img>`; with reduced
+motion it shows the logo standing still).
+
 ## Variants
 
 Pastel, strong (blue, red, green), scenes with colours of their own (sunset,

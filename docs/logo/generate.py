@@ -35,21 +35,25 @@ TEMPLATE = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="260 155 720 720" 
     <linearGradient id="sk-mountains" x1="0" y1="0" x2="1" y2="1"><stop stop-color="{mountains0}"/><stop offset="1" stop-color="{mountains1}"/></linearGradient>
     <linearGradient id="sk-heartBg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="{heartBg0}"/><stop offset="1" stop-color="{heartBg1}"/></linearGradient>
     <clipPath id="sk-scene"><rect x="429" y="405" width="238" height="260" rx="19"/></clipPath>
+    <clipPath id="sk-inbox"><rect x="260" y="155" width="720" height="640"/></clipPath>
   </defs>
   <!-- open lid -->
+  <g class="lid">
   <path fill="url(#sk-lidTop)" d="M306 479C286 451 298 401 322 367C339 341 363 321 401 307L672 222C719 207 740 207 760 220C781 236 795 265 784 294C773 326 745 359 694 392L408 493C357 510 326 515 306 479Z"/>
   <path fill="url(#sk-lidInside)" d="M324 459C339 420 393 400 463 381L722 307C755 297 773 289 783 299C776 331 740 361 694 392L406 493C361 511 338 507 324 484C320 476 320 468 324 459Z"/>
+  </g>
   <!-- box interior -->
   <path fill="url(#sk-rim)" d="M341 567C341 540 374 526 415 526H831C872 526 905 542 905 571C905 598 870 626 823 626H423C376 626 341 599 341 567Z"/>
   <path fill="{interior}" d="M368 566C372 548 399 544 432 544H833C858 544 880 555 880 569C880 583 862 592 835 593H406C381 592 368 581 368 566Z"/>
+  <g clip-path="url(#sk-inbox)">
   <!-- heart photo -->
-  <g transform="rotate(12 771 515)">
+  <g class="p2"><g transform="rotate(12 771 515)">
     <rect x="682" y="421" width="180" height="255" rx="29" fill="{paper0}"/>
     <rect x="707" y="448" width="133" height="208" rx="17" fill="url(#sk-heartBg)"/>
     <path fill="{heart}" d="M774 510C760 492 735 498 735 522C735 544 755 556 774 570C793 556 815 541 815 520C815 497 790 493 774 510Z"/>
-  </g>
+  </g></g>
   <!-- landscape photo -->
-  <g transform="rotate(-12 551 507)">
+  <g class="p1"><g transform="rotate(-12 551 507)">
     <rect x="412" y="393" width="281" height="307" rx="30" fill="{paper1}"/>
     <g clip-path="url(#sk-scene)">
       <rect x="429" y="405" width="238" height="260" rx="19" fill="url(#sk-sky)"/>
@@ -57,6 +61,7 @@ TEMPLATE = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="260 155 720 720" 
       <path fill="url(#sk-mountains)" d="M429 560C460 548 476 510 509 505C540 503 570 546 598 559C626 540 638 527 654 530C681 537 696 564 712 572L712 678H429Z"/>
       <path fill="{shade}" opacity="0.5" d="M570 561C604 568 619 532 651 533C678 535 699 564 712 576V678H570Z"/>
     </g>
+  </g></g>
   </g>
   <!-- box front -->
   <path fill="url(#sk-box)" d="M341 572C356 592 388 603 419 603H827C862 603 891 589 905 572V718C905 777 865 819 807 819H440C382 819 341 777 341 719Z"/>
@@ -65,8 +70,8 @@ TEMPLATE = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="260 155 720 720" 
   <!-- front handle -->
   <rect x="530" y="667" width="185" height="55" rx="28" fill="url(#sk-slot)"/>
   <!-- sparkle -->
-  <path fill="{sparkle}" d="M854 273C858 273 859 292 867 303C876 315 900 317 900 322C900 328 878 330 868 344C860 356 858 371 854 371C850 371 848 354 839 343C829 330 809 326 809 322C809 318 830 316 840 303C849 291 849 273 854 273Z"/>
-  <path d="M896 371L927 355M896 412L926 424" fill="none" stroke="{rays}" stroke-width="19" stroke-linecap="round"/>
+  <path class="star" fill="{sparkle}" d="M854 273C858 273 859 292 867 303C876 315 900 317 900 322C900 328 878 330 868 344C860 356 858 371 854 371C850 371 848 354 839 343C829 330 809 326 809 322C809 318 830 316 840 303C849 291 849 273 854 273Z"/>
+  <path class="rays" d="M896 371L927 355M896 412L926 424" fill="none" stroke="{rays}" stroke-width="19" stroke-linecap="round"/>
 </svg>
 """
 
@@ -497,6 +502,67 @@ def svg(name):
     return TEMPLATE.format(**palette(*VARIANTS[name][1:]))
 
 
+# --- loading animation -----------------------------------------------------------
+
+# The logo as a loading animation (web/logo/NAME-loading.svg): the box is
+# closed, opens quickly, the photos rise, star and rays appear; then it closes
+# slowly and stays closed for a second. CSS inside the SVG, so it also runs in
+# an <img>. The open state is the plain drawing; without motion (reduced
+# motion) it stays like that.
+LOADING_CSS = """
+  <style>
+    .lid, .p1, .p2, .star, .rays { transform-box: fill-box; transform-origin: center; animation: 3.2s infinite both; }
+    .lid { animation-name: sk-lid; }
+    .lid-front { animation-name: sk-lid, sk-front; }
+    .p1 { animation-name: sk-p1; }
+    .p2 { animation-name: sk-p2; }
+    .star { animation-name: sk-star; }
+    .rays { animation-name: sk-rays; }
+    @keyframes sk-lid {
+      0%, 4% { transform: translate(LIDXpx, LIDYpx) rotate(LIDAdeg) scale(LIDS, 1); animation-timing-function: cubic-bezier(.2, .8, .3, 1.15); }
+      16%, 30% { transform: none; animation-timing-function: cubic-bezier(.5, 0, .4, 1); }
+      68%, 100% { transform: translate(LIDXpx, LIDYpx) rotate(LIDAdeg) scale(LIDS, 1); }
+    }
+    @keyframes sk-front { 0%, 6% { opacity: 1; } 7%, 62% { opacity: 0; } 63%, 100% { opacity: 1; } }
+    @keyframes sk-p1 {
+      0%, 7% { transform: translateY(260px); animation-timing-function: cubic-bezier(.2, .8, .3, 1.2); }
+      20%, 36% { transform: none; animation-timing-function: ease-in; }
+      60%, 100% { transform: translateY(260px); }
+    }
+    @keyframes sk-p2 {
+      0%, 10% { transform: translateY(240px); animation-timing-function: cubic-bezier(.2, .8, .3, 1.25); }
+      23%, 33% { transform: none; animation-timing-function: ease-in; }
+      57%, 100% { transform: translateY(240px); }
+    }
+    @keyframes sk-star {
+      0%, 17% { transform: scale(0) rotate(-90deg); opacity: 0; animation-timing-function: cubic-bezier(.2, .8, .3, 1.4); }
+      26%, 34% { transform: none; opacity: 1; }
+      44%, 100% { transform: scale(0) rotate(45deg); opacity: 0; }
+    }
+    @keyframes sk-rays {
+      0%, 22% { transform: scale(.2); opacity: 0; animation-timing-function: ease-out; }
+      29%, 34% { transform: none; opacity: 1; }
+      42%, 100% { transform: scale(.2); opacity: 0; }
+    }
+    @media (prefers-reduced-motion: reduce) { .lid, .p1, .p2, .star, .rays { animation: none; } .lid-front { display: none; } }
+  </style>
+"""
+# the closed lid: turned flat and moved onto the box, a little wider
+LID = {"LIDX": 82, "LIDY": 172, "LIDA": 17.5, "LIDS": 1.13}
+
+
+def loading_svg(name):
+    s = svg(name)
+    css = LOADING_CSS
+    for k, v in LID.items():
+        css = css.replace(k, str(v))
+    s = s.replace("  </defs>\n", "  </defs>" + css, 1)
+    # the lid twice: behind the photos while open, in front of the box when closed
+    lid = s[s.index('  <g class="lid">'):s.index("  </g>\n", s.index('  <g class="lid">')) + len("  </g>\n")]
+    s = s.replace("</svg>", lid.replace('class="lid"', 'class="lid lid-front"') + "</svg>")
+    return s.replace('aria-label="Schuhkarton logo"', 'aria-label="Schuhkarton lädt"')
+
+
 # --- rendering ----------------------------------------------------------------
 
 RENDER_JS = r"""
@@ -550,6 +616,7 @@ def main():
     for name in VARIANTS:
         p = ui / f"{name}.svg"
         p.write_text(svg(name))
+        (ui / f"{name}-loading.svg").write_text(loading_svg(name))
         jobs += [
             {"svg": p, "size": 180, "bg": "#ffffff", "pad": 14, "out": ui / f"{name}-180.png"},
             {"svg": p, "size": 64, "out": ui / f"_{name}-64.png"},

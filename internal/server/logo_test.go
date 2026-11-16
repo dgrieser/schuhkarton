@@ -28,7 +28,7 @@ func TestWithLogo(t *testing.T) {
 // every name in config.Logos has its files, and every page names the default
 func TestLogoFiles(t *testing.T) {
 	for _, n := range config.Logos {
-		for _, f := range []string{n + ".svg", n + ".ico", n + "-180.png"} {
+		for _, f := range []string{n + ".svg", n + "-loading.svg", n + ".ico", n + "-180.png"} {
 			if _, err := fs.Stat(web.FS, "logo/"+f); err != nil {
 				t.Errorf("logo/%s: %v", f, err)
 			}

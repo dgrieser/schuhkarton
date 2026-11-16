@@ -1195,7 +1195,7 @@
 
   // --- step 6b: accounts -------------------------------------------------------------------
   async function renderUsers(el) {
-    el.innerHTML = `<section class="card"><h2>${t('Benutzer')}</h2><p class="muted">${t('wird geladen …')}</p></section>`;
+    el.innerHTML = `<section class="card"><h2>${t('Benutzer')}</h2><div class="loading"><img class="loader" alt="${esc(t('wird geladen …'))}" src="${esc(($('img.logo')?.getAttribute('src') || '/assets/logo/aqua.svg').replace(/\.svg$/, '-loading.svg'))}"></div></section>`;
     let res;
     try { res = await api('/api/users'); } catch (e) { el.innerHTML = `<section class="card"><p class="bad">${esc(t(e.message))}</p></section>`; return; }
     const when = (d) => (d && !d.startsWith('0001') ? new Date(d).toLocaleDateString(LANG === 'de' ? 'de-DE' : 'en-GB') : '–');

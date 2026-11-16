@@ -20,6 +20,9 @@
   const LANG = window.skLang || 'de';
   const EN = LANG === 'en';
   const t = window.skT || ((s) => s);
+  // the loading animation: the logo in the colour the page shows, opening and closing
+  const loader = (cls = '') => `<img class="loader ${cls}" alt="${esc(t('Wird geladen …'))}" src="${esc((document.querySelector('img.logo')?.getAttribute('src') || '/assets/logo/aqua.svg').replace(/\.svg$/, '-loading.svg'))}">`;
+  const loading = () => `<div class="loading">${loader()}</div>`;
   const nf = new Intl.NumberFormat(EN ? 'en-GB' : 'de-DE');
   const num = (n) => nf.format(n);
   // counted text: pl(3, '{n} Foto', '{n} Fotos') → "3 Fotos" / "3 photos"
@@ -2872,7 +2875,7 @@
     },
 
     async personen(view) {
-      view.innerHTML = `<div class="head"><div><h1>${t('Personen')}</h1><div class="sub">${t('wird geladen …')}</div></div></div>`;
+      view.innerHTML = `<div class="head"><div><h1>${t('Personen')}</h1><div class="sub">${t('wird geladen …')}</div></div></div>${loading()}`;
       await loadPeople().catch(() => {});
       if (route.view !== 'personen') return;
       const info = S.peopleInfo;
@@ -3014,7 +3017,7 @@
         view.innerHTML = `<div class="empty"><h2>${t('Ausgeblendete Personen')}</h2><p>${t('Ausblenden und wieder zeigen geht mit einem Konto.')}</p><p><a class="btn primary" href="${esc(Account.loginURL())}">${t('Anmelden')}</a></p></div>`;
         return;
       }
-      view.innerHTML = head(t('wird geladen …'));
+      view.innerHTML = head(t('wird geladen …')) + loading();
       let list;
       try {
         list = (await api('/api/people/hidden')).hidden || [];
@@ -3457,7 +3460,7 @@
     t, LANG, S, VIEWS, Viewer, Gallery, Account, api, post, toast, esc, icon, $, $$, num, plural, pl, clamp, debounce,
     fmtLong, fmtTime, fmtMonth, thumbURL, largeURL, tileLayer, galleryView,
     route: () => route, render, rerender, loadItems, loadPeople, scheduleReload, selectionChanged, endSelection, updateCounts, sheetGrip, phoneMQ,
-    fmtSize, fmtDay, shown, isTyping, menu, pageSelection, pageSelActive: () => !!pageSel,
+    fmtSize, fmtDay, shown, isTyping, menu, pageSelection, pageSelActive: () => !!pageSel, loader, loading,
   };
 
   // ---------------------------------------------------------------------------

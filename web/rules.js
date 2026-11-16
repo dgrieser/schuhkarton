@@ -58,7 +58,7 @@
       view.innerHTML = `<div class="empty">${icon('rules')}<h2>${esc(t('Ablage'))}</h2><p>${esc(t('Nur für Admins.'))}</p></div>`;
       return;
     }
-    view.innerHTML = `<div class="head"><div><h1>${esc(t('Ablage'))}</h1><div class="sub">${esc(t('Wird geladen …'))}</div></div></div>`;
+    view.innerHTML = `<div class="head"><div><h1>${esc(t('Ablage'))}</h1><div class="sub">${esc(t('Wird geladen …'))}</div></div></div>${SK.loading()}`;
     if (!(await load())) { $('.sub', view).textContent = t('Nicht erreichbar'); return; }
     draw(view);
     preview(view);

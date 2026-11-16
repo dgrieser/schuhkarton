@@ -166,7 +166,7 @@
       view.innerHTML = `<div class="empty">${icon('dupes')}<h2>${esc(t('Duplikate'))}</h2><p>${esc(t('Nur für Admins.'))}</p></div>`;
       return;
     }
-    if (!D.loaded) view.innerHTML = `<div class="head"><div><h1>${esc(t('Duplikate'))}</h1><div class="sub">${esc(t('Wird geladen …'))}</div></div></div>`;
+    if (!D.loaded) view.innerHTML = `<div class="head"><div><h1>${esc(t('Duplikate'))}</h1><div class="sub">${esc(t('Wird geladen …'))}</div></div></div>${SK.loading()}`;
     if (!(await load())) { $('.sub', view) && ($('.sub', view).textContent = t('Nicht erreichbar')); return; }
     draw(view);
   };
@@ -330,7 +330,7 @@
         const b = $('[data-apply]', el);
         el.classList.add('dp-busy');
         for (const x of $$('.dp-foot button, [data-keep], [data-prev], [data-next]', el)) x.disabled = true;
-        b.innerHTML = `<span class="dp-spin"></span><span>${esc(t('Wird gelöscht …'))}</span>`;
+        b.innerHTML = `${SK.loader('dp-spin')}<span>${esc(t('Wird gelöscht …'))}</span>`;
         const ok = await apply([g]);
         el.classList.remove('dp-busy');
         render(); // the next group, or this one again after an error
