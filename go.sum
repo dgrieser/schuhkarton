@@ -2,8 +2,8 @@ github.com/ebitengine/purego v0.10.1 h1:dewVBCBT2GaMu1SrNTYxQhgQBethzfhiwvZiLGP/
 github.com/ebitengine/purego v0.10.1/go.mod h1:iIjxzd6CiRiOG0UyXP+V1+jWqUXVjPKLAI0mRfJZTmQ=
 github.com/gen2brain/avif v0.6.0 h1:/8WSgcU+IEF0jhKYsUZ/mzlziFuTeJFpIKBj2siTQps=
 github.com/gen2brain/avif v0.6.0/go.mod h1:QgrYqdVE9y40PCfArK9VakcMIpYeDYpZmCSLkW6C1n8=
-github.com/gen2brain/h265 v0.2.4 h1:JUSbGkRAYZpd7ucCL192yx4ViEo75ZO6OEdm1TQt9qM=
-github.com/gen2brain/h265 v0.2.4/go.mod h1:kefpLxLhGpNCUG/q/aabJcD6GqB9Nhet3fNi9xX9Wzw=
+github.com/gen2brain/h265 v0.2.5 h1:D3qCPx5GU+gHpinvLJtYMLSmQy64RGOm4fzMNGQcA1g=
+github.com/gen2brain/h265 v0.2.5/go.mod h1:kefpLxLhGpNCUG/q/aabJcD6GqB9Nhet3fNi9xX9Wzw=
 github.com/gen2brain/heic v0.7.2 h1:iRJhkj0DQ9MAiIInH8o6ygy6E+KNfdIWNAZfxRxbPGM=
 github.com/gen2brain/heic v0.7.2/go.mod h1:ja42wMJc4fpnKsfdUJxeZa2YqqRnes1wS0xqs5+8o5w=
 github.com/tetratelabs/wazero v1.12.0 h1:DuWcpNu/FzgEXgGBDp8J1Spc+CWOvvtvVyjKlaZopYU=
