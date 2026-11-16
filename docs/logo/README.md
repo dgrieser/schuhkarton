@@ -1,0 +1,44 @@
+# Logo
+
+`logo.svg` is the logo (aqua). The UI uses copies of it in `web/`: `logo.svg`,
+`favicon.svg`, `favicon.ico` (16–256 px) and `apple-touch-icon.png` (180 px
+on white).
+
+## Variants
+
+Pastel, muted (gedeckt) and black and white. The box changes its colour, the
+photos inside keep theirs. PNGs are transparent, JPGs are on white.
+
+<table>
+<tr>
+<td align="center"><img src="svg/schuhkarton-aqua.svg" width="120" alt="Aqua (original)"><br><b>aqua</b><br><sub>Aqua (original)</sub><br><sub><a href="svg/schuhkarton-aqua.svg">SVG</a> · <a href="png/schuhkarton-aqua-512.png">PNG 512</a> · <a href="png/schuhkarton-aqua-1024.png">PNG 1024</a> · <a href="jpg/schuhkarton-aqua.jpg">JPG</a></sub></td>
+<td align="center"><img src="svg/schuhkarton-peach.svg" width="120" alt="Pfirsich"><br><b>peach</b><br><sub>Pfirsich</sub><br><sub><a href="svg/schuhkarton-peach.svg">SVG</a> · <a href="png/schuhkarton-peach-512.png">PNG 512</a> · <a href="png/schuhkarton-peach-1024.png">PNG 1024</a> · <a href="jpg/schuhkarton-peach.jpg">JPG</a></sub></td>
+<td align="center"><img src="svg/schuhkarton-rose.svg" width="120" alt="Rosé"><br><b>rose</b><br><sub>Rosé</sub><br><sub><a href="svg/schuhkarton-rose.svg">SVG</a> · <a href="png/schuhkarton-rose-512.png">PNG 512</a> · <a href="png/schuhkarton-rose-1024.png">PNG 1024</a> · <a href="jpg/schuhkarton-rose.jpg">JPG</a></sub></td>
+<td align="center"><img src="svg/schuhkarton-lavender.svg" width="120" alt="Lavendel"><br><b>lavender</b><br><sub>Lavendel</sub><br><sub><a href="svg/schuhkarton-lavender.svg">SVG</a> · <a href="png/schuhkarton-lavender-512.png">PNG 512</a> · <a href="png/schuhkarton-lavender-1024.png">PNG 1024</a> · <a href="jpg/schuhkarton-lavender.jpg">JPG</a></sub></td>
+</tr>
+<tr>
+<td align="center"><img src="svg/schuhkarton-mint.svg" width="120" alt="Minze"><br><b>mint</b><br><sub>Minze</sub><br><sub><a href="svg/schuhkarton-mint.svg">SVG</a> · <a href="png/schuhkarton-mint-512.png">PNG 512</a> · <a href="png/schuhkarton-mint-1024.png">PNG 1024</a> · <a href="jpg/schuhkarton-mint.jpg">JPG</a></sub></td>
+<td align="center"><img src="svg/schuhkarton-lemon.svg" width="120" alt="Zitrone"><br><b>lemon</b><br><sub>Zitrone</sub><br><sub><a href="svg/schuhkarton-lemon.svg">SVG</a> · <a href="png/schuhkarton-lemon-512.png">PNG 512</a> · <a href="png/schuhkarton-lemon-1024.png">PNG 1024</a> · <a href="jpg/schuhkarton-lemon.jpg">JPG</a></sub></td>
+<td align="center"><img src="svg/schuhkarton-sky.svg" width="120" alt="Himmel"><br><b>sky</b><br><sub>Himmel</sub><br><sub><a href="svg/schuhkarton-sky.svg">SVG</a> · <a href="png/schuhkarton-sky-512.png">PNG 512</a> · <a href="png/schuhkarton-sky-1024.png">PNG 1024</a> · <a href="jpg/schuhkarton-sky.jpg">JPG</a></sub></td>
+<td align="center"><img src="svg/schuhkarton-sage.svg" width="120" alt="Salbei (gedeckt)"><br><b>sage</b><br><sub>Salbei (gedeckt)</sub><br><sub><a href="svg/schuhkarton-sage.svg">SVG</a> · <a href="png/schuhkarton-sage-512.png">PNG 512</a> · <a href="png/schuhkarton-sage-1024.png">PNG 1024</a> · <a href="jpg/schuhkarton-sage.jpg">JPG</a></sub></td>
+</tr>
+<tr>
+<td align="center"><img src="svg/schuhkarton-slate.svg" width="120" alt="Schiefer (gedeckt)"><br><b>slate</b><br><sub>Schiefer (gedeckt)</sub><br><sub><a href="svg/schuhkarton-slate.svg">SVG</a> · <a href="png/schuhkarton-slate-512.png">PNG 512</a> · <a href="png/schuhkarton-slate-1024.png">PNG 1024</a> · <a href="jpg/schuhkarton-slate.jpg">JPG</a></sub></td>
+<td align="center"><img src="svg/schuhkarton-clay.svg" width="120" alt="Ton (gedeckt)"><br><b>clay</b><br><sub>Ton (gedeckt)</sub><br><sub><a href="svg/schuhkarton-clay.svg">SVG</a> · <a href="png/schuhkarton-clay-512.png">PNG 512</a> · <a href="png/schuhkarton-clay-1024.png">PNG 1024</a> · <a href="jpg/schuhkarton-clay.jpg">JPG</a></sub></td>
+<td align="center"><img src="svg/schuhkarton-mauve.svg" width="120" alt="Malve (gedeckt)"><br><b>mauve</b><br><sub>Malve (gedeckt)</sub><br><sub><a href="svg/schuhkarton-mauve.svg">SVG</a> · <a href="png/schuhkarton-mauve-512.png">PNG 512</a> · <a href="png/schuhkarton-mauve-1024.png">PNG 1024</a> · <a href="jpg/schuhkarton-mauve.jpg">JPG</a></sub></td>
+<td align="center"><img src="svg/schuhkarton-mono.svg" width="120" alt="Schwarzweiß"><br><b>mono</b><br><sub>Schwarzweiß</sub><br><sub><a href="svg/schuhkarton-mono.svg">SVG</a> · <a href="png/schuhkarton-mono-512.png">PNG 512</a> · <a href="png/schuhkarton-mono-1024.png">PNG 1024</a> · <a href="jpg/schuhkarton-mono.jpg">JPG</a></sub></td>
+</tr>
+</table>
+
+## Building
+
+All files here and the icons in `web/` come from `generate.py` (needs Python
+with Pillow, and Node with Playwright and Chromium):
+
+```sh
+python3 docs/logo/generate.py
+```
+
+A variant is a turn of the hue, a factor for the chroma and a shift of the
+lightness in OKLCH, applied to the colours of the original; new variants go
+into `VARIANTS`.

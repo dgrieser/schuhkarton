@@ -68,7 +68,7 @@ func role(r *http.Request) string {
 // publicPath is reachable without an account or access key.
 func publicPath(p string) bool {
 	switch p {
-	case "/healthz", "/login", "/api/me", "/api/config", "/setup":
+	case "/healthz", "/favicon.ico", "/login", "/api/me", "/api/config", "/setup":
 		return true
 	}
 	return strings.HasPrefix(p, "/assets/") || strings.HasPrefix(p, "/api/auth/") || strings.HasPrefix(p, "/api/setup/")

@@ -59,6 +59,7 @@ func New(ctx context.Context, o Options) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", s.page)
 	mux.Handle("GET /assets/", http.StripPrefix("/assets/", assetHandler(s.files)))
+	mux.Handle("GET /favicon.ico", faviconHandler(s.files))
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok\n")) })
 	mux.HandleFunc("GET /api/config", s.config)
 	mux.HandleFunc("GET /api/status", s.status)
@@ -168,6 +169,15 @@ func assetHandler(files fs.FS) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-cache")
 		fsrv.ServeHTTP(w, r)
+	})
+}
+
+// faviconHandler answers /favicon.ico, where browsers and feed readers look
+// without being told; the pages themselves point to /assets/.
+func faviconHandler(files fs.FS) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		http.ServeFileFS(w, r, files, "favicon.ico")
 	})
 }
 

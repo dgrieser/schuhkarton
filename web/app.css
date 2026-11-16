@@ -68,7 +68,7 @@ svg.i.fill { fill: currentColor; stroke: none; }
   border-right: 1px solid var(--line);
 }
 .brand { display: flex; align-items: center; gap: 10px; padding: 4px 10px 18px; font-weight: 700; font-size: 19px; letter-spacing: -.02em; }
-.brand .logo { width: 30px; height: 30px; flex: none; filter: drop-shadow(0 4px 10px rgba(243, 181, 73, .35)); }
+.brand .logo { width: 30px; height: 30px; flex: none; filter: drop-shadow(0 4px 10px rgba(72, 200, 220, .3)); }
 .nav a {
   display: flex; align-items: center; gap: 12px;
   padding: 9px 12px; border-radius: 10px;
@@ -843,7 +843,7 @@ body > .pop.name-pop.sheet { z-index: 130; } /* a person of a selection: over th
 body.setup { overflow-y: auto; }
 .setup-wrap { max-width: 860px; margin: 0 auto; padding: calc(24px + env(safe-area-inset-top)) 16px 120px; }
 .setup-head { display: flex; align-items: center; gap: 16px; margin-bottom: 18px; }
-.setup-head .logo { width: 48px; height: 48px; flex: none; filter: drop-shadow(0 6px 16px rgba(243, 181, 73, .35)); }
+.setup-head .logo { width: 48px; height: 48px; flex: none; filter: drop-shadow(0 6px 16px rgba(72, 200, 220, .3)); }
 .setup-head h1 { margin: 0; font-size: 26px; letter-spacing: -.02em; }
 .setup-head p { margin: 2px 0 0; }
 .setup-head .btn { margin-left: auto; }
@@ -982,7 +982,7 @@ body:not([data-role="admin"]):not([data-role="user"]) [data-need="user"] { displ
 /* --- login page --------------------------------------------------------------- */
 .login-wrap { max-width: 400px; margin: 0 auto; padding: calc(48px + env(safe-area-inset-top)) 16px 48px; }
 .login-head { display: flex; flex-direction: column; align-items: center; gap: 10px; margin-bottom: 18px; }
-.login-head .logo { width: 64px; height: 64px; filter: drop-shadow(0 6px 16px rgba(243, 181, 73, .35)); }
+.login-head .logo { width: 64px; height: 64px; filter: drop-shadow(0 6px 16px rgba(72, 200, 220, .3)); }
 .login-head h1 { margin: 0; font-size: 26px; letter-spacing: -.02em; }
 .login-tabs { display: flex; padding: 3px; gap: 2px; border-radius: 12px; background: var(--surface); border: 1px solid var(--line); margin-bottom: 12px; }
 .login-tabs button { flex: 1; height: 36px; border: 0; background: none; border-radius: 9px; color: var(--muted); font: inherit; font-weight: 600; cursor: pointer; }

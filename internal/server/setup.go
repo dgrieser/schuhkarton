@@ -118,6 +118,7 @@ func (s *Setup) Handler() http.Handler {
 	mux.HandleFunc("GET /api/setup/progress", s.guard(s.progress))
 	if s.o.Install {
 		mux.Handle("GET /assets/", http.StripPrefix("/assets/", assetHandler(s.files)))
+		mux.Handle("GET /favicon.ico", faviconHandler(s.files))
 		mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("setup\n")) })
 		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 			if r.Method == http.MethodGet && !strings.HasPrefix(r.URL.Path, "/api/") {

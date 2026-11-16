@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/logo/logo.svg" width="160" alt="Schuhkarton logo"></p>
+
 # Schuhkarton
 
 The digital shoebox: a fast photo and video gallery for your own folders. One
@@ -881,3 +883,8 @@ make faces-image  # build the face container locally
 | `internal/worker`, `internal/helper` | face recognition service and its Python helper |
 | `web` | the UI (vanilla JS; Leaflet in `web/vendor`), embedded into the binary |
 | `Dockerfile.faces`, `deploy/` | face container, compose example |
+
+## Logo
+
+The logo, its colour variants (pastel, muted, black and white) as SVG, PNG
+and JPG, and how they are made: [docs/logo](docs/logo/README.md).
