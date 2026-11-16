@@ -68,6 +68,10 @@ check: ## gofmt, vet, node syntax check, tests
 	@command -v node >/dev/null && node --check web/app.js || true
 	$(GO) test ./...
 
+.PHONY: vuln
+vuln: ## Known vulnerabilities the code is affected by (govulncheck)
+	$(GO) run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
 .PHONY: clean
 clean: ## Remove build output
 	rm -rf $(BINARY) dist

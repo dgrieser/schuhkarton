@@ -863,6 +863,7 @@ git tag v0.1.0 && git push origin v0.1.0
 ```sh
 make dev          # UI from ./web: reload the browser after edits
 make check        # gofmt, vet, JS syntax, tests
+make vuln         # govulncheck: known vulnerabilities in the Go version and the modules
 make build-all    # cross-compile every release target into dist/
 make snapshot     # GoReleaser dry run
 make faces-image  # build the face container locally
