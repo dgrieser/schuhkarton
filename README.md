@@ -755,7 +755,7 @@ ai:                           # image descriptions by a vision model (optional)
 ui:
   title: Schuhkarton
   theme: system               # default for new devices: system, light, dark
-  logo: aqua                  # logo and favicon: aqua, peach, rose, lavender, mint, lemon, sky, blue, red, green, sunset, nightsky, sage, slate, clay, mauve, mono
+  logo: aqua                  # logo and favicon: aqua, peach, rose, lavender, mint, lemon, sky, blue, red, green, sunset, nightsky, aurora, ocean, forest, fire, neon, candy, retro, kraft, gold, sepia, sage, slate, clay, mauve, mono
   language: auto              # default for new devices: auto (the browser's), de, en
   map_tiles: https://tile.openstreetmap.org/{z}/{x}/{y}.png
   map_attribution: © OpenStreetMap   # shown as plain text

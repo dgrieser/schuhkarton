@@ -106,6 +106,16 @@ VARIANTS = {
     "green":    ("Grün", -50, 1.5, -0.14, -110),
     "sunset":   ("Sonnenuntergang", 0, 1.0, 0.0),   # own colours: SCENES
     "nightsky": ("Nachthimmel", 0, 1.0, 0.0),      # own colours: SCENES
+    "aurora":   ("Polarlicht", 0, 1.0, 0.0),        # SCENES
+    "ocean":    ("Ozean", 0, 1.0, 0.0),             # SCENES
+    "forest":   ("Wald", 0, 1.0, 0.0),              # SCENES
+    "fire":     ("Feuer", 0, 1.0, 0.0),             # SCENES
+    "neon":     ("Neon", 0, 1.0, 0.0),              # SCENES
+    "candy":    ("Bonbon", 0, 1.0, 0.0),            # SCENES
+    "retro":    ("Retro", 0, 1.0, 0.0),             # SCENES
+    "kraft":    ("Karton", 0, 1.0, 0.0),            # SCENES
+    "gold":     ("Gold", 0, 1.0, 0.0),              # SCENES
+    "sepia":    ("Sepia", 0, 1.0, 0.0),             # TINTS
     "sage":     ("Salbei (gedeckt)", -50, 0.35, -0.04),
     "slate":    ("Schiefer (gedeckt)", 50, 0.3, -0.06),
     "clay":     ("Ton (gedeckt)", -150, 0.4, -0.05, 100),
@@ -142,6 +152,128 @@ SCENES = {
         "interior": "#141a4a", "shade": "#080c2c",
         "paper0": "#eef0ff", "paper1": "#f2f3ff", "heart": "#ffe8a3",
         "sun": "#f6f1cf", "sparkle": "#ffe48a", "rays": "#a9b8ff",
+    },
+    # dark box, lid in green and violet like the northern lights; the photo
+    # is a night with a green sky
+    "aurora": {
+        "lidTop0": "#5ef2b0", "lidTop1": "#8a7cf4",
+        "lidInside0": "#1c2a4a", "lidInside1": "#2a2f66",
+        "rim0": "#2f4f7a", "rim1": "#3b3f86",
+        "box0": "#1e3550", "box1": "#1b2a48", "box2": "#2b2a5e",
+        "slot0": "#5ef2b0", "slot1": "#7fe3c4",
+        "sky0": "#2bd99a", "sky1": "#6a5ce0",
+        "mountains0": "#0f1a33", "mountains1": "#1a2140",
+        "heartBg0": "#7a5ce8", "heartBg1": "#5b48c4",
+        "interior": "#121c36", "shade": "#060b1c",
+        "paper0": "#eefaf6", "paper1": "#f2f6ff", "heart": "#c8ffe8",
+        "sun": "#f4f6e0", "sparkle": "#9bffd2", "rays": "#b39cff",
+    },
+    # deep sea blue and turquoise; the photo is a beach with waves
+    "ocean": {
+        "lidTop0": "#38c6d9", "lidTop1": "#4fb3e8",
+        "lidInside0": "#0c4a7a", "lidInside1": "#145a90",
+        "rim0": "#1f86b8", "rim1": "#1670a6",
+        "box0": "#2a9fd0", "box1": "#1c86c0", "box2": "#2fa9c9",
+        "slot0": "#073a5e", "slot1": "#0a466e",
+        "sky0": "#9fe3ff", "sky1": "#c9f1ff",
+        "mountains0": "#0e7fc0", "mountains1": "#16a0c8",
+        "heartBg0": "#ff9e8a", "heartBg1": "#f28470",
+        "interior": "#0a3d68", "shade": "#0a5e96",
+        "sun": "#ffe27a", "sparkle": "#bff6ff", "rays": "#8fe0ff",
+    },
+    # moss and fir green with a wooden handle; the photo has hills of firs
+    "forest": {
+        "lidTop0": "#7fbf6a", "lidTop1": "#6aa85e",
+        "lidInside0": "#2d5a3a", "lidInside1": "#356a44",
+        "rim0": "#4f8a52", "rim1": "#437a48",
+        "box0": "#5f9a5a", "box1": "#4e8a50", "box2": "#6aa368",
+        "slot0": "#6b4a2b", "slot1": "#7a5432",
+        "sky0": "#bfe6d0", "sky1": "#dff2d8",
+        "mountains0": "#2f6b3e", "mountains1": "#3f7f46",
+        "heartBg0": "#e8a07a", "heartBg1": "#d98a62",
+        "interior": "#24482f", "shade": "#1d3f27",
+        "paper0": "#fbf8ef", "paper1": "#fcfaf2", "heart": "#fff7e8",
+        "sun": "#fff0a0", "sparkle": "#e6f59a", "rays": "#a8d98a",
+    },
+    # yellow to red like flames, dark red inside, embers in the photo
+    "fire": {
+        "lidTop0": "#ffd23f", "lidTop1": "#ff8a2a",
+        "lidInside0": "#b3141e", "lidInside1": "#d8261c",
+        "rim0": "#ff6a22", "rim1": "#f0451c",
+        "box0": "#ff9a2e", "box1": "#ff6a26", "box2": "#f4402a",
+        "slot0": "#5a0a0e", "slot1": "#6e0e12",
+        "sky0": "#ff5a1f", "sky1": "#ffb02e",
+        "mountains0": "#4a0d14", "mountains1": "#7a1418",
+        "heartBg0": "#ffb43a", "heartBg1": "#ff8a1f",
+        "interior": "#8e0f18", "shade": "#2a0508",
+        "paper0": "#fff6e6", "paper1": "#fff8ea", "heart": "#fff2d0",
+        "sun": "#fff3a8", "sparkle": "#ffe14a", "rays": "#ff7a2a",
+    },
+    # glowing pink and cyan on a box that is almost black
+    "neon": {
+        "lidTop0": "#ff2bd6", "lidTop1": "#b33cff",
+        "lidInside0": "#1a0b33", "lidInside1": "#260f4a",
+        "rim0": "#00e5ff", "rim1": "#2bb8ff",
+        "box0": "#1d1238", "box1": "#140c2a", "box2": "#24123f",
+        "slot0": "#39ff88", "slot1": "#2bf0a0",
+        "sky0": "#2a0f5c", "sky1": "#5a1690",
+        "mountains0": "#ff2bd6", "mountains1": "#00e5ff",
+        "heartBg0": "#00e5ff", "heartBg1": "#2b8cff",
+        "interior": "#0c0620", "shade": "#7a00ff",
+        "paper0": "#f4f0ff", "paper1": "#f6f2ff", "heart": "#ff2bd6",
+        "sun": "#fff23a", "sparkle": "#39ff88", "rays": "#ff2bd6",
+    },
+    # sweets: pink box, mint lid, lemon handle
+    "candy": {
+        "lidTop0": "#9df5d8", "lidTop1": "#b8f7e0",
+        "lidInside0": "#ff8fc8", "lidInside1": "#ffa6d4",
+        "rim0": "#ffb3d9", "rim1": "#ff9fcf",
+        "box0": "#ffc7e3", "box1": "#ffb8dc", "box2": "#ffd3ea",
+        "slot0": "#ffd84a", "slot1": "#ffcc33",
+        "sky0": "#a8e8ff", "sky1": "#c8f0ff",
+        "mountains0": "#c9a2ff", "mountains1": "#ff9fd6",
+        "heartBg0": "#ff6fae", "heartBg1": "#ff5a9e",
+        "interior": "#ff7fbf", "shade": "#a98aff",
+        "sun": "#fff27a", "sparkle": "#ffe066", "rays": "#7fe8d0",
+    },
+    # the seventies: mustard, burnt orange, brown and teal
+    "retro": {
+        "lidTop0": "#e8892f", "lidTop1": "#d9772a",
+        "lidInside0": "#7a4a22", "lidInside1": "#8a5428",
+        "rim0": "#2f8f8a", "rim1": "#287e7a",
+        "box0": "#e9b949", "box1": "#e0a93a", "box2": "#efc45a",
+        "slot0": "#6b3a1c", "slot1": "#7a4220",
+        "sky0": "#7fc4b4", "sky1": "#9fd2c0",
+        "mountains0": "#c4562a", "mountains1": "#a9462a",
+        "heartBg0": "#e8892f", "heartBg1": "#d46a2a",
+        "interior": "#5e3a1c", "shade": "#7a3a1e",
+        "paper0": "#fbf1dc", "paper1": "#fcf3e0", "heart": "#fbf1dc",
+        "sun": "#ffe08a", "sparkle": "#f2c94c", "rays": "#2f8f8a",
+    },
+    # a real shoebox: brown cardboard, darker inside, a cut-out handle
+    "kraft": {
+        "lidTop0": "#d9b08a", "lidTop1": "#cfa47c",
+        "lidInside0": "#9a6c45", "lidInside1": "#a9784e",
+        "rim0": "#b98a5e", "rim1": "#a97b52",
+        "box0": "#d6ab7e", "box1": "#c99c6f", "box2": "#dcb48a",
+        "slot0": "#4a2e1a", "slot1": "#56361e",
+        "interior": "#7e5535",
+        "paper0": "#fffaf2", "paper1": "#fffbf4", "heart": "#fff8ee",
+        "sparkle": "#ffe0a8", "rays": "#c99c6f",
+    },
+    # black box with a gold lid and handle
+    "gold": {
+        "lidTop0": "#f7d77a", "lidTop1": "#d9a93a",
+        "lidInside0": "#8a6420", "lidInside1": "#a77a2a",
+        "rim0": "#e6c060", "rim1": "#c99a36",
+        "box0": "#2a2a2e", "box1": "#1c1c20", "box2": "#34343a",
+        "slot0": "#f2cf6a", "slot1": "#d9a93a",
+        "sky0": "#3a3a42", "sky1": "#4a4a52",
+        "mountains0": "#c99a36", "mountains1": "#e6c060",
+        "heartBg0": "#2e2e34", "heartBg1": "#222228",
+        "interior": "#121214", "shade": "#8a6420",
+        "paper0": "#fbf6e8", "paper1": "#fcf8ec", "heart": "#f2cf6a",
+        "sun": "#fff0b0", "sparkle": "#ffe08a", "rays": "#e6c060",
     },
 }
 
@@ -202,8 +334,30 @@ def palette(turn, chroma, light, inner=None):
     return out
 
 
+# variants in one colour: every colour of the original keeps its lightness
+# (shifted) and gets this hue and chroma, like an old print
+TINTS = {
+    "sepia": (65, 0.06, -0.09),
+}
+
+
+def tint(hue, chroma, light):
+    out = {}
+    for k, h in ORIGINAL.items():
+        L, _, _ = hex_to_oklch(h)
+        L = min(0.97, max(0.0, L + light))
+        # the light parts (paper) a little paler, the dark ones a little richer
+        out[k] = oklch_to_hex(L, chroma * (0.6 if L > 0.93 else 1.0 + (0.8 - L)), hue)
+    return out
+
+
 def svg(name):
-    return TEMPLATE.format(**(SCENES.get(name) or palette(*VARIANTS[name][1:])))
+    if name in TINTS:
+        return TEMPLATE.format(**tint(*TINTS[name]))
+    if name in SCENES:
+        # colours a scene leaves out are the original's (usually the photos)
+        return TEMPLATE.format(**{**ORIGINAL, **SCENES[name]})
+    return TEMPLATE.format(**palette(*VARIANTS[name][1:]))
 
 
 # --- rendering ----------------------------------------------------------------

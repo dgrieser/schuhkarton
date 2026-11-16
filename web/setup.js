@@ -124,6 +124,8 @@
   // the colours of the logo (ui.logo), named for the settings page
   const LOGOS = { aqua: 'Aqua', peach: 'Pfirsich', rose: 'Rosé', lavender: 'Lavendel', mint: 'Minze', lemon: 'Zitrone', sky: 'Himmel',
     blue: 'Blau', red: 'Rot', green: 'Grün', sunset: 'Sonnenuntergang', nightsky: 'Nachthimmel',
+    aurora: 'Polarlicht', ocean: 'Ozean', forest: 'Wald', fire: 'Feuer', neon: 'Neon', candy: 'Bonbon', retro: 'Retro',
+    kraft: 'Karton', gold: 'Gold', sepia: 'Sepia',
     sage: 'Salbei (gedeckt)', slate: 'Schiefer (gedeckt)', clay: 'Ton (gedeckt)', mauve: 'Malve (gedeckt)', mono: 'Schwarzweiß' };
   const dis = (key) => (locked(key) ? 'disabled' : '');
   // settings by key ("media.thumb_size"): in the form (C), as saved (S.config), the default (S.defaults)
