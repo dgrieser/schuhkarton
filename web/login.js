@@ -47,6 +47,7 @@
     const name = $('#name').value.trim(), password = $('#pw').value;
     if (tab === 'register' && password !== $('#pw2').value) { msg(t('Die Passwörter sind verschieden')); return; }
     $('#submit').disabled = true;
+    const spin = setTimeout(() => document.querySelector('.activity')?.classList.add('on'), 400);
     try {
       if (tab === 'login') {
         const r = await post('/api/auth/login', { name, password });
@@ -62,6 +63,8 @@
         } else msg(t(r.error || ''));
       }
     } catch (err) { msg(t(err.message)); }
+    clearTimeout(spin);
+    document.querySelector('.activity')?.classList.remove('on');
     $('#submit').disabled = false;
   };
 

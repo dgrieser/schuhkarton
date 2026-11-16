@@ -610,7 +610,7 @@
   };
   async function trashCount() {
     if (!user()) return null;
-    const r = await api('/api/trash').catch(() => null);
+    const r = await api('/api/trash', { quiet: true }).catch(() => null);
     if (r) showTrashCount(r.entries.length);
     return r;
   }

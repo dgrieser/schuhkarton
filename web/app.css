@@ -70,7 +70,17 @@ svg.i.fill { fill: currentColor; stroke: none; }
 /* the loading animation (the logo opening and closing), centred where content is still coming */
 .loading { display: grid; place-items: center; padding: 12vh 0; animation: fadein .3s .25s both; }
 .loader { width: 96px; height: 96px; }
+/* the small one for anything that takes a while: a place of its own, so nothing jumps or gets covered */
+.activity { width: 30px; height: 30px; flex: none; display: grid; place-items: center; opacity: 0; visibility: hidden; transition: opacity .2s, visibility 0s .2s; }
+.activity.on { opacity: 1; visibility: visible; transition: opacity .2s; }
+/* a page that shows its own big loader needs no second one up top */
+body:has(#view .loading) .top .activity { opacity: 0; visibility: hidden; }
+.activity img { width: 28px; height: 28px; }
+@media (prefers-reduced-motion: reduce) { .activity.on img { animation: busy-pulse 1.2s ease-in-out infinite alternate; } }
+@keyframes busy-pulse { to { opacity: .35; } }
 .setup .loading { padding: 24px 0; }
+.setup .loading.page { min-height: 50vh; padding: 0; }
+.setup .loading.page .loader { width: 120px; height: 120px; }
 .setup .loading .loader { width: 64px; height: 64px; }
 .brand { display: flex; align-items: center; gap: 10px; padding: 4px 10px 18px; font-weight: 700; font-size: 19px; letter-spacing: -.02em; }
 .brand .logo { width: 30px; height: 30px; flex: none; filter: drop-shadow(0 4px 10px rgba(72, 200, 220, .3)); }
@@ -1001,6 +1011,9 @@ body:not([data-role="admin"]):not([data-role="user"]) [data-need="user"] { displ
 /* --- login page --------------------------------------------------------------- */
 .login-wrap { max-width: 400px; margin: 0 auto; padding: calc(48px + env(safe-area-inset-top)) 16px 48px; }
 .login-head { display: flex; flex-direction: column; align-items: center; gap: 10px; margin-bottom: 18px; }
+.login-go { display: flex; align-items: center; gap: 8px; }
+.login-go .btn { flex: 1; }
+.login-go .activity-pad { width: 30px; flex: none; }
 .login-head .logo { width: 64px; height: 64px; filter: drop-shadow(0 6px 16px rgba(72, 200, 220, .3)); }
 .login-head h1 { margin: 0; font-size: 26px; letter-spacing: -.02em; }
 .login-tabs { display: flex; padding: 3px; gap: 2px; border-radius: 12px; background: var(--surface); border: 1px solid var(--line); margin-bottom: 12px; }

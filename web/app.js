@@ -125,10 +125,26 @@
     toast(done);
   }
 
+  // Something that takes a while: after 400 ms the small loading animation
+  // shows in its places (.activity: the top bar, the viewer), never over
+  // the content. Requests count unless quiet (polls, background refreshes).
+  const Busy = {
+    n: 0, timer: 0,
+    start() { if (this.n++ === 0) this.timer = setTimeout(() => this.show(true), 400); },
+    end() { if (this.n > 0 && --this.n === 0) { clearTimeout(this.timer); this.show(false); } },
+    show(on) { for (const el of document.querySelectorAll('.activity')) el.classList.toggle('on', on); },
+  };
+
   async function api(path, opts) {
-    const r = await fetch(path, opts);
-    if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
-    return r.json();
+    const quiet = opts?.quiet;
+    if (!quiet) Busy.start();
+    try {
+      const r = await fetch(path, opts);
+      if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+      return await r.json();
+    } finally {
+      if (!quiet) Busy.end();
+    }
   }
   const post = (path, body) => api(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 
@@ -276,8 +292,8 @@
   const kindOf = (it) => (it.dc ? 'doc' : it.k === 2 ? 'video' : 'photo');
   const shown = (it) => S.kinds.has(kindOf(it));
 
-  async function loadItems() {
-    const res = await api('/api/items');
+  async function loadItems(quiet) {
+    const res = await api('/api/items', { quiet });
     for (const it of res.items) it.dc = !!it.dc; // the server knows the document folders
     S.items = res.items;
     S.byId = new Map(res.items.map((it) => [it.id, it]));
@@ -1036,7 +1052,11 @@
         img.draggable = false;
         m.appendChild(img);
         const big = new Image();
-        big.onload = () => { if (this.it === it) { img.src = big.src; img.classList.remove('lo'); this.drawFaces(); } };
+        let waiting = true; // the full picture counts as loading until it is there (or failed)
+        const done = () => { if (waiting) { waiting = false; Busy.end(); } };
+        Busy.start();
+        big.onload = () => { done(); if (this.it === it) { img.src = big.src; img.classList.remove('lo'); this.drawFaces(); } };
+        big.onerror = done;
         big.src = largeURL(it);
       }
       $('#vLive').hidden = !it.lv;
@@ -2313,7 +2333,7 @@
       const v = q.value.trim();
       if (!v) { opts = []; draw(); return; }
       const last = v.split(/\s+/).pop();
-      opts = (await api(`/api/suggest?q=${encodeURIComponent(last)}&lang=${LANG}`).catch(() => [])) || [];
+      opts = (await api(`/api/suggest?q=${encodeURIComponent(last)}&lang=${LANG}`, { quiet: true }).catch(() => [])) || [];
       on = -1;
       if (document.activeElement === q) draw();
     }, 120);
@@ -3159,7 +3179,7 @@
 
   let statusT = 0;
   const stalled = {}; // progress label -> last count and since when
-  const scheduleReload = debounce(async () => { await loadItems(); if (!Viewer.open_) rerender(); }, 300);
+  const scheduleReload = debounce(async () => { await loadItems(true); if (!Viewer.open_) rerender(); }, 300);
   // trying unreadable files again: a second click within a few seconds, since every try may freeze the share
   // (the deadline lives here: the status panel is drawn anew every few seconds)
   let unreadArmed = 0;
@@ -3203,7 +3223,7 @@
     clearTimeout(statusT);
     let busy = false;
     try {
-      const res = await api('/api/status');
+      const res = await api('/api/status', { quiet: true });
       const { status: s, scanning } = res;
       S.status = s;
       const rows = [];
@@ -3460,7 +3480,7 @@
     t, LANG, S, VIEWS, Viewer, Gallery, Account, api, post, toast, esc, icon, $, $$, num, plural, pl, clamp, debounce,
     fmtLong, fmtTime, fmtMonth, thumbURL, largeURL, tileLayer, galleryView,
     route: () => route, render, rerender, loadItems, loadPeople, scheduleReload, selectionChanged, endSelection, updateCounts, sheetGrip, phoneMQ,
-    fmtSize, fmtDay, shown, isTyping, menu, pageSelection, pageSelActive: () => !!pageSel, loader, loading,
+    fmtSize, fmtDay, shown, isTyping, menu, pageSelection, pageSelActive: () => !!pageSel, loader, loading, Busy,
   };
 
   // ---------------------------------------------------------------------------

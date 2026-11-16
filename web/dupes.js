@@ -49,7 +49,7 @@
   }
   async function summary() {
     if (!admin()) return;
-    const r = await api('/api/admin/dupes?summary=1').catch(() => null);
+    const r = await api('/api/admin/dupes?summary=1', { quiet: true }).catch(() => null);
     if (r) { D.status = r.status; count(); }
   }
 

@@ -13,10 +13,24 @@
   const LANG = window.skLang || 'de';
   const t = window.skT || ((s) => s);
 
+  // a request that takes a while shows the small loading animation in the footer (after 400 ms)
+  let busyN = 0, busyT = 0;
+  const busy = (on) => {
+    if (on && busyN++ === 0) busyT = setTimeout(() => $('.activity')?.classList.add('on'), 400);
+    if (!on && busyN > 0 && --busyN === 0) { clearTimeout(busyT); $('.activity')?.classList.remove('on'); }
+  };
+  // quiet: polls (progress of saving, backup) and the first load do not count
+  const QUIET = /^\/api\/(setup\/(progress|state)|backup$|status$)/; // state: the page shows its own loader
   async function api(path, body, method) {
-    const r = await fetch(path, body === undefined && !method ? {} : { method: method || 'POST', headers: { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
-    if (!r.ok) throw Object.assign(new Error((await r.text()) || r.statusText), { status: r.status });
-    return r.json();
+    const quiet = QUIET.test(path);
+    if (!quiet) busy(true);
+    try {
+      const r = await fetch(path, body === undefined && !method ? {} : { method: method || 'POST', headers: { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
+      if (!r.ok) throw Object.assign(new Error((await r.text()) || r.statusText), { status: r.status });
+      return await r.json();
+    } finally {
+      if (!quiet) busy(false);
+    }
   }
   let toastT;
   function toast(msg) {
