@@ -5,7 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0c0d0f">
 <title>Schuhkarton einrichten</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%23f3b549'/%3E%3Cstop offset='.55' stop-color='%23ff7a59'/%3E%3Cstop offset='1' stop-color='%23b46bff'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect x='4' y='12' width='24' height='16' rx='3' fill='url(%23g)'/%3E%3Crect x='2' y='6' width='28' height='8' rx='2.5' fill='url(%23g)'/%3E%3Crect x='2' y='12' width='28' height='2' fill='%23000' opacity='.18'/%3E%3Crect x='12' y='18' width='8' height='4' rx='1.2' fill='%230c0d0f' opacity='.5'/%3E%3C/svg%3E">
+<link rel="icon" href="/assets/logo/aqua.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/logo/aqua.ico" sizes="any">
+<link rel="apple-touch-icon" href="/assets/logo/aqua-180.png">
 <link rel="stylesheet" href="/assets/app.css">
 <script src="/assets/i18n.js"></script>
 <script src="/assets/theme.js"></script>
@@ -25,14 +27,15 @@
 </svg>
 <div class="setup-wrap">
   <header class="setup-head">
-    <svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#f3b549"/><stop offset=".55" stop-color="#ff7a59"/><stop offset="1" stop-color="#b46bff"/></linearGradient></defs><rect x="4" y="12" width="24" height="16" rx="3" fill="url(#lg)"/><rect x="2" y="6" width="28" height="8" rx="2.5" fill="url(#lg)"/><rect x="2" y="12" width="28" height="2" fill="#000" opacity=".18"/><rect x="12" y="18" width="8" height="4" rx="1.2" fill="#0c0d0f" opacity=".5"/></svg>
+    <img class="logo" src="/assets/logo/aqua.svg" alt="">
     <div><h1 id="title" data-t="Schuhkarton einrichten">Schuhkarton einrichten</h1><p class="muted" id="subtitle" data-t="In wenigen Schritten zur eigenen Fotogalerie.">In wenigen Schritten zur eigenen Fotogalerie.</p></div>
     <a class="btn ghost" id="back" href="/" hidden data-t="Zur Galerie">Zur Galerie</a>
   </header>
   <nav class="steps" id="steps"></nav>
-  <main id="step"></main>
+  <main id="step"><div class="loading page"><img class="loader" src="/assets/logo/aqua-loading.svg" alt=""></div></main>
   <footer class="setup-foot">
     <button class="btn" id="prev" data-t="Zurück">Zurück</button>
+    <span class="activity" aria-hidden="true"><img src="/assets/logo/aqua-loading.svg" alt=""></span>
     <span class="grow muted" id="hint"></span>
     <button class="btn primary" id="next" data-t="Weiter">Weiter</button>
   </footer>

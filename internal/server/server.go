@@ -59,6 +59,7 @@ func New(ctx context.Context, o Options) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", s.page)
 	mux.Handle("GET /assets/", http.StripPrefix("/assets/", assetHandler(s.files)))
+	mux.Handle("GET /favicon.ico", faviconHandler(s.files, func() config.UI { return s.cfg.UI }))
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok\n")) })
 	mux.HandleFunc("GET /api/config", s.config)
 	mux.HandleFunc("GET /api/status", s.status)
@@ -148,7 +149,7 @@ func (s *Server) page(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	b = withLang(b, s.cfg.UI.Language)
+	b = withLogo(withLang(b, s.cfg.UI.Language), currentLogo(s.cfg.UI, true))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Write(b)

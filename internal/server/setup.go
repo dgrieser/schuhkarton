@@ -118,6 +118,7 @@ func (s *Setup) Handler() http.Handler {
 	mux.HandleFunc("GET /api/setup/progress", s.guard(s.progress))
 	if s.o.Install {
 		mux.Handle("GET /assets/", http.StripPrefix("/assets/", assetHandler(s.files)))
+		mux.Handle("GET /favicon.ico", faviconHandler(s.files, func() config.UI { return s.o.Config().UI }))
 		mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("setup\n")) })
 		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 			if r.Method == http.MethodGet && !strings.HasPrefix(r.URL.Path, "/api/") {
@@ -195,7 +196,7 @@ func (s *Setup) page(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	b = withLang(b, s.o.Config().UI.Language)
+	b = withLogo(withLang(b, s.o.Config().UI.Language), currentLogo(s.o.Config().UI, false))
 	if !s.o.Install {
 		b = settingsPage(b, homePath(s.o.Config().Server.PublicURL, r))
 	}
@@ -249,6 +250,7 @@ func (s *Setup) state(w http.ResponseWriter, r *http.Request) {
 		"mode":       map[bool]string{true: "install", false: "settings"}[s.o.Install],
 		"config":     view,
 		"defaults":   config.Defaults(),
+		"logos":      config.Logos,
 		"locked":     c.LockedKeys(),
 		"configPath": c.Path(),
 		"hasToken":   hasToken,
@@ -628,6 +630,16 @@ func merge(cur, in *config.Config) *config.Config {
 	set("access.register", func() { n.Access.Register = in.Access.Register })
 	set("ui.title", func() { n.UI.Title = strings.TrimSpace(in.UI.Title) })
 	set("ui.theme", func() { n.UI.Theme = in.UI.Theme })
+	set("ui.logo", func() {
+		if len(in.UI.Logo) > 0 {
+			n.UI.Logo = in.UI.Logo
+		}
+	})
+	set("ui.logo_change", func() {
+		if in.UI.LogoChange != "" {
+			n.UI.LogoChange = in.UI.LogoChange
+		}
+	})
 	set("ui.language", func() {
 		if in.UI.Language != "" {
 			n.UI.Language = in.UI.Language

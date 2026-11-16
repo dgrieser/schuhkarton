@@ -8,7 +8,9 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>Schuhkarton</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%23f3b549'/%3E%3Cstop offset='.55' stop-color='%23ff7a59'/%3E%3Cstop offset='1' stop-color='%23b46bff'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect x='4' y='12' width='24' height='16' rx='3' fill='url(%23g)'/%3E%3Crect x='2' y='6' width='28' height='8' rx='2.5' fill='url(%23g)'/%3E%3Crect x='2' y='12' width='28' height='2' fill='%23000' opacity='.18'/%3E%3Crect x='12' y='18' width='8' height='4' rx='1.2' fill='%230c0d0f' opacity='.5'/%3E%3C/svg%3E">
+<link rel="icon" href="/assets/logo/aqua.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/logo/aqua.ico" sizes="any">
+<link rel="apple-touch-icon" href="/assets/logo/aqua-180.png">
 <script src="/assets/i18n.js"></script>
 <link rel="stylesheet" href="/assets/vendor/leaflet/leaflet.css">
 <link rel="stylesheet" href="/assets/vendor/markercluster/MarkerCluster.css">
@@ -81,7 +83,7 @@
 </svg>
 
 <aside class="side" id="side">
-  <a class="brand" href="#/fotos"><svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#f3b549"/><stop offset=".55" stop-color="#ff7a59"/><stop offset="1" stop-color="#b46bff"/></linearGradient></defs><rect x="4" y="12" width="24" height="16" rx="3" fill="url(#lg)"/><rect x="2" y="6" width="28" height="8" rx="2.5" fill="url(#lg)"/><rect x="2" y="12" width="28" height="2" fill="#000" opacity=".18"/><rect x="12" y="18" width="8" height="4" rx="1.2" fill="#0c0d0f" opacity=".5"/></svg><span>Schuhkarton</span></a>
+  <a class="brand" href="#/fotos"><img class="logo" src="/assets/logo/aqua.svg" alt=""><span>Schuhkarton</span></a>
   <button class="btn ghost icon" id="sideToggle"><svg class="i"><use href="#i-sidebar"/></svg></button>
   <nav class="nav" id="nav">
     <a href="#/fotos" data-v="fotos"><svg class="i"><use href="#i-photos"/></svg><span data-t="Fotos">Fotos</span><em class="count" data-c="all"></em></a>
@@ -122,12 +124,13 @@
       <div class="suggest" id="suggest" hidden></div>
     </div>
     <div class="top-tools">
+      <span class="activity" aria-hidden="true"><img src="/assets/logo/aqua-loading.svg" alt=""></span>
       <button class="btn ghost icon hide-m" id="selectBtn" title="Auswählen" data-t-title="Auswählen"><svg class="i"><use href="#i-select"/></svg></button>
       <button class="btn ghost icon hide-m" id="slideBtn" title="Diashow" data-t-title="Diashow"><svg class="i"><use href="#i-slides"/></svg></button>
       <button class="btn ghost icon" id="fullBtn" data-fs hidden><svg class="i"><use href="#i-expand"/></svg></button>
     </div>
   </header>
-  <main class="view" id="view"></main>
+  <main class="view" id="view"><div class="loading"><img class="loader" src="/assets/logo/aqua-loading.svg" alt=""></div></main>
 </div>
 
 <nav class="tabbar" id="tabbar">
@@ -147,6 +150,7 @@
       <button class="vbtn" id="vClose" title="Schließen (Esc)" data-t-title="Schließen (Esc)"><svg class="i"><use href="#i-left"/></svg></button>
       <div class="v-title" id="vTitle"></div>
       <div class="v-actions">
+        <span class="activity" aria-hidden="true"><img src="/assets/logo/aqua-loading.svg" alt=""></span>
         <button class="vbtn" id="vFaces" title="Gesichter (G)" data-t-title="Gesichter (G)"><svg class="i"><use href="#i-face"/></svg></button>
         <button class="vbtn" id="vFav" data-need="user" title="Favorit (F)" data-t-title="Favorit (F)"><svg class="i"><use href="#i-heart"/></svg></button>
         <button class="vbtn" id="vShare" title="Teilen, Herunterladen, Drucken" data-t-title="Teilen, Herunterladen, Drucken" aria-haspopup="menu"><svg class="i"><use href="#i-share"/></svg></button>

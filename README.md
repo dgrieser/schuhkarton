@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/logo/strip.png" width="720" alt="The Schuhkarton logo in six of its colours"></p>
+
 # Schuhkarton
 
 The digital shoebox: a fast photo and video gallery for your own folders. One
@@ -136,7 +138,7 @@ The setup page walks through:
 4. **Backup:** the folder, how often, and what to back up.
 5. **Access:** this computer only or the whole home network, with an access
    key or without; whether people may look without an account and whether
-   they may register; the title and the default theme.
+   they may register; the title, the default theme and the colour of the logo.
 6. **Admin:** the first admin account (name and password).
 7. **Summary:** saves the settings, signs the admin in and opens the gallery.
 
@@ -753,6 +755,8 @@ ai:                           # image descriptions by a vision model (optional)
 ui:
   title: Schuhkarton
   theme: system               # default for new devices: system, light, dark
+  logo: aqua                  # logo and favicon, one or a list that takes turns ([aqua, sunset, mono]): aqua, peach, rose, lavender, mint, lemon, sky, blue, red, green, sunset, nightsky, aurora, ocean, forest, fire, neon, candy, retro, kraft, gold, sepia, sunrise, copper, bronze, silver, metallic, glass, neonblue, neongreen, neonorange, neonpink, rainbow, negative, toxic, vaporwave, thermal, sage, slate, clay, mauve, mono
+  logo_change: daily          # with several logos: visit, hourly, daily, weekly (random order, no repeats)
   language: auto              # default for new devices: auto (the browser's), de, en
   map_tiles: https://tile.openstreetmap.org/{z}/{x}/{y}.png
   map_attribution: © OpenStreetMap   # shown as plain text
@@ -881,3 +885,10 @@ make faces-image  # build the face container locally
 | `internal/worker`, `internal/helper` | face recognition service and its Python helper |
 | `web` | the UI (vanilla JS; Leaflet in `web/vendor`), embedded into the binary |
 | `Dockerfile.faces`, `deploy/` | face container, compose example |
+
+## Logo
+
+The logo, its colour variants (pastel, muted, black and white) as SVG, PNG
+and JPG, and how they are made: [docs/logo](docs/logo/README.md). Which one
+the gallery shows (logo and favicon) is set under *Einstellungen → Aussehen*
+or with `ui.logo`.

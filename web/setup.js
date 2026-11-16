@@ -12,11 +12,31 @@
   const clone = (o) => JSON.parse(JSON.stringify(o));
   const LANG = window.skLang || 'de';
   const t = window.skT || ((s) => s);
+  // progress as a ring: a thin track, the share done drawn around it from the top (f: 0 … 1)
+  const ring = (f, cls = '') => {
+    const p = Math.max(0, Math.min(100, (Number(f) || 0) * 100));
+    return `<svg class="ring ${cls}" viewBox="0 0 24 24" aria-hidden="true"><circle class="rt" cx="12" cy="12" r="9.5" pathLength="100"/>`
+      + `<circle class="rv${p < 0.5 ? ' zero' : ''}" cx="12" cy="12" r="9.5" pathLength="100" stroke-dasharray="${p.toFixed(1)} 100"/></svg>`;
+  };
 
+  // a request that takes a while shows the small loading animation in the footer (after 400 ms)
+  let busyN = 0, busyT = 0;
+  const busy = (on) => {
+    if (on && busyN++ === 0) busyT = setTimeout(() => $('.activity')?.classList.add('on'), 400);
+    if (!on && busyN > 0 && --busyN === 0) { clearTimeout(busyT); $('.activity')?.classList.remove('on'); }
+  };
+  // quiet: polls (progress of saving, backup) and the first load do not count
+  const QUIET = /^\/api\/(setup\/(progress|state)|backup$|status$)/; // state: the page shows its own loader
   async function api(path, body, method) {
-    const r = await fetch(path, body === undefined && !method ? {} : { method: method || 'POST', headers: { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
-    if (!r.ok) throw Object.assign(new Error((await r.text()) || r.statusText), { status: r.status });
-    return r.json();
+    const quiet = QUIET.test(path);
+    if (!quiet) busy(true);
+    try {
+      const r = await fetch(path, body === undefined && !method ? {} : { method: method || 'POST', headers: { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
+      if (!r.ok) throw Object.assign(new Error((await r.text()) || r.statusText), { status: r.status });
+      return await r.json();
+    } finally {
+      if (!quiet) busy(false);
+    }
   }
   let toastT;
   function toast(msg) {
@@ -121,6 +141,15 @@
     return /^\d+(\.\d+)?\s*([KMGT]i?B?|B)?$/i.test(m) && abs(o);
   };
   const lockNote = (key) => (locked(key) ? `<span class="lock">${t('festgelegt durch {x}', { x: esc(locked(key)) })}</span>` : '');
+  // the colours of the logo (ui.logo), named for the settings page
+  const LOGOS = { aqua: 'Aqua', peach: 'Pfirsich', rose: 'Rosé', lavender: 'Lavendel', mint: 'Minze', lemon: 'Zitrone', sky: 'Himmel',
+    blue: 'Blau', red: 'Rot', green: 'Grün', sunset: 'Sonnenuntergang', nightsky: 'Nachthimmel',
+    aurora: 'Polarlicht', ocean: 'Ozean', forest: 'Wald', fire: 'Feuer', neon: 'Neon', candy: 'Bonbon', retro: 'Retro',
+    kraft: 'Karton', gold: 'Gold', sepia: 'Sepia',
+    sunrise: 'Sonnenaufgang', copper: 'Kupfer', bronze: 'Bronze', silver: 'Silber', metallic: 'Metallic', glass: 'Glas', neonblue: 'Neon Blau', neongreen: 'Neon Grün', neonorange: 'Neon Orange', neonpink: 'Neon Pink', rainbow: 'Regenbogen', negative: 'Negativ', toxic: 'Giftig', vaporwave: 'Vaporwave', thermal: 'Wärmebild',
+    sage: 'Salbei (gedeckt)', slate: 'Schiefer (gedeckt)', clay: 'Ton (gedeckt)', mauve: 'Malve (gedeckt)', mono: 'Schwarzweiß' };
+  // the chosen colours of the logo; older settings have one name
+  const logos = () => [].concat(C.ui.logo || S.logos?.[0] || 'aqua');
   const dis = (key) => (locked(key) ? 'disabled' : '');
   // settings by key ("media.thumb_size"): in the form (C), as saved (S.config), the default (S.defaults)
   const getKey = (key, o = C) => key.split('.').reduce((v, k) => v?.[k], o);
@@ -972,7 +1001,7 @@
       }
       if (st[`${p}Fail`]) lines.push(pl(st[`${p}Fail`], '{n} fehlgeschlagen', '{n} fehlgeschlagen'));
       if (st[`${p}Tokens`]) lines.push(t('{n} Tokens bisher', { n: num(st[`${p}Tokens`]) }));
-      return `<p>${done}</p><div class="bar"><i style="width:${Math.min(100, (n / todo) * 100)}%"></i></div>
+      return `<div class="ring-row">${ring(n / todo)}<p>${done}</p></div>
         ${lines.length ? `<p class="muted small">${lines.join(' · ')}</p>` : ''}`;
     };
     const parts = [];
@@ -1104,6 +1133,13 @@
           <label class="field"><span>${t('Sprache für neue Geräte')}</span><select id="ulang" ${dis('ui.language')}>
             ${[['auto', t('wie der Browser')], ['de', 'Deutsch'], ['en', 'English']].map(([v, l]) => `<option value="${v}" ${(C.ui.language || 'auto') === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
         </div>
+        <fieldset class="field logo-pick" ${dis('ui.logo')}><legend>${t('Logo und Symbol im Browser-Tab')}</legend>
+          <p class="muted">${t('Mehrere auswählen: Sie wechseln sich ab, in zufälliger Reihenfolge und nie zweimal hintereinander.')}
+            <button type="button" class="link" id="logoAll">${t('Alle')}</button></p>
+          <div class="logo-grid">${(S.logos || ['aqua']).map((n) => `<label title="${esc(t(LOGOS[n] || n))}"><input type="checkbox" name="logo" value="${esc(n)}" ${logos().includes(n) ? 'checked' : ''}><img src="/assets/logo/${encodeURIComponent(n)}.svg" alt=""><span>${esc(t(LOGOS[n] || n))}</span></label>`).join('')}</div>
+          <label class="field" id="logoChangeF"><span>${t('Wechseln')}</span><select id="logoChange" ${dis('ui.logo_change')}>
+            ${[['visit', t('bei jedem Aufruf')], ['hourly', t('stündlich')], ['daily', t('täglich')], ['weekly', t('wöchentlich')]].map(([v, l]) => `<option value="${v}" ${(C.ui.logo_change || 'daily') === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+        </fieldset>
         <details class="more" ${getKey('ui.map_tiles') !== getKey('ui.map_tiles', S.defaults) ? 'open' : ''}><summary>${t('Karte')}</summary>
           ${textField('ui.map_tiles', t('Kartenkacheln (Adresse mit {z}, {x} und {y})'), getKey('ui.map_tiles', S.defaults), t('Leer: OpenStreetMap. Andere Anbieter brauchen oft einen Schlüssel in der Adresse.'))}
           ${textField('ui.map_attribution', t('Quellenangabe unter der Karte'), getKey('ui.map_attribution', S.defaults))}
@@ -1129,6 +1165,25 @@
     $('#reg', el).onchange = (e) => { C.access.register = e.target.checked; };
     $('#theme', el).onchange = (e) => { C.ui.theme = e.target.value; };
     $('#ulang', el).onchange = (e) => { C.ui.language = e.target.value; };
+    // the colours of the logo: at least one stays chosen; with several, how often they change
+    const logoBoxes = [...el.querySelectorAll('input[name=logo]')];
+    const logoSync = () => {
+      const on = logoBoxes.filter((b) => b.checked);
+      C.ui.logo = on.map((b) => b.value);
+      $('#logoChangeF', el).hidden = on.length < 2;
+      $('#logoAll', el).textContent = on.length === logoBoxes.length ? t('Nur das erste') : t('Alle');
+      for (const b of on) b.disabled = on.length === 1 && !locked('ui.logo'); // the last one cannot be unticked
+      for (const b of logoBoxes) if (!b.checked && !locked('ui.logo')) b.disabled = false;
+    };
+    for (const b of logoBoxes) b.onchange = logoSync;
+    $('#logoAll', el).onclick = () => {
+      const all = logoBoxes.every((b) => b.checked);
+      logoBoxes.forEach((b, i) => { b.checked = all ? i === 0 : true; });
+      logoSync();
+    };
+    $('#logoChange', el).onchange = (e) => { C.ui.logo_change = e.target.value; };
+    if (locked('ui.logo')) $('#logoAll', el).hidden = true;
+    logoSync();
     const ac = $('#acopy', el);
     if (ac) ac.onclick = () => navigator.clipboard?.writeText($('#alink', el).value).then(() => toast(t('Link kopiert')));
     bindFields(el, () => validate());
@@ -1160,7 +1215,7 @@
 
   // --- step 6b: accounts -------------------------------------------------------------------
   async function renderUsers(el) {
-    el.innerHTML = `<section class="card"><h2>${t('Benutzer')}</h2><p class="muted">${t('wird geladen …')}</p></section>`;
+    el.innerHTML = `<section class="card"><h2>${t('Benutzer')}</h2><div class="loading"><img class="loader" alt="${esc(t('wird geladen …'))}" src="${esc(($('img.logo')?.getAttribute('src') || '/assets/logo/aqua.svg').replace(/\.svg$/, '-loading.svg'))}"></div></section>`;
     let res;
     try { res = await api('/api/users'); } catch (e) { el.innerHTML = `<section class="card"><p class="bad">${esc(t(e.message))}</p></section>`; return; }
     const when = (d) => (d && !d.startsWith('0001') ? new Date(d).toLocaleDateString(LANG === 'de' ? 'de-DE' : 'en-GB') : '–');
@@ -1278,7 +1333,7 @@
           ${row(t('Konten'), [S.needAdmin ? `${t('Admin')}: ${esc(admin.name)}` : '', C.access.anonymous ? t('ansehen ohne Konto') : t('nur mit Konto'), C.access.register ? t('Registrieren mit Freigabe') : t('Konten nur durch Admins')].filter(Boolean).join(' · '))}
           ${row(t('Datei'), `<code>${esc(S.configPath)}</code>`)}
         </div>
-        <div id="prog" hidden><div class="bar"><i></i></div><p class="muted" id="progText"></p></div>
+        <div id="prog" hidden><div class="ring-row">${ring(0.05, 'big')}<p class="muted" id="progText"></p></div></div>
       </section>`;
   }
 
@@ -1298,7 +1353,10 @@
       // HTTPS on or off: the old address stops answering once the switch is done
       // (503: still restarting, e.g. copying a cache; the switch comes after that)
       try { p = await api('/api/setup/progress'); } catch (e) { if (tlsFlip() && e.status !== 503) followTLS('/'); else setTimeout(poll, 1000); return; }
-      $('#prog .bar i').style.width = p.total ? `${(p.done / p.total) * 100}%` : p.finished ? '100%' : '30%';
+      const rv = $('#prog .rv');
+      const pc = p.total ? (p.done / p.total) * 100 : p.finished ? 100 : 30;
+      rv.setAttribute('stroke-dasharray', `${pc.toFixed(1)} 100`);
+      rv.classList.toggle('zero', pc < 0.5);
       $('#progText').textContent = `${t(p.phase || '')}${p.total ? ` ${num(p.done)} / ${num(p.total)}` : ''}`;
       if (p.finished) {
         if (p.error) { $('#progText').innerHTML = `<span class="bad">${esc(t(p.error))}</span>`; btn.disabled = false; return; }

@@ -8,6 +8,12 @@
   const $$ = (s, el = document) => [...el.querySelectorAll(s)];
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const icon = (name, cls = '') => `<svg class="i ${cls}"><use href="#i-${name}"/></svg>`;
+  // progress as a ring: a thin track, the share done drawn around it from the top (f: 0 … 1)
+  const ring = (f, cls = '') => {
+    const p = Math.max(0, Math.min(100, (Number(f) || 0) * 100));
+    return `<svg class="ring ${cls}" viewBox="0 0 24 24" aria-hidden="true"><circle class="rt" cx="12" cy="12" r="9.5" pathLength="100"/>`
+      + `<circle class="rv${p < 0.5 ? ' zero' : ''}" cx="12" cy="12" r="9.5" pathLength="100" stroke-dasharray="${p.toFixed(1)} 100"/></svg>`;
+  };
   // forms that only group fields (password managers): Enter submits nothing
   document.addEventListener('submit', (e) => { if (e.target.matches?.('form[data-nosubmit]')) e.preventDefault(); });
   const store = {
@@ -20,6 +26,9 @@
   const LANG = window.skLang || 'de';
   const EN = LANG === 'en';
   const t = window.skT || ((s) => s);
+  // the loading animation: the logo in the colour the page shows, opening and closing
+  const loader = (cls = '') => `<img class="loader ${cls}" alt="${esc(t('Wird geladen …'))}" src="${esc((document.querySelector('img.logo')?.getAttribute('src') || '/assets/logo/aqua.svg').replace(/\.svg$/, '-loading.svg'))}">`;
+  const loading = () => `<div class="loading">${loader()}</div>`;
   const nf = new Intl.NumberFormat(EN ? 'en-GB' : 'de-DE');
   const num = (n) => nf.format(n);
   // counted text: pl(3, '{n} Foto', '{n} Fotos') → "3 Fotos" / "3 photos"
@@ -122,10 +131,26 @@
     toast(done);
   }
 
+  // Something that takes a while: after 400 ms the small loading animation
+  // shows in its places (.activity: the top bar, the viewer), never over
+  // the content. Requests count unless quiet (polls, background refreshes).
+  const Busy = {
+    n: 0, timer: 0,
+    start() { if (this.n++ === 0) this.timer = setTimeout(() => this.show(true), 400); },
+    end() { if (this.n > 0 && --this.n === 0) { clearTimeout(this.timer); this.show(false); } },
+    show(on) { for (const el of document.querySelectorAll('.activity')) el.classList.toggle('on', on); },
+  };
+
   async function api(path, opts) {
-    const r = await fetch(path, opts);
-    if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
-    return r.json();
+    const quiet = opts?.quiet;
+    if (!quiet) Busy.start();
+    try {
+      const r = await fetch(path, opts);
+      if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+      return await r.json();
+    } finally {
+      if (!quiet) Busy.end();
+    }
   }
   const post = (path, body) => api(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 
@@ -273,8 +298,8 @@
   const kindOf = (it) => (it.dc ? 'doc' : it.k === 2 ? 'video' : 'photo');
   const shown = (it) => S.kinds.has(kindOf(it));
 
-  async function loadItems() {
-    const res = await api('/api/items');
+  async function loadItems(quiet) {
+    const res = await api('/api/items', { quiet });
     for (const it of res.items) it.dc = !!it.dc; // the server knows the document folders
     S.items = res.items;
     S.byId = new Map(res.items.map((it) => [it.id, it]));
@@ -1033,7 +1058,11 @@
         img.draggable = false;
         m.appendChild(img);
         const big = new Image();
-        big.onload = () => { if (this.it === it) { img.src = big.src; img.classList.remove('lo'); this.drawFaces(); } };
+        let waiting = true; // the full picture counts as loading until it is there (or failed)
+        const done = () => { if (waiting) { waiting = false; Busy.end(); } };
+        Busy.start();
+        big.onload = () => { done(); if (this.it === it) { img.src = big.src; img.classList.remove('lo'); this.drawFaces(); } };
+        big.onerror = done;
         big.src = largeURL(it);
       }
       $('#vLive').hidden = !it.lv;
@@ -2310,7 +2339,7 @@
       const v = q.value.trim();
       if (!v) { opts = []; draw(); return; }
       const last = v.split(/\s+/).pop();
-      opts = (await api(`/api/suggest?q=${encodeURIComponent(last)}&lang=${LANG}`).catch(() => [])) || [];
+      opts = (await api(`/api/suggest?q=${encodeURIComponent(last)}&lang=${LANG}`, { quiet: true }).catch(() => [])) || [];
       on = -1;
       if (document.activeElement === q) draw();
     }, 120);
@@ -2872,7 +2901,7 @@
     },
 
     async personen(view) {
-      view.innerHTML = `<div class="head"><div><h1>${t('Personen')}</h1><div class="sub">${t('wird geladen …')}</div></div></div>`;
+      view.innerHTML = `<div class="head"><div><h1>${t('Personen')}</h1><div class="sub">${t('wird geladen …')}</div></div></div>${loading()}`;
       await loadPeople().catch(() => {});
       if (route.view !== 'personen') return;
       const info = S.peopleInfo;
@@ -3014,7 +3043,7 @@
         view.innerHTML = `<div class="empty"><h2>${t('Ausgeblendete Personen')}</h2><p>${t('Ausblenden und wieder zeigen geht mit einem Konto.')}</p><p><a class="btn primary" href="${esc(Account.loginURL())}">${t('Anmelden')}</a></p></div>`;
         return;
       }
-      view.innerHTML = head(t('wird geladen …'));
+      view.innerHTML = head(t('wird geladen …')) + loading();
       let list;
       try {
         list = (await api('/api/people/hidden')).hidden || [];
@@ -3156,7 +3185,7 @@
 
   let statusT = 0;
   const stalled = {}; // progress label -> last count and since when
-  const scheduleReload = debounce(async () => { await loadItems(); if (!Viewer.open_) rerender(); }, 300);
+  const scheduleReload = debounce(async () => { await loadItems(true); if (!Viewer.open_) rerender(); }, 300);
   // trying unreadable files again: a second click within a few seconds, since every try may freeze the share
   // (the deadline lives here: the status panel is drawn anew every few seconds)
   let unreadArmed = 0;
@@ -3173,8 +3202,8 @@
     // drawn anew every few seconds: a focused toggle keeps the focus
     const focused = document.activeElement?.matches?.('[data-status-toggle]');
     $('#status').innerHTML = `<button class="status-head" data-status-toggle aria-expanded="${open}" title="${esc(t(open ? 'Einklappen' : 'Ausklappen'))}">
-        <span class="txt">${v.head}</span>${v.bad ? `<span class="bad n" title="${esc(t('Probleme, Details beim Ausklappen'))}">${icon('warn')}</span>` : ''}${icon('down', 'chev')}</button>
-      ${open ? v.rows.join('') : v.frac === null ? '' : `<span class="bar"><i style="width:${v.frac * 100}%"></i></span>`}`;
+        ${!open && v.frac !== null ? ring(v.frac) : ''}<span class="txt">${v.head}</span>${v.bad ? `<span class="bad n" title="${esc(t('Probleme, Details beim Ausklappen'))}">${icon('warn')}</span>` : ''}${icon('down', 'chev')}</button>
+      ${open ? v.rows.join('') : ''}`;
     if (focused) $('[data-status-toggle]')?.focus();
   }
   $('#status').addEventListener('click', (e) => {
@@ -3200,7 +3229,7 @@
     clearTimeout(statusT);
     let busy = false;
     try {
-      const res = await api('/api/status');
+      const res = await api('/api/status', { quiet: true });
       const { status: s, scanning } = res;
       S.status = s;
       const rows = [];
@@ -3232,7 +3261,7 @@
         first ??= a / b;
         jobs++;
         fracSum += a / b;
-        rows.push(`<div class="row"><span>${label} ${num(a)} / ${num(b)}</span><span class="bar"><i style="width:${(a / b) * 100}%"></i></span></div>`);
+        rows.push(`<div class="row prog">${ring(a / b)}<span>${label} ${num(a)} / ${num(b)}</span></div>`);
         if (note) rows.push(`<div class="row sub">${note}</div>`);
       };
       if (scanning) {
@@ -3294,7 +3323,7 @@
       drawStatus();
       const mini = $('#statusMini');
       mini.hidden = first === null;
-      mini.style.setProperty('--p', Math.round((first ?? 0) * 100));
+      mini.innerHTML = first === null ? '' : ring(first);
       const all = document.createElement('div');
       all.innerHTML = rows.join('');
       mini.title = first === null ? '' : $$('.row', all).map((r) => [...r.children].map((c) => c.textContent).filter(Boolean).join(' · ')).join('\n');
@@ -3376,7 +3405,7 @@
   $('#menu').onclick = () => $('#side').classList.toggle('open');
   $('#slideBtn').onclick = () => slideshow();
   document.addEventListener('click', (e) => {
-    if ($('#side').classList.contains('open') && !e.target.closest('#side') && !e.target.closest('#menu') && !e.target.closest('.pop')) $('#side').classList.remove('open');
+    if ($('#side').classList.contains('open') && e.target.isConnected && !e.target.closest('#side') && !e.target.closest('#menu') && !e.target.closest('.pop')) $('#side').classList.remove('open');
   });
 
   // ---------------------------------------------------------------------------
@@ -3457,7 +3486,7 @@
     t, LANG, S, VIEWS, Viewer, Gallery, Account, api, post, toast, esc, icon, $, $$, num, plural, pl, clamp, debounce,
     fmtLong, fmtTime, fmtMonth, thumbURL, largeURL, tileLayer, galleryView,
     route: () => route, render, rerender, loadItems, loadPeople, scheduleReload, selectionChanged, endSelection, updateCounts, sheetGrip, phoneMQ,
-    fmtSize, fmtDay, shown, isTyping, menu, pageSelection, pageSelActive: () => !!pageSel,
+    fmtSize, fmtDay, shown, isTyping, menu, pageSelection, pageSelActive: () => !!pageSel, loader, loading, Busy, ring,
   };
 
   // ---------------------------------------------------------------------------

@@ -68,7 +68,7 @@ func role(r *http.Request) string {
 // publicPath is reachable without an account or access key.
 func publicPath(p string) bool {
 	switch p {
-	case "/healthz", "/login", "/api/me", "/api/config", "/setup":
+	case "/healthz", "/favicon.ico", "/login", "/api/me", "/api/config", "/setup":
 		return true
 	}
 	return strings.HasPrefix(p, "/assets/") || strings.HasPrefix(p, "/api/auth/") || strings.HasPrefix(p, "/api/setup/")
@@ -255,7 +255,7 @@ func (s *Server) loginPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	b = withLang(b, s.cfg.UI.Language)
+	b = withLogo(withLang(b, s.cfg.UI.Language), currentLogo(s.cfg.UI, false))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Write(b)

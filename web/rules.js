@@ -58,7 +58,7 @@
       view.innerHTML = `<div class="empty">${icon('rules')}<h2>${esc(t('Ablage'))}</h2><p>${esc(t('Nur für Admins.'))}</p></div>`;
       return;
     }
-    view.innerHTML = `<div class="head"><div><h1>${esc(t('Ablage'))}</h1><div class="sub">${esc(t('Wird geladen …'))}</div></div></div>`;
+    view.innerHTML = `<div class="head"><div><h1>${esc(t('Ablage'))}</h1><div class="sub">${esc(t('Wird geladen …'))}</div></div></div>${SK.loading()}`;
     if (!(await load())) { $('.sub', view).textContent = t('Nicht erreichbar'); return; }
     draw(view);
     preview(view);
@@ -262,7 +262,7 @@
     if (!el) return;
     const j = R.job;
     el.hidden = !j?.running;
-    if (j?.running) el.innerHTML = `<span>${esc(t('Wird einsortiert'))} · ${num(j.done)} / ${num(j.todo)}${j.fail ? ` · <b class="bad">${esc(pl(j.fail, '{n} Fehler', '{n} Fehler'))}</b>` : ''}</span><span class="bar"><i style="width:${j.todo ? (j.done / j.todo) * 100 : 5}%"></i></span>`;
+    if (j?.running) el.innerHTML = `${SK.ring(j.todo ? j.done / j.todo : 0)}<span>${esc(t('Wird einsortiert'))} · ${num(j.done)} / ${num(j.todo)}${j.fail ? ` · <b class="bad">${esc(pl(j.fail, '{n} Fehler', '{n} Fehler'))}</b>` : ''}</span>`;
   }
 
   function poll(view) {

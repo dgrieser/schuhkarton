@@ -49,7 +49,7 @@
   }
   async function summary() {
     if (!admin()) return;
-    const r = await api('/api/admin/dupes?summary=1').catch(() => null);
+    const r = await api('/api/admin/dupes?summary=1', { quiet: true }).catch(() => null);
     if (r) { D.status = r.status; count(); }
   }
 
@@ -166,7 +166,7 @@
       view.innerHTML = `<div class="empty">${icon('dupes')}<h2>${esc(t('Duplikate'))}</h2><p>${esc(t('Nur für Admins.'))}</p></div>`;
       return;
     }
-    if (!D.loaded) view.innerHTML = `<div class="head"><div><h1>${esc(t('Duplikate'))}</h1><div class="sub">${esc(t('Wird geladen …'))}</div></div></div>`;
+    if (!D.loaded) view.innerHTML = `<div class="head"><div><h1>${esc(t('Duplikate'))}</h1><div class="sub">${esc(t('Wird geladen …'))}</div></div></div>${SK.loading()}`;
     if (!(await load())) { $('.sub', view) && ($('.sub', view).textContent = t('Nicht erreichbar')); return; }
     draw(view);
   };
@@ -186,7 +186,7 @@
         <div class="sub">${st.mode === 'off' ? esc(t('Die Suche nach Duplikaten ist ausgeschaltet (Einstellungen → Fotos).'))
           : total ? esc(t('{n} Gruppen · bis zu {s} frei', { n: num(total), s: size(st.save) })) : esc(t('Keine Duplikate gefunden'))}</div></div>
         <div class="tools"><button class="btn" data-rescan title="${esc(t('Alles neu vergleichen'))}">${icon('refresh')}<span>${esc(t('Neu prüfen'))}</span></button></div></div>
-      ${scanning ? `<div class="dp-scan"><span>${esc(t('Fotos werden verglichen'))} · ${num(st.done)} / ${num(st.todo)}</span><span class="bar"><i style="width:${st.todo ? (st.done / st.todo) * 100 : 5}%"></i></span></div>` : ''}
+      ${scanning ? `<div class="dp-scan">${SK.ring(st.todo ? st.done / st.todo : 0)}<span>${esc(t('Fotos werden verglichen'))} · ${num(st.done)} / ${num(st.todo)}</span></div>` : ''}
       <div class="dp-chips">${chip('all', 'Alle', total)}${chip('identisch', 'Identisch', c.identisch || 0)}${chip('gleich', 'Gleich', c.gleich || 0)}${chip('aehnlich', 'Ähnlich', c.aehnlich || 0)}</div>
       ${D.filter !== 'all' ? `<p class="dp-hint">${esc(t(CLASS_HINT[D.filter]))}</p>` : ''}
       ${sure.length > 1 ? `<div class="dp-bulk">${icon('spark')}<div class="grow"><b>${esc(t('Alle Vorschläge übernehmen'))}</b>
@@ -330,7 +330,7 @@
         const b = $('[data-apply]', el);
         el.classList.add('dp-busy');
         for (const x of $$('.dp-foot button, [data-keep], [data-prev], [data-next]', el)) x.disabled = true;
-        b.innerHTML = `<span class="dp-spin"></span><span>${esc(t('Wird gelöscht …'))}</span>`;
+        b.innerHTML = `${SK.loader('dp-spin')}<span>${esc(t('Wird gelöscht …'))}</span>`;
         const ok = await apply([g]);
         el.classList.remove('dp-busy');
         render(); // the next group, or this one again after an error
