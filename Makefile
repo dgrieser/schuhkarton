@@ -70,7 +70,8 @@ check: ## gofmt, vet, node syntax check, tests
 
 .PHONY: vuln
 vuln: ## Known vulnerabilities the code is affected by (govulncheck)
-	$(GO) run golang.org/x/vuln/cmd/govulncheck@latest ./...
+	@# built with the Go version of go.mod: a govulncheck built with an older one cannot read the code
+	GOTOOLCHAIN=$$($(GO) env GOVERSION) $(GO) run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
 .PHONY: clean
 clean: ## Remove build output

@@ -87,7 +87,7 @@ On Linux there are also packages with a system service (see
 The Linux binary is fully static: it runs on any glibc or musl system, older
 ones like Raspberry Pi OS 11 (bullseye) included.
 
-Or build it with Go 1.26 or newer: `make install` installs it into `~/bin`.
+Or build it with Go 1.27 or newer: `make install` installs it into `~/bin`.
 
 Optional tools, found on the `PATH`:
 
