@@ -1,6 +1,6 @@
 # Python packages of the face container (Dockerfile.faces). They decode
 # pictures sent to the worker, so they are kept up to date (Dependabot).
-opencv-python-headless==4.10.0.84
+opencv-python-headless==5.0.0.93
 pillow==11.0.0
 pillow-heif==0.20.0
 numpy<2.2
