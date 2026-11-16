@@ -1,4 +1,4 @@
-<p align="center"><img src="docs/logo/logo.svg" width="160" alt="Schuhkarton logo"></p>
+<p align="center"><img src="docs/logo/strip.png" width="720" alt="The Schuhkarton logo in six of its colours"></p>
 
 # Schuhkarton
 

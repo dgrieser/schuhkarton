@@ -139,6 +139,9 @@ VARIANTS = {
 }
 
 
+# the variants in the strip at the top of the README (strip.png)
+STRIP = ["aqua", "sunset", "forest", "nightsky", "kraft", "neonpink"]
+
 # variants with colours of their own instead of a turn of the original:
 # the photos change with them (an evening sky, a moon instead of the sun)
 SCENES = {
@@ -570,6 +573,13 @@ def main():
     readme = HERE / "README.md"
     text = readme.read_text()
     readme.write_text(text[:text.index("<table>")] + table + text[text.index("</table>") + len("</table>"):])
+    # the strip in the README header: a few variants side by side, transparent
+    cell, gap = 320, 24
+    strip = Image.new("RGBA", (len(STRIP) * cell + (len(STRIP) - 1) * gap, cell), (0, 0, 0, 0))
+    for i, name in enumerate(STRIP):
+        im = Image.open(HERE / "png" / f"schuhkarton-{name}-1024.png").convert("RGBA").resize((cell, cell), Image.LANCZOS)
+        strip.alpha_composite(im, (i * (cell + gap), 0))
+    strip.save(HERE / "strip.png", optimize=True)
     # the names the server accepts for ui.logo
     names = ", ".join(f'"{n}"' for n in VARIANTS)
     go = WEB.parent / "internal" / "config" / "logos.go"

@@ -1,6 +1,8 @@
 # Logo
 
-`logo.svg` is the logo (aqua). The UI has every variant in `web/logo/`:
+`logo.svg` is the logo (aqua); `strip.png` (the README header) shows six of
+the variants side by side on a transparent background (`STRIP` in
+`generate.py`). The UI has every variant in `web/logo/`:
 `NAME.svg` (logo and favicon), `NAME.ico` (16–64 px, also served as
 `/favicon.ico`) and `NAME-180.png` (apple-touch-icon, on white). Which one it
 shows is set under *Einstellungen → Aussehen* or with `ui.logo` (default
