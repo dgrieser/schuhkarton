@@ -101,6 +101,11 @@ VARIANTS = {
     "mint":     ("Minze", -30, 0.8, 0.01),
     "lemon":    ("Zitrone", -85, 0.8, 0.02),
     "sky":      ("Himmel", 45, 0.85, 0.0),
+    "blue":     ("Blau", 60, 1.5, -0.13, 25),
+    "red":      ("Rot", -180, 2.2, -0.24, 105),
+    "green":    ("Grün", -50, 1.5, -0.14, -110),
+    "sunset":   ("Sonnenuntergang", 0, 1.0, 0.0),   # own colours: SCENES
+    "nightsky": ("Nachthimmel", 0, 1.0, 0.0),      # own colours: SCENES
     "sage":     ("Salbei (gedeckt)", -50, 0.35, -0.04),
     "slate":    ("Schiefer (gedeckt)", 50, 0.3, -0.06),
     "clay":     ("Ton (gedeckt)", -150, 0.4, -0.05, 100),
@@ -108,6 +113,37 @@ VARIANTS = {
     "mono":     ("Schwarzweiß", 0, 0.0, -0.06),
 }
 
+
+# variants with colours of their own instead of a turn of the original:
+# the photos change with them (an evening sky, a moon instead of the sun)
+SCENES = {
+    "sunset": {
+        "lidTop0": "#ffb38a", "lidTop1": "#ff9fa8",
+        "lidInside0": "#b0569e", "lidInside1": "#d2689a",
+        "rim0": "#ff9b8a", "rim1": "#f0809a",
+        "box0": "#ffd2a8", "box1": "#ffc0b4", "box2": "#f3c2dc",
+        "slot0": "#7a3a8c", "slot1": "#8e3f8f",
+        "sky0": "#ff8a5c", "sky1": "#ffc070",
+        "mountains0": "#7a4fb0", "mountains1": "#a0559f",
+        "heartBg0": "#ff9fb4", "heartBg1": "#f27a9c",
+        "interior": "#a24f93", "shade": "#5e3a8f",
+        "paper0": "#fff8f2", "paper1": "#fffaf4", "heart": "#fff6ee",
+        "sun": "#ffe9a0", "sparkle": "#ffe08a", "rays": "#ffa27a",
+    },
+    "nightsky": {
+        "lidTop0": "#3a4c9e", "lidTop1": "#4a5cb4",
+        "lidInside0": "#18205a", "lidInside1": "#232c70",
+        "rim0": "#33438e", "rim1": "#2a387c",
+        "box0": "#2c3a82", "box1": "#24316f", "box2": "#33428c",
+        "slot0": "#ffd76a", "slot1": "#ffc94f",
+        "sky0": "#1b2462", "sky1": "#2e3d8c",
+        "mountains0": "#0e1540", "mountains1": "#1a2258",
+        "heartBg0": "#4a3f9c", "heartBg1": "#5a3f9a",
+        "interior": "#141a4a", "shade": "#080c2c",
+        "paper0": "#eef0ff", "paper1": "#f2f3ff", "heart": "#ffe8a3",
+        "sun": "#f6f1cf", "sparkle": "#ffe48a", "rays": "#a9b8ff",
+    },
+}
 
 # --- OKLCH -------------------------------------------------------------------
 
@@ -154,6 +190,9 @@ def palette(turn, chroma, light, inner=None):
         if (turn, chroma, light, inner) == (0, 1.0, 0.0, None):
             out[k] = h
             continue
+        if k in FIXED_HUE and chroma > 1:
+            out[k] = h  # strong colours: the photos stay as they are
+            continue
         L, C, H = hex_to_oklch(h)
         if k in INNER and inner is not None:
             H += inner
@@ -164,7 +203,7 @@ def palette(turn, chroma, light, inner=None):
 
 
 def svg(name):
-    return TEMPLATE.format(**palette(*VARIANTS[name][1:]))
+    return TEMPLATE.format(**(SCENES.get(name) or palette(*VARIANTS[name][1:])))
 
 
 # --- rendering ----------------------------------------------------------------
@@ -234,6 +273,15 @@ def main():
         src = ui / f"_{name}-64.png"
         Image.open(src).convert("RGBA").save(ui / f"{name}.ico", sizes=[(16, 16), (32, 32), (48, 48), (64, 64)])
         src.unlink()
+    # the table of the variants in docs/logo/README.md
+    cells = [f'<td align="center"><img src="svg/schuhkarton-{n}.svg" width="120" alt="{t}"><br><b>{n}</b><br><sub>{t}</sub><br>'
+             f'<sub><a href="svg/schuhkarton-{n}.svg">SVG</a> · <a href="png/schuhkarton-{n}-512.png">PNG 512</a> · '
+             f'<a href="png/schuhkarton-{n}-1024.png">PNG 1024</a> · <a href="jpg/schuhkarton-{n}.jpg">JPG</a></sub></td>'
+             for n, (t, *_) in VARIANTS.items()]
+    table = "<table>\n" + "\n".join("<tr>\n" + "\n".join(cells[i:i + 4]) + "\n</tr>" for i in range(0, len(cells), 4)) + "\n</table>"
+    readme = HERE / "README.md"
+    text = readme.read_text()
+    readme.write_text(text[:text.index("<table>")] + table + text[text.index("</table>") + len("</table>"):])
     # the names the server accepts for ui.logo
     names = ", ".join(f'"{n}"' for n in VARIANTS)
     go = WEB.parent / "internal" / "config" / "logos.go"

@@ -3,4 +3,4 @@
 package config
 
 // Logos are the colour variants of the logo in web/logo (ui.logo); the first is the default.
-var Logos = []string{"aqua", "peach", "rose", "lavender", "mint", "lemon", "sky", "sage", "slate", "clay", "mauve", "mono"}
+var Logos = []string{"aqua", "peach", "rose", "lavender", "mint", "lemon", "sky", "blue", "red", "green", "sunset", "nightsky", "sage", "slate", "clay", "mauve", "mono"}

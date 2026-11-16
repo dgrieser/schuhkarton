@@ -8,8 +8,9 @@ shows is set under *Einstellungen → Aussehen* or with `ui.logo` (default
 
 ## Variants
 
-Pastel, muted (gedeckt) and black and white. The box changes its colour, the
-photos inside keep theirs. PNGs are transparent, JPGs are on white.
+Pastel, strong (blue, red, green), two scenes (sunset, night sky), muted
+(gedeckt) and black and white. The box changes its colour, the photos inside
+keep theirs, except in the scenes. PNGs are transparent, JPGs are on white.
 
 <table>
 <tr>
@@ -22,12 +23,21 @@ photos inside keep theirs. PNGs are transparent, JPGs are on white.
 <td align="center"><img src="svg/schuhkarton-mint.svg" width="120" alt="Minze"><br><b>mint</b><br><sub>Minze</sub><br><sub><a href="svg/schuhkarton-mint.svg">SVG</a> · <a href="png/schuhkarton-mint-512.png">PNG 512</a> · <a href="png/schuhkarton-mint-1024.png">PNG 1024</a> · <a href="jpg/schuhkarton-mint.jpg">JPG</a></sub></td>
 <td align="center"><img src="svg/schuhkarton-lemon.svg" width="120" alt="Zitrone"><br><b>lemon</b><br><sub>Zitrone</sub><br><sub><a href="svg/schuhkarton-lemon.svg">SVG</a> · <a href="png/schuhkarton-lemon-512.png">PNG 512</a> · <a href="png/schuhkarton-lemon-1024.png">PNG 1024</a> · <a href="jpg/schuhkarton-lemon.jpg">JPG</a></sub></td>
 <td align="center"><img src="svg/schuhkarton-sky.svg" width="120" alt="Himmel"><br><b>sky</b><br><sub>Himmel</sub><br><sub><a href="svg/schuhkarton-sky.svg">SVG</a> · <a href="png/schuhkarton-sky-512.png">PNG 512</a> · <a href="png/schuhkarton-sky-1024.png">PNG 1024</a> · <a href="jpg/schuhkarton-sky.jpg">JPG</a></sub></td>
-<td align="center"><img src="svg/schuhkarton-sage.svg" width="120" alt="Salbei (gedeckt)"><br><b>sage</b><br><sub>Salbei (gedeckt)</sub><br><sub><a href="svg/schuhkarton-sage.svg">SVG</a> · <a href="png/schuhkarton-sage-512.png">PNG 512</a> · <a href="png/schuhkarton-sage-1024.png">PNG 1024</a> · <a href="jpg/schuhkarton-sage.jpg">JPG</a></sub></td>
+<td align="center"><img src="svg/schuhkarton-blue.svg" width="120" alt="Blau"><br><b>blue</b><br><sub>Blau</sub><br><sub><a href="svg/schuhkarton-blue.svg">SVG</a> · <a href="png/schuhkarton-blue-512.png">PNG 512</a> · <a href="png/schuhkarton-blue-1024.png">PNG 1024</a> · <a href="jpg/schuhkarton-blue.jpg">JPG</a></sub></td>
 </tr>
 <tr>
+<td align="center"><img src="svg/schuhkarton-red.svg" width="120" alt="Rot"><br><b>red</b><br><sub>Rot</sub><br><sub><a href="svg/schuhkarton-red.svg">SVG</a> · <a href="png/schuhkarton-red-512.png">PNG 512</a> · <a href="png/schuhkarton-red-1024.png">PNG 1024</a> · <a href="jpg/schuhkarton-red.jpg">JPG</a></sub></td>
+<td align="center"><img src="svg/schuhkarton-green.svg" width="120" alt="Grün"><br><b>green</b><br><sub>Grün</sub><br><sub><a href="svg/schuhkarton-green.svg">SVG</a> · <a href="png/schuhkarton-green-512.png">PNG 512</a> · <a href="png/schuhkarton-green-1024.png">PNG 1024</a> · <a href="jpg/schuhkarton-green.jpg">JPG</a></sub></td>
+<td align="center"><img src="svg/schuhkarton-sunset.svg" width="120" alt="Sonnenuntergang"><br><b>sunset</b><br><sub>Sonnenuntergang</sub><br><sub><a href="svg/schuhkarton-sunset.svg">SVG</a> · <a href="png/schuhkarton-sunset-512.png">PNG 512</a> · <a href="png/schuhkarton-sunset-1024.png">PNG 1024</a> · <a href="jpg/schuhkarton-sunset.jpg">JPG</a></sub></td>
+<td align="center"><img src="svg/schuhkarton-nightsky.svg" width="120" alt="Nachthimmel"><br><b>nightsky</b><br><sub>Nachthimmel</sub><br><sub><a href="svg/schuhkarton-nightsky.svg">SVG</a> · <a href="png/schuhkarton-nightsky-512.png">PNG 512</a> · <a href="png/schuhkarton-nightsky-1024.png">PNG 1024</a> · <a href="jpg/schuhkarton-nightsky.jpg">JPG</a></sub></td>
+</tr>
+<tr>
+<td align="center"><img src="svg/schuhkarton-sage.svg" width="120" alt="Salbei (gedeckt)"><br><b>sage</b><br><sub>Salbei (gedeckt)</sub><br><sub><a href="svg/schuhkarton-sage.svg">SVG</a> · <a href="png/schuhkarton-sage-512.png">PNG 512</a> · <a href="png/schuhkarton-sage-1024.png">PNG 1024</a> · <a href="jpg/schuhkarton-sage.jpg">JPG</a></sub></td>
 <td align="center"><img src="svg/schuhkarton-slate.svg" width="120" alt="Schiefer (gedeckt)"><br><b>slate</b><br><sub>Schiefer (gedeckt)</sub><br><sub><a href="svg/schuhkarton-slate.svg">SVG</a> · <a href="png/schuhkarton-slate-512.png">PNG 512</a> · <a href="png/schuhkarton-slate-1024.png">PNG 1024</a> · <a href="jpg/schuhkarton-slate.jpg">JPG</a></sub></td>
 <td align="center"><img src="svg/schuhkarton-clay.svg" width="120" alt="Ton (gedeckt)"><br><b>clay</b><br><sub>Ton (gedeckt)</sub><br><sub><a href="svg/schuhkarton-clay.svg">SVG</a> · <a href="png/schuhkarton-clay-512.png">PNG 512</a> · <a href="png/schuhkarton-clay-1024.png">PNG 1024</a> · <a href="jpg/schuhkarton-clay.jpg">JPG</a></sub></td>
 <td align="center"><img src="svg/schuhkarton-mauve.svg" width="120" alt="Malve (gedeckt)"><br><b>mauve</b><br><sub>Malve (gedeckt)</sub><br><sub><a href="svg/schuhkarton-mauve.svg">SVG</a> · <a href="png/schuhkarton-mauve-512.png">PNG 512</a> · <a href="png/schuhkarton-mauve-1024.png">PNG 1024</a> · <a href="jpg/schuhkarton-mauve.jpg">JPG</a></sub></td>
+</tr>
+<tr>
 <td align="center"><img src="svg/schuhkarton-mono.svg" width="120" alt="Schwarzweiß"><br><b>mono</b><br><sub>Schwarzweiß</sub><br><sub><a href="svg/schuhkarton-mono.svg">SVG</a> · <a href="png/schuhkarton-mono-512.png">PNG 512</a> · <a href="png/schuhkarton-mono-1024.png">PNG 1024</a> · <a href="jpg/schuhkarton-mono.jpg">JPG</a></sub></td>
 </tr>
 </table>
