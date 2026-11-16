@@ -116,6 +116,21 @@ VARIANTS = {
     "kraft":    ("Karton", 0, 1.0, 0.0),            # SCENES
     "gold":     ("Gold", 0, 1.0, 0.0),              # SCENES
     "sepia":    ("Sepia", 0, 1.0, 0.0),             # TINTS
+    "sunrise":    ("Sonnenaufgang", 0, 1.0, 0.0),  # SCENES
+    "copper":     ("Kupfer", 0, 1.0, 0.0),  # SCENES
+    "bronze":     ("Bronze", 0, 1.0, 0.0),  # SCENES
+    "silver":     ("Silber", 0, 1.0, 0.0),  # SCENES
+    "metallic":   ("Metallic", 0, 1.0, 0.0),  # SCENES
+    "glass":      ("Glas", 0, 1.0, 0.0),  # SCENES
+    "neonblue":   ("Neon Blau", 0, 1.0, 0.0),  # SCENES
+    "neongreen":  ("Neon Grün", 0, 1.0, 0.0),  # SCENES
+    "neonorange": ("Neon Orange", 0, 1.0, 0.0),  # SCENES
+    "neonpink":   ("Neon Pink", 0, 1.0, 0.0),  # SCENES
+    "rainbow":    ("Regenbogen", 0, 1.0, 0.0),  # SCENES
+    "toxic":      ("Giftig", 0, 1.0, 0.0),  # SCENES
+    "vaporwave":  ("Vaporwave", 0, 1.0, 0.0),  # SCENES
+    "thermal":    ("Wärmebild", 0, 1.0, 0.0),  # SCENES
+    "negative": ("Negativ", 0, 1.0, 0.0),           # the original inverted
     "sage":     ("Salbei (gedeckt)", -50, 0.35, -0.04),
     "slate":    ("Schiefer (gedeckt)", 50, 0.3, -0.06),
     "clay":     ("Ton (gedeckt)", -150, 0.4, -0.05, 100),
@@ -275,6 +290,123 @@ SCENES = {
         "paper0": "#fbf6e8", "paper1": "#fcf8ec", "heart": "#f2cf6a",
         "sun": "#fff0b0", "sparkle": "#ffe08a", "rays": "#e6c060",
     },
+    # morning: pale yellow, apricot and a light blue sky
+    "sunrise": {
+        "lidTop0": "#ffe6a0", "lidTop1": "#ffc9b0",
+        "lidInside0": "#f29a8a", "lidInside1": "#f7b38f",
+        "rim0": "#ffcf9a", "rim1": "#f7b88a",
+        "box0": "#fff0c8", "box1": "#ffe0c0", "box2": "#ffd6dc",
+        "slot0": "#d0704a", "slot1": "#de7f52",
+        "sky0": "#ffd0a8", "sky1": "#bfe0ff",
+        "mountains0": "#8fb0e0", "mountains1": "#a8a0d8",
+        "heartBg0": "#ffb8a8", "heartBg1": "#ff9f9a",
+        "interior": "#e88a7e", "shade": "#7f98d0",
+        "sun": "#fff0b0", "sparkle": "#ffd75a", "rays": "#ffb08a",
+    },
+    # metals: strong light and dark stops in the gradients for the shine
+    "copper": {
+        "lidTop0": "#f6b48a", "lidTop1": "#b05e34",
+        "lidInside0": "#6e3219", "lidInside1": "#8f4626",
+        "rim0": "#e09464", "rim1": "#a95a32",
+        "box0": "#f0a878", "box1": "#b8642f", "box2": "#f2b892",
+        "slot0": "#4a200e", "slot1": "#5e2a14",
+        "interior": "#5a2812", "sparkle": "#ffb27a", "rays": "#c97a4a",
+    },
+    "bronze": {
+        "lidTop0": "#e6bd78", "lidTop1": "#8a5e24",
+        "lidInside0": "#55391a", "lidInside1": "#6e4b1e",
+        "rim0": "#c89a4c", "rim1": "#8f6828",
+        "box0": "#d6aa60", "box1": "#9a6e2e", "box2": "#e2be80",
+        "slot0": "#36240e", "slot1": "#463012",
+        "interior": "#43300f", "sparkle": "#f0c870", "rays": "#b8893f",
+    },
+    "silver": {
+        "lidTop0": "#f6f8fa", "lidTop1": "#aab1ba",
+        "lidInside0": "#6e7680", "lidInside1": "#8a929c",
+        "rim0": "#d6dbe1", "rim1": "#a0a8b2",
+        "box0": "#eef1f4", "box1": "#b9c0c8", "box2": "#f4f6f8",
+        "slot0": "#454b53", "slot1": "#5a616a",
+        "interior": "#5e656e", "sparkle": "#b8c8e0", "rays": "#9aa3ad",
+    },
+    # chrome: hard reflections, almost black and almost white
+    "metallic": {
+        "lidTop0": "#ffffff", "lidTop1": "#4e5864",
+        "lidInside0": "#1e2329", "lidInside1": "#434b55",
+        "rim0": "#e6ebf1", "rim1": "#5e6874",
+        "box0": "#f6f8fb", "box1": "#7c8896", "box2": "#e2e8ef",
+        "slot0": "#14171c", "slot1": "#343b44",
+        "sky0": "#9aa6b4", "sky1": "#dfe6ee",
+        "mountains0": "#3a424c", "mountains1": "#6a7480",
+        "heartBg0": "#c4ccd6", "heartBg1": "#8a96a4",
+        "interior": "#1a1e24", "shade": "#20262e",
+        "paper0": "#f4f6f8", "paper1": "#f6f8fa", "heart": "#ffffff",
+        "sun": "#ffffff", "sparkle": "#8fd0ff", "rays": "#7c8896",
+    },
+    # see-through: the box front lets the photos show
+    "glass": {
+        "lidTop0": "#c8f4ffb0", "lidTop1": "#a8e0ffa0",
+        "lidInside0": "#5aa8d890", "lidInside1": "#7ab8e890",
+        "rim0": "#9fd8f0d0", "rim1": "#80c4ecc8",
+        "box0": "#d8f6ff80", "box1": "#a8e4fa70", "box2": "#e8fbff90",
+        "slot0": "#2a8fb0d0", "slot1": "#3aa0c0d0",
+        "interior": "#4a98c8a0",
+        "sparkle": "#8fe8ff", "rays": "#80c4ec",
+    },
+    "neonblue": {"lidTop0": "#00b3ff", "lidTop1": "#3a5cff", "lidInside0": "#05081c", "lidInside1": "#0a1030", "rim0": "#00f0ff", "rim1": "#00b3ff", "box0": "#0e1640", "box1": "#0a0f2e", "box2": "#141c4a", "slot0": "#00f0ff", "slot1": "#00b3ff", "sky0": "#061038", "sky1": "#0c2a6a", "mountains0": "#00b3ff", "mountains1": "#3a5cff", "heartBg0": "#00f0ff", "heartBg1": "#3a5cff", "interior": "#05081c", "shade": "#0a1030", "paper0": "#f4f4fa", "paper1": "#f6f6fb", "heart": "#ffffff", "sun": "#7af9ff", "sparkle": "#7af9ff", "rays": "#3a5cff"},
+    "neongreen": {"lidTop0": "#39ff14", "lidTop1": "#00e88a", "lidInside0": "#030c06", "lidInside1": "#082010", "rim0": "#b6ff00", "rim1": "#39ff14", "box0": "#0c2414", "box1": "#08180d", "box2": "#10301a", "slot0": "#39ff14", "slot1": "#39ff14", "sky0": "#062a14", "sky1": "#0c3a1e", "mountains0": "#39ff14", "mountains1": "#00e88a", "heartBg0": "#b6ff00", "heartBg1": "#00e88a", "interior": "#030c06", "shade": "#082010", "paper0": "#f4f4fa", "paper1": "#f6f6fb", "heart": "#ffffff", "sun": "#e5ff3a", "sparkle": "#e5ff3a", "rays": "#00e88a"},
+    "neonorange": {"lidTop0": "#ff8a00", "lidTop1": "#ff3d00", "lidInside0": "#100602", "lidInside1": "#2a0f04", "rim0": "#ffd000", "rim1": "#ff8a00", "box0": "#2a1206", "box1": "#1f0d04", "box2": "#341808", "slot0": "#ffb000", "slot1": "#ff8a00", "sky0": "#2a1206", "sky1": "#5a1e08", "mountains0": "#ff8a00", "mountains1": "#ff3d00", "heartBg0": "#ffd000", "heartBg1": "#ff3d00", "interior": "#100602", "shade": "#2a0f04", "paper0": "#f4f4fa", "paper1": "#f6f6fb", "heart": "#ffffff", "sun": "#ffe600", "sparkle": "#ffe600", "rays": "#ff3d00"},
+    "neonpink": {"lidTop0": "#ff2bd6", "lidTop1": "#ff4f9a", "lidInside0": "#0e030d", "lidInside1": "#2a0628", "rim0": "#ff8af2", "rim1": "#ff2bd6", "box0": "#2a0a28", "box1": "#1e061c", "box2": "#360e34", "slot0": "#ff8af2", "slot1": "#ff2bd6", "sky0": "#2a0a2a", "sky1": "#5a0f58", "mountains0": "#ff2bd6", "mountains1": "#ff4f9a", "heartBg0": "#ff8af2", "heartBg1": "#ff4f9a", "interior": "#0e030d", "shade": "#2a0628", "paper0": "#f4f4fa", "paper1": "#f6f6fb", "heart": "#ffffff", "sun": "#ff9af5", "sparkle": "#ff9af5", "rays": "#ff2bd6"},
+    # every part another colour
+    "rainbow": {
+        "lidTop0": "#ff4d4d", "lidTop1": "#ff9f1c",
+        "lidInside0": "#ffd60a", "lidInside1": "#ffe14d",
+        "rim0": "#3ddc84", "rim1": "#2ec4b6",
+        "box0": "#4d9fff", "box1": "#7a5cff", "box2": "#c04dff",
+        "slot0": "#ff4d9f", "slot1": "#ff2b7a",
+        "interior": "#2e8a6a",
+        "sparkle": "#ff4d9f", "rays": "#3ddc84",
+    },
+    # slime green and poison purple
+    "toxic": {
+        "lidTop0": "#a6ff00", "lidTop1": "#5af03a",
+        "lidInside0": "#3a0a5a", "lidInside1": "#4a106e",
+        "rim0": "#8a2be2", "rim1": "#6a1ab8",
+        "box0": "#8aff3a", "box1": "#4fd61c", "box2": "#b8ff4a",
+        "slot0": "#2a0040", "slot1": "#3a0058",
+        "sky0": "#3aff7a", "sky1": "#c6ff00",
+        "mountains0": "#6a1ab8", "mountains1": "#8a2be2",
+        "heartBg0": "#ff2bd6", "heartBg1": "#c41ab8",
+        "interior": "#2a063e", "shade": "#2a063e",
+        "paper0": "#f6ffe8", "paper1": "#f8ffec", "heart": "#c6ff00",
+        "sun": "#fffb3a", "sparkle": "#a6ff00", "rays": "#8a2be2",
+    },
+    # pink, violet and turquoise of the nineties internet
+    "vaporwave": {
+        "lidTop0": "#ff71ce", "lidTop1": "#b967ff",
+        "lidInside0": "#01cdfe", "lidInside1": "#05ffa1",
+        "rim0": "#fffb96", "rim1": "#ffd896",
+        "box0": "#b967ff", "box1": "#ff71ce", "box2": "#01cdfe",
+        "slot0": "#2a1a5e", "slot1": "#3a2470",
+        "sky0": "#ff71ce", "sky1": "#fffb96",
+        "mountains0": "#01cdfe", "mountains1": "#05ffa1",
+        "heartBg0": "#b967ff", "heartBg1": "#8a4fff",
+        "interior": "#4a2aa0", "shade": "#2a1a5e",
+        "sun": "#fffb96", "sparkle": "#05ffa1", "rays": "#01cdfe",
+    },
+    # a heat camera: warm parts glow yellow, cold ones are deep blue
+    "thermal": {
+        "lidTop0": "#ffef3a", "lidTop1": "#ff6a00",
+        "lidInside0": "#c0004a", "lidInside1": "#ff2a2a",
+        "rim0": "#ff3a00", "rim1": "#e0002a",
+        "box0": "#ffd400", "box1": "#ff7a00", "box2": "#ff2a6a",
+        "slot0": "#1a0a6a", "slot1": "#2a0a8a",
+        "sky0": "#2a0a8a", "sky1": "#5a00a0",
+        "mountains0": "#ff2a6a", "mountains1": "#ff7a00",
+        "heartBg0": "#ffef3a", "heartBg1": "#ffd400",
+        "interior": "#8a0050", "shade": "#ffef3a",
+        "paper0": "#ffb000", "paper1": "#ffc000", "heart": "#ffffff",
+        "sun": "#ffffff", "sparkle": "#ffe600", "rays": "#ff2a6a",
+    },
 }
 
 # --- OKLCH -------------------------------------------------------------------
@@ -352,6 +484,8 @@ def tint(hue, chroma, light):
 
 
 def svg(name):
+    if name == "negative":  # like a film negative, the photos too
+        return TEMPLATE.format(**{k: "#%06x" % (0xffffff - int(h[1:], 16)) for k, h in ORIGINAL.items()})
     if name in TINTS:
         return TEMPLATE.format(**tint(*TINTS[name]))
     if name in SCENES:

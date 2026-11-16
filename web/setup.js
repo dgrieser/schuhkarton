@@ -126,6 +126,7 @@
     blue: 'Blau', red: 'Rot', green: 'Grün', sunset: 'Sonnenuntergang', nightsky: 'Nachthimmel',
     aurora: 'Polarlicht', ocean: 'Ozean', forest: 'Wald', fire: 'Feuer', neon: 'Neon', candy: 'Bonbon', retro: 'Retro',
     kraft: 'Karton', gold: 'Gold', sepia: 'Sepia',
+    sunrise: 'Sonnenaufgang', copper: 'Kupfer', bronze: 'Bronze', silver: 'Silber', metallic: 'Metallic', glass: 'Glas', neonblue: 'Neon Blau', neongreen: 'Neon Grün', neonorange: 'Neon Orange', neonpink: 'Neon Pink', rainbow: 'Regenbogen', negative: 'Negativ', toxic: 'Giftig', vaporwave: 'Vaporwave', thermal: 'Wärmebild',
     sage: 'Salbei (gedeckt)', slate: 'Schiefer (gedeckt)', clay: 'Ton (gedeckt)', mauve: 'Malve (gedeckt)', mono: 'Schwarzweiß' };
   // the chosen colours of the logo; older settings have one name
   const logos = () => [].concat(C.ui.logo || S.logos?.[0] || 'aqua');
