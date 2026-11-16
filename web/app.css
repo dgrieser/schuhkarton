@@ -888,6 +888,10 @@ input:disabled, select:disabled { opacity: .6; }
 .setup .logo-grid input { position: absolute; opacity: 0; pointer-events: none; }
 .setup .logo-grid img { width: 52px; height: 52px; }
 .setup .logo-pick:disabled .logo-grid { opacity: .6; }
+.setup .logo-pick p { margin: 0 0 10px; font-size: 13px; }
+.setup .logo-pick button.link { border: 0; background: none; padding: 0 0 0 6px; color: var(--accent); font: inherit; cursor: pointer; }
+.setup .logo-grid input:disabled + img { opacity: 1; }
+.setup .logo-pick #logoChangeF { max-width: 320px; margin-bottom: 0; }
 .setup .check { display: flex; gap: 12px; align-items: flex-start; padding: 10px 0; cursor: pointer; line-height: 1.45; }
 .setup .check input { width: 20px; height: 20px; margin-top: 1px; accent-color: var(--accent); flex: none; }
 .setup .choices { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); margin: 12px 0 4px; }

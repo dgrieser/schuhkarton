@@ -1,11 +1,14 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestLoadSaveEnv(t *testing.T) {
@@ -416,15 +419,44 @@ background:
 
 func TestLogo(t *testing.T) {
 	c := Defaults()
-	if c.UI.Logo != "aqua" {
-		t.Errorf("default logo %q", c.UI.Logo)
+	if len(c.UI.Logo) != 1 || c.UI.Logo[0] != "aqua" || c.UI.LogoChange != "daily" {
+		t.Errorf("default logo %q %q", c.UI.Logo, c.UI.LogoChange)
 	}
-	c.UI.Logo = "rose"
+	c.UI.Logo = LogoList{"rose", "mono"}
 	if err := c.Validate(); err != nil {
-		t.Errorf("rose: %v", err)
+		t.Errorf("rose, mono: %v", err)
 	}
-	c.UI.Logo = "pink"
-	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "ui.logo") {
+	c.UI.Logo = LogoList{"rose", "pink"}
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), `ui.logo "pink"`) {
 		t.Errorf("pink: %v", err)
+	}
+	c.UI.Logo, c.UI.LogoChange = LogoList{"rose"}, "monthly"
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "ui.logo_change") {
+		t.Errorf("monthly: %v", err)
+	}
+	// a name or a list, in YAML and JSON; from the environment comma separated
+	for _, in := range []string{"logo: Rose\n", "logo: [rose, mono, rose]\n", "logo: rose, mono\n"} {
+		var u UI
+		if err := yaml.Unmarshal([]byte(in), &u); err != nil {
+			t.Fatal(in, err)
+		}
+		u.normLogos(Defaults().UI)
+		if u.Logo[0] != "rose" || len(u.Logo) > 2 {
+			t.Errorf("%q: %q", in, u.Logo)
+		}
+	}
+	var u UI
+	if err := json.Unmarshal([]byte(`{"logo":["rose","mono"]}`), &u); err != nil || len(u.Logo) != 2 {
+		t.Errorf("json list: %v %q", err, u.Logo)
+	}
+	if err := json.Unmarshal([]byte(`{"logo":"mono"}`), &u); err != nil || len(u.Logo) != 1 {
+		t.Errorf("json name: %v %q", err, u.Logo)
+	}
+	if err := SetValue(c, "ui.logo", "mint, sky"); err != nil || len(c.UI.Logo) != 2 {
+		t.Errorf("env: %v %q", err, c.UI.Logo)
+	}
+	b, _ := yaml.Marshal(UI{Logo: LogoList{"mint"}})
+	if !strings.Contains(string(b), "logo: mint\n") {
+		t.Errorf("one colour written as %s", b)
 	}
 }

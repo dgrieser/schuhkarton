@@ -421,8 +421,11 @@ func (a AI) Key() string {
 type UI struct {
 	Title string `yaml:"title" json:"title"`
 	Theme string `yaml:"theme" json:"theme"` // system, light, dark: the default until a viewer picks one
-	// Logo is the colour of the logo and the favicon, one of Logos (aqua, peach, …, mono).
-	Logo string `yaml:"logo" json:"logo"`
+	// Logo is the colour of the logo and the favicon, one of Logos (aqua,
+	// peach, …, mono), or several that take turns.
+	Logo LogoList `yaml:"logo" json:"logo"`
+	// LogoChange is how often several colours take turns: visit, hourly, daily, weekly.
+	LogoChange string `yaml:"logo_change" json:"logo_change"`
 	// Language of the pages: auto (the browser's), de or en; viewers can switch.
 	Language       string `yaml:"language" json:"language"`
 	MapTiles       string `yaml:"map_tiles" json:"map_tiles"`
@@ -472,7 +475,7 @@ func Defaults() *Config {
 			OCR: "off", OCRModel: "GLM-OCR", OCRWorkers: 2,
 			Speech: "off", SpeechModel: "whisper-large-v3-turbo", SpeechFallback: "cohere-transcribe-03-2026", SpeechWorkers: 2},
 		Dupes: Dupes{Mode: "on", Sensitivity: "normal", SimilarMinutes: 10},
-		UI: UI{Title: "Schuhkarton", Theme: "system", Logo: Logos[0], Language: "auto",
+		UI: UI{Title: "Schuhkarton", Theme: "system", Logo: LogoList{Logos[0]}, LogoChange: "daily", Language: "auto",
 			MapTiles: "https://tile.openstreetmap.org/{z}/{x}/{y}.png", MapAttribution: "© OpenStreetMap"},
 		Backup: Backup{Interval: "24h", Originals: true, Cache: true, Config: true},
 		Worker: Worker{Listen: "0.0.0.0:8089", Workers: max(1, runtime.NumCPU()/2)},
@@ -582,7 +585,7 @@ func (c *Config) normalize() {
 	c.AI.Languages = langs
 	c.UI.Title = cmpOr(c.UI.Title, d.UI.Title)
 	c.UI.Theme = cmpOr(c.UI.Theme, d.UI.Theme)
-	c.UI.Logo = strings.ToLower(strings.TrimSpace(cmpOr(c.UI.Logo, d.UI.Logo)))
+	c.UI.normLogos(d.UI)
 	c.UI.Language = strings.ToLower(cmpOr(c.UI.Language, d.UI.Language))
 	c.UI.MapTiles = cmpOr(c.UI.MapTiles, d.UI.MapTiles)
 	if c.Media.Workers <= 0 {
@@ -742,9 +745,7 @@ func (c *Config) Validate() error {
 			errs = append(errs, fmt.Sprintf("%s %d: zwischen %d und %d", r.key, r.v, r.min, r.max))
 		}
 	}
-	if !slices.Contains(Logos, c.UI.Logo) {
-		errs = append(errs, fmt.Sprintf("ui.logo %q: %s", c.UI.Logo, strings.Join(Logos, ", ")))
-	}
+	errs = append(errs, c.UI.logoErrors()...)
 	if (c.Server.TLSCert == "") != (c.Server.TLSKey == "") {
 		errs = append(errs, "server.tls_cert und server.tls_key gehören zusammen")
 	} else if c.Server.TLSCert != "" {
@@ -924,6 +925,7 @@ func (c *Config) Clone() *Config {
 	n.Library.Documents = append([]string(nil), c.Library.Documents...)
 	n.Library.Rules.List = append([]Rule(nil), c.Library.Rules.List...)
 	n.AI.Languages = append([]string(nil), c.AI.Languages...)
+	n.UI.Logo = append(LogoList(nil), c.UI.Logo...)
 	n.locked = c.LockedKeys()
 	return &n
 }

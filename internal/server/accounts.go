@@ -255,7 +255,7 @@ func (s *Server) loginPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	b = withLogo(withLang(b, s.cfg.UI.Language), s.cfg.UI.Logo)
+	b = withLogo(withLang(b, s.cfg.UI.Language), currentLogo(s.cfg.UI, false))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Write(b)

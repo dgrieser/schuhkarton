@@ -118,7 +118,7 @@ func (s *Setup) Handler() http.Handler {
 	mux.HandleFunc("GET /api/setup/progress", s.guard(s.progress))
 	if s.o.Install {
 		mux.Handle("GET /assets/", http.StripPrefix("/assets/", assetHandler(s.files)))
-		mux.Handle("GET /favicon.ico", faviconHandler(s.files, func() string { return s.o.Config().UI.Logo }))
+		mux.Handle("GET /favicon.ico", faviconHandler(s.files, func() config.UI { return s.o.Config().UI }))
 		mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("setup\n")) })
 		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 			if r.Method == http.MethodGet && !strings.HasPrefix(r.URL.Path, "/api/") {
@@ -196,7 +196,7 @@ func (s *Setup) page(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	b = withLogo(withLang(b, s.o.Config().UI.Language), s.o.Config().UI.Logo)
+	b = withLogo(withLang(b, s.o.Config().UI.Language), currentLogo(s.o.Config().UI, false))
 	if !s.o.Install {
 		b = settingsPage(b, homePath(s.o.Config().Server.PublicURL, r))
 	}
@@ -631,8 +631,13 @@ func merge(cur, in *config.Config) *config.Config {
 	set("ui.title", func() { n.UI.Title = strings.TrimSpace(in.UI.Title) })
 	set("ui.theme", func() { n.UI.Theme = in.UI.Theme })
 	set("ui.logo", func() {
-		if in.UI.Logo != "" {
+		if len(in.UI.Logo) > 0 {
 			n.UI.Logo = in.UI.Logo
+		}
+	})
+	set("ui.logo_change", func() {
+		if in.UI.LogoChange != "" {
+			n.UI.LogoChange = in.UI.LogoChange
 		}
 	})
 	set("ui.language", func() {

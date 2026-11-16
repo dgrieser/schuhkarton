@@ -127,6 +127,8 @@
     aurora: 'Polarlicht', ocean: 'Ozean', forest: 'Wald', fire: 'Feuer', neon: 'Neon', candy: 'Bonbon', retro: 'Retro',
     kraft: 'Karton', gold: 'Gold', sepia: 'Sepia',
     sage: 'Salbei (gedeckt)', slate: 'Schiefer (gedeckt)', clay: 'Ton (gedeckt)', mauve: 'Malve (gedeckt)', mono: 'Schwarzweiß' };
+  // the chosen colours of the logo; older settings have one name
+  const logos = () => [].concat(C.ui.logo || S.logos?.[0] || 'aqua');
   const dis = (key) => (locked(key) ? 'disabled' : '');
   // settings by key ("media.thumb_size"): in the form (C), as saved (S.config), the default (S.defaults)
   const getKey = (key, o = C) => key.split('.').reduce((v, k) => v?.[k], o);
@@ -1111,7 +1113,11 @@
             ${[['auto', t('wie der Browser')], ['de', 'Deutsch'], ['en', 'English']].map(([v, l]) => `<option value="${v}" ${(C.ui.language || 'auto') === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
         </div>
         <fieldset class="field logo-pick" ${dis('ui.logo')}><legend>${t('Logo und Symbol im Browser-Tab')}</legend>
-          <div class="logo-grid">${(S.logos || ['aqua']).map((n) => `<label title="${esc(t(LOGOS[n] || n))}"><input type="radio" name="logo" value="${esc(n)}" ${(C.ui.logo || S.logos?.[0]) === n ? 'checked' : ''}><img src="/assets/logo/${encodeURIComponent(n)}.svg" alt=""><span>${esc(t(LOGOS[n] || n))}</span></label>`).join('')}</div>
+          <p class="muted">${t('Mehrere auswählen: Sie wechseln sich ab, in zufälliger Reihenfolge und nie zweimal hintereinander.')}
+            <button type="button" class="link" id="logoAll">${t('Alle')}</button></p>
+          <div class="logo-grid">${(S.logos || ['aqua']).map((n) => `<label title="${esc(t(LOGOS[n] || n))}"><input type="checkbox" name="logo" value="${esc(n)}" ${logos().includes(n) ? 'checked' : ''}><img src="/assets/logo/${encodeURIComponent(n)}.svg" alt=""><span>${esc(t(LOGOS[n] || n))}</span></label>`).join('')}</div>
+          <label class="field" id="logoChangeF"><span>${t('Wechseln')}</span><select id="logoChange" ${dis('ui.logo_change')}>
+            ${[['visit', t('bei jedem Aufruf')], ['hourly', t('stündlich')], ['daily', t('täglich')], ['weekly', t('wöchentlich')]].map(([v, l]) => `<option value="${v}" ${(C.ui.logo_change || 'daily') === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
         </fieldset>
         <details class="more" ${getKey('ui.map_tiles') !== getKey('ui.map_tiles', S.defaults) ? 'open' : ''}><summary>${t('Karte')}</summary>
           ${textField('ui.map_tiles', t('Kartenkacheln (Adresse mit {z}, {x} und {y})'), getKey('ui.map_tiles', S.defaults), t('Leer: OpenStreetMap. Andere Anbieter brauchen oft einen Schlüssel in der Adresse.'))}
@@ -1138,7 +1144,25 @@
     $('#reg', el).onchange = (e) => { C.access.register = e.target.checked; };
     $('#theme', el).onchange = (e) => { C.ui.theme = e.target.value; };
     $('#ulang', el).onchange = (e) => { C.ui.language = e.target.value; };
-    for (const r of el.querySelectorAll('input[name=logo]')) r.onchange = () => { C.ui.logo = r.value; };
+    // the colours of the logo: at least one stays chosen; with several, how often they change
+    const logoBoxes = [...el.querySelectorAll('input[name=logo]')];
+    const logoSync = () => {
+      const on = logoBoxes.filter((b) => b.checked);
+      C.ui.logo = on.map((b) => b.value);
+      $('#logoChangeF', el).hidden = on.length < 2;
+      $('#logoAll', el).textContent = on.length === logoBoxes.length ? t('Nur das erste') : t('Alle');
+      for (const b of on) b.disabled = on.length === 1 && !locked('ui.logo'); // the last one cannot be unticked
+      for (const b of logoBoxes) if (!b.checked && !locked('ui.logo')) b.disabled = false;
+    };
+    for (const b of logoBoxes) b.onchange = logoSync;
+    $('#logoAll', el).onclick = () => {
+      const all = logoBoxes.every((b) => b.checked);
+      logoBoxes.forEach((b, i) => { b.checked = all ? i === 0 : true; });
+      logoSync();
+    };
+    $('#logoChange', el).onchange = (e) => { C.ui.logo_change = e.target.value; };
+    if (locked('ui.logo')) $('#logoAll', el).hidden = true;
+    logoSync();
     const ac = $('#acopy', el);
     if (ac) ac.onclick = () => navigator.clipboard?.writeText($('#alink', el).value).then(() => toast(t('Link kopiert')));
     bindFields(el, () => validate());

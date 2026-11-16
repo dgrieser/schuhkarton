@@ -4,7 +4,9 @@
 `NAME.svg` (logo and favicon), `NAME.ico` (16–64 px, also served as
 `/favicon.ico`) and `NAME-180.png` (apple-touch-icon, on white). Which one it
 shows is set under *Einstellungen → Aussehen* or with `ui.logo` (default
-`aqua`).
+`aqua`). With several they take turns (`ui.logo_change`: every visit,
+hourly, daily or weekly) in a random order that never shows one twice in a
+row.
 
 ## Variants
 
