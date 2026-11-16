@@ -1,8 +1,10 @@
 # Logo
 
-`logo.svg` is the logo (aqua). The UI uses copies of it in `web/`: `logo.svg`,
-`favicon.svg`, `favicon.ico` (16–256 px) and `apple-touch-icon.png` (180 px
-on white).
+`logo.svg` is the logo (aqua). The UI has every variant in `web/logo/`:
+`NAME.svg` (logo and favicon), `NAME.ico` (16–64 px, also served as
+`/favicon.ico`) and `NAME-180.png` (apple-touch-icon, on white). Which one it
+shows is set under *Einstellungen → Aussehen* or with `ui.logo` (default
+`aqua`).
 
 ## Variants
 

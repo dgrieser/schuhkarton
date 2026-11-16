@@ -413,3 +413,18 @@ background:
 		t.Errorf("older form %+v", w)
 	}
 }
+
+func TestLogo(t *testing.T) {
+	c := Defaults()
+	if c.UI.Logo != "aqua" {
+		t.Errorf("default logo %q", c.UI.Logo)
+	}
+	c.UI.Logo = "rose"
+	if err := c.Validate(); err != nil {
+		t.Errorf("rose: %v", err)
+	}
+	c.UI.Logo = "pink"
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "ui.logo") {
+		t.Errorf("pink: %v", err)
+	}
+}

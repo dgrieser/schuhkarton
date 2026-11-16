@@ -138,7 +138,7 @@ The setup page walks through:
 4. **Backup:** the folder, how often, and what to back up.
 5. **Access:** this computer only or the whole home network, with an access
    key or without; whether people may look without an account and whether
-   they may register; the title and the default theme.
+   they may register; the title, the default theme and the colour of the logo.
 6. **Admin:** the first admin account (name and password).
 7. **Summary:** saves the settings, signs the admin in and opens the gallery.
 
@@ -755,6 +755,7 @@ ai:                           # image descriptions by a vision model (optional)
 ui:
   title: Schuhkarton
   theme: system               # default for new devices: system, light, dark
+  logo: aqua                  # logo and favicon: aqua, peach, rose, lavender, mint, lemon, sky, sage, slate, clay, mauve, mono
   language: auto              # default for new devices: auto (the browser's), de, en
   map_tiles: https://tile.openstreetmap.org/{z}/{x}/{y}.png
   map_attribution: © OpenStreetMap   # shown as plain text
@@ -887,4 +888,6 @@ make faces-image  # build the face container locally
 ## Logo
 
 The logo, its colour variants (pastel, muted, black and white) as SVG, PNG
-and JPG, and how they are made: [docs/logo](docs/logo/README.md).
+and JPG, and how they are made: [docs/logo](docs/logo/README.md). Which one
+the gallery shows (logo and favicon) is set under *Einstellungen → Aussehen*
+or with `ui.logo`.

@@ -421,6 +421,8 @@ func (a AI) Key() string {
 type UI struct {
 	Title string `yaml:"title" json:"title"`
 	Theme string `yaml:"theme" json:"theme"` // system, light, dark: the default until a viewer picks one
+	// Logo is the colour of the logo and the favicon, one of Logos (aqua, peach, …, mono).
+	Logo string `yaml:"logo" json:"logo"`
 	// Language of the pages: auto (the browser's), de or en; viewers can switch.
 	Language       string `yaml:"language" json:"language"`
 	MapTiles       string `yaml:"map_tiles" json:"map_tiles"`
@@ -470,7 +472,7 @@ func Defaults() *Config {
 			OCR: "off", OCRModel: "GLM-OCR", OCRWorkers: 2,
 			Speech: "off", SpeechModel: "whisper-large-v3-turbo", SpeechFallback: "cohere-transcribe-03-2026", SpeechWorkers: 2},
 		Dupes: Dupes{Mode: "on", Sensitivity: "normal", SimilarMinutes: 10},
-		UI: UI{Title: "Schuhkarton", Theme: "system", Language: "auto",
+		UI: UI{Title: "Schuhkarton", Theme: "system", Logo: Logos[0], Language: "auto",
 			MapTiles: "https://tile.openstreetmap.org/{z}/{x}/{y}.png", MapAttribution: "© OpenStreetMap"},
 		Backup: Backup{Interval: "24h", Originals: true, Cache: true, Config: true},
 		Worker: Worker{Listen: "0.0.0.0:8089", Workers: max(1, runtime.NumCPU()/2)},
@@ -580,6 +582,7 @@ func (c *Config) normalize() {
 	c.AI.Languages = langs
 	c.UI.Title = cmpOr(c.UI.Title, d.UI.Title)
 	c.UI.Theme = cmpOr(c.UI.Theme, d.UI.Theme)
+	c.UI.Logo = strings.ToLower(strings.TrimSpace(cmpOr(c.UI.Logo, d.UI.Logo)))
 	c.UI.Language = strings.ToLower(cmpOr(c.UI.Language, d.UI.Language))
 	c.UI.MapTiles = cmpOr(c.UI.MapTiles, d.UI.MapTiles)
 	if c.Media.Workers <= 0 {
@@ -738,6 +741,9 @@ func (c *Config) Validate() error {
 		if r.v != 0 && (r.v < r.min || r.v > r.max) { // 0: the default
 			errs = append(errs, fmt.Sprintf("%s %d: zwischen %d und %d", r.key, r.v, r.min, r.max))
 		}
+	}
+	if !slices.Contains(Logos, c.UI.Logo) {
+		errs = append(errs, fmt.Sprintf("ui.logo %q: %s", c.UI.Logo, strings.Join(Logos, ", ")))
 	}
 	if (c.Server.TLSCert == "") != (c.Server.TLSKey == "") {
 		errs = append(errs, "server.tls_cert und server.tls_key gehören zusammen")

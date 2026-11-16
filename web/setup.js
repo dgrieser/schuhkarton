@@ -121,6 +121,9 @@
     return /^\d+(\.\d+)?\s*([KMGT]i?B?|B)?$/i.test(m) && abs(o);
   };
   const lockNote = (key) => (locked(key) ? `<span class="lock">${t('festgelegt durch {x}', { x: esc(locked(key)) })}</span>` : '');
+  // the colours of the logo (ui.logo), named for the settings page
+  const LOGOS = { aqua: 'Aqua', peach: 'Pfirsich', rose: 'Rosé', lavender: 'Lavendel', mint: 'Minze', lemon: 'Zitrone', sky: 'Himmel',
+    sage: 'Salbei (gedeckt)', slate: 'Schiefer (gedeckt)', clay: 'Ton (gedeckt)', mauve: 'Malve (gedeckt)', mono: 'Schwarzweiß' };
   const dis = (key) => (locked(key) ? 'disabled' : '');
   // settings by key ("media.thumb_size"): in the form (C), as saved (S.config), the default (S.defaults)
   const getKey = (key, o = C) => key.split('.').reduce((v, k) => v?.[k], o);
@@ -1104,6 +1107,9 @@
           <label class="field"><span>${t('Sprache für neue Geräte')}</span><select id="ulang" ${dis('ui.language')}>
             ${[['auto', t('wie der Browser')], ['de', 'Deutsch'], ['en', 'English']].map(([v, l]) => `<option value="${v}" ${(C.ui.language || 'auto') === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
         </div>
+        <fieldset class="field logo-pick" ${dis('ui.logo')}><legend>${t('Logo und Symbol im Browser-Tab')}</legend>
+          <div class="logo-grid">${(S.logos || ['aqua']).map((n) => `<label title="${esc(t(LOGOS[n] || n))}"><input type="radio" name="logo" value="${esc(n)}" ${(C.ui.logo || S.logos?.[0]) === n ? 'checked' : ''}><img src="/assets/logo/${encodeURIComponent(n)}.svg" alt=""><span>${esc(t(LOGOS[n] || n))}</span></label>`).join('')}</div>
+        </fieldset>
         <details class="more" ${getKey('ui.map_tiles') !== getKey('ui.map_tiles', S.defaults) ? 'open' : ''}><summary>${t('Karte')}</summary>
           ${textField('ui.map_tiles', t('Kartenkacheln (Adresse mit {z}, {x} und {y})'), getKey('ui.map_tiles', S.defaults), t('Leer: OpenStreetMap. Andere Anbieter brauchen oft einen Schlüssel in der Adresse.'))}
           ${textField('ui.map_attribution', t('Quellenangabe unter der Karte'), getKey('ui.map_attribution', S.defaults))}
@@ -1129,6 +1135,7 @@
     $('#reg', el).onchange = (e) => { C.access.register = e.target.checked; };
     $('#theme', el).onchange = (e) => { C.ui.theme = e.target.value; };
     $('#ulang', el).onchange = (e) => { C.ui.language = e.target.value; };
+    for (const r of el.querySelectorAll('input[name=logo]')) r.onchange = () => { C.ui.logo = r.value; };
     const ac = $('#acopy', el);
     if (ac) ac.onclick = () => navigator.clipboard?.writeText($('#alink', el).value).then(() => toast(t('Link kopiert')));
     bindFields(el, () => validate());

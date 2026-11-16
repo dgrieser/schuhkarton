@@ -19,6 +19,7 @@ import (
 	"os"
 	"path"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -59,7 +60,7 @@ func New(ctx context.Context, o Options) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", s.page)
 	mux.Handle("GET /assets/", http.StripPrefix("/assets/", assetHandler(s.files)))
-	mux.Handle("GET /favicon.ico", faviconHandler(s.files))
+	mux.Handle("GET /favicon.ico", faviconHandler(s.files, func() string { return s.cfg.UI.Logo }))
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok\n")) })
 	mux.HandleFunc("GET /api/config", s.config)
 	mux.HandleFunc("GET /api/status", s.status)
@@ -149,7 +150,7 @@ func (s *Server) page(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	b = withLang(b, s.cfg.UI.Language)
+	b = withLogo(withLang(b, s.cfg.UI.Language), s.cfg.UI.Logo)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Write(b)
@@ -172,12 +173,30 @@ func assetHandler(files fs.FS) http.Handler {
 	})
 }
 
+// withLogo points the logo and the icons of a page (written as the default,
+// /assets/logo/aqua.*) to the configured colour (ui.logo). Every colour has
+// its own file names, so browsers do not keep showing the old icon.
+func withLogo(page []byte, logo string) []byte {
+	if logo == "" || logo == config.Logos[0] || !slices.Contains(config.Logos, logo) {
+		return page
+	}
+	for _, sep := range []string{".", "-"} { // aqua.svg, aqua.ico, aqua-180.png
+		page = bytes.ReplaceAll(page, []byte("/assets/logo/"+config.Logos[0]+sep), []byte("/assets/logo/"+logo+sep))
+	}
+	return page
+}
+
 // faviconHandler answers /favicon.ico, where browsers and feed readers look
-// without being told; the pages themselves point to /assets/.
-func faviconHandler(files fs.FS) http.Handler {
+// without being told, with the icon in the configured colour; the pages
+// themselves point to /assets/logo/.
+func faviconHandler(files fs.FS, logo func() string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "public, max-age=86400")
-		http.ServeFileFS(w, r, files, "favicon.ico")
+		name := logo()
+		if !slices.Contains(config.Logos, name) {
+			name = config.Logos[0]
+		}
+		w.Header().Set("Cache-Control", "no-cache")
+		http.ServeFileFS(w, r, files, "logo/"+name+".ico")
 	})
 }
 
