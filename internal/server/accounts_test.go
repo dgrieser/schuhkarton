@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -51,6 +52,7 @@ func newFixture(t *testing.T, token string, anonymous bool) *fixture {
 // do sends a request with an optional session cookie and returns the status.
 func (f *fixture) do(method, path, body, session string, hdr ...string) *httptest.ResponseRecorder {
 	r := httptest.NewRequest(method, path, strings.NewReader(body))
+	r.Host = "192.168.1.5:8088" // as in a home network (httptest's example.com could be any site)
 	if body != "" {
 		r.Header.Set("Content-Type", "application/json")
 	}
@@ -58,6 +60,10 @@ func (f *fixture) do(method, path, body, session string, hdr ...string) *httptes
 		r.AddCookie(&http.Cookie{Name: sessionCookie, Value: session})
 	}
 	for i := 0; i+1 < len(hdr); i += 2 {
+		if hdr[i] == "Host" {
+			r.Host = hdr[i+1]
+			continue
+		}
 		r.Header.Set(hdr[i], hdr[i+1])
 	}
 	w := httptest.NewRecorder()
@@ -158,6 +164,9 @@ func TestAccessKeyOnlyForAnonymous(t *testing.T) {
 	if w.Code != http.StatusFound {
 		t.Fatalf("key link: %d", w.Code)
 	}
+	if loc := f.do("GET", "//evil.example/?t=geheimer-schluessel", "", "").Header().Get("Location"); loc != "/evil.example/" {
+		t.Errorf("key link with a host in the path leads to %q", loc)
+	}
 	r := httptest.NewRequest("GET", "/api/items", nil)
 	for _, c := range w.Result().Cookies() {
 		r.AddCookie(c)
@@ -170,14 +179,6 @@ func TestAccessKeyOnlyForAnonymous(t *testing.T) {
 	ben := f.login("Ben", "user-pass")
 	if got := f.do("GET", "/api/items", "", ben).Code; got != 200 {
 		t.Errorf("account without key: %d", got)
-	}
-}
-
-func TestSafeNext(t *testing.T) {
-	for in, want := range map[string]string{"/#/fotos": "/#/fotos", "//evil.example": "/", "https://evil": "/", "/login?x": "/", "/\\evil": "/"} {
-		if got := safeNext(in, "/"); got != want {
-			t.Errorf("safeNext(%q) = %q, want %q", in, got, want)
-		}
 	}
 }
 
@@ -268,5 +269,177 @@ func TestLoginNextBehindProxy(t *testing.T) {
 	json.Unmarshal(f.do("GET", "/api/me", "", "", "X-Forwarded-For", "203.0.113.9").Body.Bytes(), &me)
 	if me.Home != "/schuhkarton/" {
 		t.Errorf("me.home %q", me.Home)
+	}
+}
+
+// Without an account and without a key the gallery only answers under a
+// name no other site could use (DNS rebinding).
+func TestAnonymousNeedsKnownHost(t *testing.T) {
+	for host, want := range map[string]bool{
+		"":                               true,
+		"localhost:8088":                 true,
+		"127.0.0.1:8088":                 true,
+		"192.168.1.5":                    true,
+		"[::1]:8088":                     true,
+		"[fe80::1%25eth0]:8088":          true,
+		"pi:8088":                        true,
+		"raspberrypi.local":              true,
+		"nas.fritz.box:8088":             true,
+		"fotos.example.org":              true, // public_url
+		"FOTOS.example.org.:80":          true,
+		"evil.example:8088":              false,
+		"fotos.example.org.evil.example": false,
+		"evil-local":                     true, // no dot: nobody's name on the internet
+		"x.local.evil.example":           false,
+	} {
+		if got := hostKnown(host, "https://fotos.example.org/x"); got != want {
+			t.Errorf("hostKnown(%q) = %v, want %v", host, got, want)
+		}
+	}
+	f := newFixture(t, "", true)
+	ben := f.login("Ben", "user-pass")
+	for _, c := range []struct {
+		path, session, host string
+		want                int
+	}{
+		{"/api/items", "", "192.168.1.5:8088", 200},
+		{"/api/items", "", "evil.example:8088", 401},
+		{"/o/x", "", "evil.example:8088", 302}, // to the login page
+		{"/api/items", ben, "evil.example:8088", 200},
+		{"/api/me", "", "evil.example:8088", 200},
+		{"/login", "", "evil.example:8088", 200},
+	} {
+		if got := f.do("GET", c.path, "", c.session, "Host", c.host).Code; got != c.want {
+			t.Errorf("GET %s as %s (session %v): %d, want %d", c.path, c.host, c.session != "", got, c.want)
+		}
+	}
+	var me struct{ KeyOK bool }
+	json.Unmarshal(f.do("GET", "/api/me", "", "", "Host", "evil.example:8088").Body.Bytes(), &me)
+	if me.KeyOK {
+		t.Error("the login page would offer viewing without an account under a foreign name")
+	}
+	f.cfg.Server.PublicURL = "https://evil.example"
+	if got := f.do("GET", "/api/items", "", "", "Host", "evil.example").Code; got != 200 {
+		t.Errorf("under the public address: %d", got)
+	}
+	// with a key the name does not matter: the key cookie belongs to one name
+	k := newFixture(t, "geheimer-schluessel", true)
+	w := k.do("GET", "/?t=geheimer-schluessel", "", "", "Host", "fotos.example.net")
+	r := httptest.NewRequest("GET", "/api/items", nil)
+	r.Host = "fotos.example.net"
+	for _, c := range w.Result().Cookies() {
+		r.AddCookie(c)
+	}
+	rec := httptest.NewRecorder()
+	k.h.ServeHTTP(rec, r)
+	if rec.Code != 200 {
+		t.Errorf("with the key under another name: %d", rec.Code)
+	}
+}
+
+func TestSafeNext(t *testing.T) {
+	for n, want := range map[string]string{
+		"/":                    "/",
+		"/#/fotos%7Cabc":       "/#/fotos%7Cabc",
+		"/setup":               "/setup",
+		"/?q=a%20b":            "/?q=a%20b",
+		"":                     "/home/",
+		"https://evil.example": "/home/",
+		"//evil.example":       "/home/",
+		"/\\evil.example":      "/home/",
+		"/\t/evil.example":     "/home/",
+		"/\n/evil.example":     "/home/",
+		"/a\\b":                "/home/",
+		"/login?next=/":        "/home/",
+		"javascript:alert(1)":  "/home/",
+	} {
+		if got := safeNext(n, "/home/"); got != want {
+			t.Errorf("safeNext(%q) = %q, want %q", n, got, want)
+		}
+	}
+}
+
+func TestClientIP(t *testing.T) {
+	for _, c := range []struct {
+		remote string
+		xff    []string
+		want   string
+	}{
+		{"192.168.1.7:5000", nil, "192.168.1.7"},
+		{"192.168.1.7:5000", []string{"1.2.3.4"}, "192.168.1.7"}, // anybody can send the header
+		{"127.0.0.1:5000", nil, "127.0.0.1"},
+		{"127.0.0.1:5000", []string{"1.2.3.4"}, "1.2.3.4"},
+		{"127.0.0.1:5000", []string{"9.9.9.9, 1.2.3.4"}, "1.2.3.4"}, // the proxy's own entry is the last
+		{"[::1]:5000", []string{"9.9.9.9", "2001:db8::1"}, "2001:db8::1"},
+		{"127.0.0.1:5000", []string{"nonsense"}, "127.0.0.1"},
+	} {
+		r := httptest.NewRequest("POST", "/api/auth/login", nil)
+		r.RemoteAddr = c.remote
+		for _, v := range c.xff {
+			r.Header.Add("X-Forwarded-For", v)
+		}
+		if got := clientIP(r); got != c.want {
+			t.Errorf("clientIP(%s, %v) = %q, want %q", c.remote, c.xff, got, c.want)
+		}
+	}
+}
+
+func TestHeaders(t *testing.T) {
+	f := newFixture(t, "", true)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/login", nil)
+	r.Host = "127.0.0.1:8088"
+	Headers(f.h).ServeHTTP(w, r)
+	h := w.Header()
+	if csp := h.Get("Content-Security-Policy"); !strings.Contains(csp, "script-src 'self';") || !strings.Contains(csp, "frame-ancestors 'self'") {
+		t.Errorf("Content-Security-Policy %q", csp)
+	}
+	if h.Get("X-Content-Type-Options") != "nosniff" || h.Get("X-Frame-Options") != "SAMEORIGIN" || h.Get("Referrer-Policy") == "" {
+		t.Errorf("headers: %v", h)
+	}
+	// the pages hold no inline scripts or handlers, which the policy would stop
+	for _, page := range []string{"index.html", "login.html", "setup.html"} {
+		b, err := fs.ReadFile(UIFiles(""), page)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, bad := range []string{"<script>", " onsubmit=", " onclick=", " onload=", "https://unpkg.com"} {
+			if strings.Contains(string(b), bad) {
+				t.Errorf("%s contains %q", page, bad)
+			}
+		}
+	}
+}
+
+func TestSettingsPrograms(t *testing.T) {
+	cur := config.Defaults()
+	for _, c := range []struct {
+		exiftool, ffmpeg, python string
+		ok                       bool
+	}{
+		{"", "", "", true},
+		{"/usr/bin/exiftool", "/opt/ffmpeg-7/bin/ffmpeg7", "/usr/bin/python3.12", true},
+		{`/opt/Image-ExifTool/exiftool(-k).exe`, "", "/opt/pypy/bin/pypy3", true},
+		{"/bin/sh", "", "", false},
+		{"", "/usr/bin/env", "", false},
+		{"", "", "/fotos/2019/python.jpg/../evil", false},
+		{"exiftool", "", "", false}, // found on the PATH when the field is empty
+	} {
+		next := cur.Clone()
+		next.Media.ExifTool, next.Media.FFmpeg, next.Faces.Python = c.exiftool, c.ffmpeg, c.python
+		if err := checkPrograms(cur, next); (err == nil) != c.ok {
+			t.Errorf("checkPrograms(%q, %q, %q): %v", c.exiftool, c.ffmpeg, c.python, err)
+		}
+	}
+	// what the configuration file names already stays
+	cur.Media.FFmpeg = "/usr/local/bin/my-encoder"
+	if err := checkPrograms(cur, cur.Clone()); err != nil {
+		t.Errorf("unchanged: %v", err)
+	}
+	for name, want := range map[string]bool{"MITTWALD_LLM_API_KEY": true, "OPENAI_API_KEY": true, "my_token": true,
+		"HOME": false, "DATABASE_URL": false, "": false, "A KEY": false, "KEY=x": false} {
+		if got := keyVariable(name); got != want {
+			t.Errorf("keyVariable(%q) = %v, want %v", name, got, want)
+		}
 	}
 }

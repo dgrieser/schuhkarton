@@ -5,6 +5,8 @@
   const $$ = (s, el = document) => [...el.querySelectorAll(s)];
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const icon = (n, cls = '') => `<svg class="i ${cls}"><use href="#i-${n}"/></svg>`;
+  // forms that only group fields (password managers): Enter submits nothing
+  document.addEventListener('submit', (e) => { if (e.target.matches?.('form[data-nosubmit]')) e.preventDefault(); });
   const num = (n) => new Intl.NumberFormat('de-DE').format(n || 0);
   const bytes = (b) => (!b ? '?' : b > 1e12 ? `${(b / 1e12).toFixed(1)} TB` : b > 1e9 ? `${(b / 1e9).toFixed(1)} GB` : `${Math.round(b / 1e6)} MB`);
   const clone = (o) => JSON.parse(JSON.stringify(o));
@@ -1138,7 +1140,7 @@
       <section class="card">
         <h2>${t('Admin-Konto anlegen')}</h2>
         <p class="muted">${t('Der Admin verwaltet Einstellungen, Konten und Fotos (bearbeiten, drehen, verschieben, löschen). Weitere Konten können später angelegt oder freigegeben werden.')}</p>
-        <form id="aform" autocomplete="on" onsubmit="return false">
+        <form id="aform" autocomplete="on" data-nosubmit>
           <label class="field"><span>${t('Name')}</span><input id="aname" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="64" value="${esc(admin.name)}"></label>
           <div class="row2">
             <label class="field"><span>${t('Passwort')}</span><input id="apw" type="password" autocomplete="new-password" value="${esc(admin.pw)}"></label>
@@ -1183,7 +1185,7 @@
       </section>
       <section class="card">
         <h2>${t('Konto anlegen')}</h2>
-        <form id="nform" autocomplete="off" onsubmit="return false">
+        <form id="nform" autocomplete="off" data-nosubmit>
           <div class="row2">
             <label class="field"><span>${t('Name')}</span><input id="nname" autocapitalize="none" spellcheck="false" maxlength="64"></label>
             <label class="field"><span>${t('Passwort')}</span><input id="npw" type="password" autocomplete="new-password"></label>
@@ -1194,7 +1196,7 @@
       </section>
       <section class="card">
         <h2>${t('Mein Passwort')}</h2>
-        <form id="mform" onsubmit="return false">
+        <form id="mform" data-nosubmit>
           <input type="text" autocomplete="username" value="${esc(res.me)}" hidden>
           <div class="row2">
             <label class="field"><span>${t('Bisheriges Passwort')}</span><input id="mold" type="password" autocomplete="current-password"></label>

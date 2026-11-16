@@ -107,15 +107,32 @@ var exifTags = []string{
 // metaTags: exifTags plus what Schuhkarton wrote (xmp.go).
 var metaTags = append(append([]string(nil), exifTags...), xmpReadTags...)
 
-// read returns the metadata per path.
+// argFileSafe tells whether a path can be given to exiftool in its argument
+// stream (-@ -), which takes one argument per line: a line break in a file
+// or folder name would end the path and start arguments of its own (-if
+// runs Perl), and a leading "-" or "#" would read as an option or a comment.
+func argFileSafe(p string) bool {
+	return p != "" && !strings.ContainsAny(p, "\n\r\x00") && p[0] != '-' && p[0] != '#'
+}
+
+// read returns the metadata per path. Paths that cannot be given to
+// exiftool safely (argFileSafe) are left out: they get no metadata.
 func (e *exifTool) read(paths []string) (map[string]map[string]any, error) {
 	var b bytes.Buffer
 	for _, a := range append([]string{"-json", "-n", "-api", "QuickTimeUTC=1", "-api", "LargeFileSupport=1",
 		"-charset", "filename=utf8", "-m"}, metaTags...) {
 		b.WriteString(a + "\n")
 	}
+	n := 0
 	for _, p := range paths {
+		if !argFileSafe(p) {
+			continue
+		}
 		b.WriteString(p + "\n")
+		n++
+	}
+	if n == 0 {
+		return map[string]map[string]any{}, nil
 	}
 	b.WriteString("-execute\n")
 	if _, err := e.in.Write(b.Bytes()); err != nil {

@@ -998,9 +998,13 @@ func (e *exifTool) writeOnce(path string, args []string) error {
 // run sends one command to the running exiftool and returns its output.
 func (e *exifTool) run(args []string) (stdout, stderr string, err error) {
 	var b bytes.Buffer
-	for _, a := range args {
-		if strings.ContainsAny(a, "\n\r") {
+	for i, a := range args {
+		if strings.ContainsAny(a, "\n\r\x00") {
 			return "", "", fmt.Errorf("line break in argument %q", a)
+		}
+		// the file comes last: not as an option or a comment (see argFileSafe)
+		if i == len(args)-1 && !argFileSafe(a) {
+			return "", "", fmt.Errorf("unsafe file name %q", a)
 		}
 		b.WriteString(a + "\n")
 	}

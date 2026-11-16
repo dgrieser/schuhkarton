@@ -15,6 +15,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -408,6 +409,11 @@ func Open(opt Options) (*Library, error) {
 		if err := os.MkdirAll(filepath.Join(opt.CacheDir, d), 0o755); err != nil {
 			return nil, err
 		}
+	}
+	// the cache holds everybody's faces, names and notes: not for the
+	// other users of this machine
+	if fi, err := os.Stat(opt.CacheDir); err == nil && runtime.GOOS != "windows" && fi.Mode().Perm()&0o007 != 0 {
+		os.Chmod(opt.CacheDir, fi.Mode().Perm()&^0o007)
 	}
 	// one process per cache: two would overwrite each other's index
 	lf, err := lockCache(filepath.Join(opt.CacheDir, "lock"))

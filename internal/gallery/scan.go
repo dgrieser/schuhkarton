@@ -53,6 +53,8 @@ func (l *Library) Scan(ctx context.Context) error {
 	var offline []string
 	var files []found
 	mounts := mountPoints()
+	realRoots := l.realRoots()
+	outside := 0 // links to files outside the library, left out
 	for ri, root := range l.opt.Roots {
 		if fi, err := os.Stat(root.Path); err != nil || !fi.IsDir() {
 			keepAll[ri] = true
@@ -122,6 +124,12 @@ func (l *Library) Scan(ctx context.Context) error {
 				return nil
 			}
 			if KindOf(name) == 0 {
+				return nil
+			}
+			// a link is shown only when it leads to a file inside the library:
+			// one named like a photo could hand out any file Schuhkarton can read
+			if d.Type()&fs.ModeSymlink != 0 && !linkInside(p, realRoots) {
+				outside++
 				return nil
 			}
 			info, err := d.Info()
@@ -278,6 +286,9 @@ func (l *Library) Scan(ctx context.Context) error {
 		l.logf("scan: %d files kept from folders that could not be read", kept)
 	}
 	l.offline.Store(offline)
+	if outside > 0 {
+		l.logf("scan: %d links to files outside the library folders left out", outside)
+	}
 	l.logf("scan: %d files, %d need metadata", len(items), len(todo))
 
 	l.cnt.meta.Store(0)
@@ -389,6 +400,40 @@ func (l *Library) checkFormats(ctx context.Context, items []*Item) (refresh []st
 		}
 	}
 	return refresh, all
+}
+
+// realRoots returns the library folders with links resolved.
+func (l *Library) realRoots() []string {
+	out := make([]string, 0, len(l.opt.Roots))
+	for _, r := range l.opt.Roots {
+		out = append(out, realPath(r.Path))
+	}
+	return out
+}
+
+// linkInside tells whether the link p leads to a file inside one of the
+// (resolved) folders. A link that leads nowhere is not inside.
+func linkInside(p string, realRoots []string) bool {
+	target, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		return false
+	}
+	for _, r := range realRoots {
+		if within(target, r) {
+			return true
+		}
+	}
+	return false
+}
+
+// OpenOriginal opens the file of an item for reading. A file that became a
+// link out of the library since the scan is refused (see Scan).
+func (l *Library) OpenOriginal(it *Item) (*os.File, error) {
+	p := l.Path(it)
+	if fi, err := os.Lstat(p); err == nil && fi.Mode()&fs.ModeSymlink != 0 && !linkInside(p, l.realRoots()) {
+		return nil, fs.ErrNotExist
+	}
+	return os.Open(p)
 }
 
 // Scanning reports whether a scan is running.

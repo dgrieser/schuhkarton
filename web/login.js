@@ -10,7 +10,12 @@
   // server tells it: behind a reverse proxy it can be under a path)
   const asked = (() => {
     const n = new URLSearchParams(location.search).get('next') || '';
-    return n.startsWith('/') && !n.startsWith('//') && !n.startsWith('/login') ? n : '';
+    // a path on this site only: browsers read a backslash as "/" and drop
+    // tabs and line breaks, so "/<backslash>host" and "/<tab>/host" would
+    // lead to another site
+    if (!n.startsWith('/') || n.startsWith('//') || n.startsWith('/login') || /[\\\x00-\x1f\x7f]/.test(n)) return '';
+    try { if (new URL(n, location.origin).origin !== location.origin) return ''; } catch { return ''; }
+    return n;
   })();
   let next = asked || '/';
   // a shared link (…#/fotos%7C<id>) keeps its fragment through the redirect to this page: it goes on

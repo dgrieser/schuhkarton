@@ -5,6 +5,9 @@ on:
     branches:
       - main
   pull_request:
+  # weekly too: new advisories come without a change here
+  schedule:
+    - cron: "23 5 * * 1"
 
 permissions:
   contents: read
@@ -22,6 +25,22 @@ jobs:
 
       - name: Check
         run: make check
+
+  # Known vulnerabilities in the Go version (go.mod) and the modules, as far
+  # as the code calls them. A finding in the standard library goes away with
+  # a newer "go" line in go.mod, which CI and the release builds follow.
+  vuln:
+    name: Vulnerabilities
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: govulncheck
+        run: make vuln
 
   cross:
     name: Cross-build

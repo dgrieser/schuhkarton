@@ -54,18 +54,32 @@ type Options struct {
 
 // Server answers face requests.
 type Server struct {
-	opt  Options
-	pool *helper.Pool
-	aura *helper.Pool // nil: no second system
-	m    *metrics
+	opt     Options
+	pool    *helper.Pool
+	aura    *helper.Pool // nil: no second system
+	m       *metrics
+	slots   chan struct{} // pictures taken in at the same time; the others wait
+	ownTemp bool          // TempDir was made here and goes with Close
 }
+
+// maxImage is the largest picture taken (the gallery sends at most 25 MB).
+const maxImage = 64 << 20
 
 // New prepares the worker; Python starts on the first request or probe.
 func New(opt Options) *Server {
+	// The helper script is written into this folder and run from there, so
+	// it must be nobody else's: a folder of its own with a name nobody can
+	// make first, not a fixed name in the temporary folder all users share.
+	ownTemp := false
 	if opt.TempDir == "" {
-		opt.TempDir = filepath.Join(os.TempDir(), "schuhkarton-worker")
+		dir, err := os.MkdirTemp("", "schuhkarton-worker-")
+		if err != nil {
+			log.Printf("Achtung: kein temporärer Ordner: %v", err)
+		}
+		opt.TempDir, ownTemp = dir, err == nil
+	} else {
+		os.MkdirAll(opt.TempDir, 0o700)
 	}
-	os.MkdirAll(opt.TempDir, 0o700)
 	if !hasAura(opt.Models) {
 		opt.AuraWorkers = 0
 	}
@@ -83,10 +97,14 @@ func New(opt Options) *Server {
 		}
 		opt.Workers, opt.AuraWorkers = w, a
 	}
-	s := &Server{opt: opt, m: newMetrics()}
+	s := &Server{opt: opt, m: newMetrics(), ownTemp: ownTemp, slots: make(chan struct{}, 2*max(1, opt.Workers)+4)}
 	flags := []string{"--no-aura"} // the main processes stay small (or it is not used)
 	if opt.AuraWorkers > 0 {
-		s.aura = helper.New(helper.Options{Python: opt.Python, ScriptDir: filepath.Join(opt.TempDir, "aura"), Models: opt.Models,
+		auraDir := ""
+		if opt.TempDir != "" {
+			auraDir = filepath.Join(opt.TempDir, "aura")
+		}
+		s.aura = helper.New(helper.Options{Python: opt.Python, ScriptDir: auraDir, Models: opt.Models,
 			Size: opt.AuraWorkers, MinScore: opt.MinScore, Flags: []string{"--only-aura"}})
 	}
 	s.pool = helper.New(helper.Options{Python: opt.Python, ScriptDir: opt.TempDir, Models: opt.Models, Size: opt.Workers,
@@ -125,6 +143,9 @@ func (s *Server) Close() {
 	s.pool.Close()
 	if s.aura != nil {
 		s.aura.Close()
+	}
+	if s.ownTemp {
+		os.RemoveAll(s.opt.TempDir)
 	}
 }
 
@@ -182,6 +203,17 @@ func (s *Server) faces(w http.ResponseWriter, r *http.Request) {
 	if !safeExt.MatchString(ext) {
 		ext = ".jpg"
 	}
+	if s.opt.TempDir == "" {
+		http.Error(w, "no temporary folder", http.StatusInternalServerError)
+		return
+	}
+	// only so many pictures are on the disk at once; the others wait their turn
+	select {
+	case s.slots <- struct{}{}:
+		defer func() { <-s.slots }()
+	case <-r.Context().Done():
+		return
+	}
 	dir, err := os.MkdirTemp(s.opt.TempDir, "req-")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -194,10 +226,14 @@ func (s *Server) faces(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	_, err = io.Copy(f, io.LimitReader(r.Body, 256<<20))
+	n, err := io.Copy(f, io.LimitReader(r.Body, maxImage+1))
 	f.Close()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if n > maxImage {
+		http.Error(w, "picture too large", http.StatusRequestEntityTooLarge)
 		return
 	}
 	prefix := filepath.Join(dir, "crop")

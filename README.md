@@ -87,7 +87,7 @@ On Linux there are also packages with a system service (see
 The Linux binary is fully static: it runs on any glibc or musl system, older
 ones like Raspberry Pi OS 11 (bullseye) included.
 
-Or build it with Go 1.26 or newer: `make install` installs it into `~/bin`.
+Or build it with Go 1.27 or newer: `make install` installs it into `~/bin`.
 
 Optional tools, found on the `PATH`:
 
@@ -222,7 +222,17 @@ The access key (`server.token`) only applies to viewers without an account;
 signed-in people do not need it. Accounts live in `users.json` next to
 `config.yaml` (argon2id password hashes, mode 0600); sessions last 90 days
 from the last visit. Repeated wrong passwords from one address are slowed
-down.
+down (behind a reverse proxy on the same machine, the address it passes on
+in `X-Forwarded-For` counts).
+
+Without an account and without an access key, the gallery only answers
+under an address that is surely its own: an IP address, `localhost`, a name
+without a dot or of a home network (`pi`, `raspberrypi.local`,
+`nas.fritz.box`), the machine's own name, or the host of
+`server.public_url`. Under any other name (say `fotos.example.org` when
+`public_url` is not set) it asks to sign in, and the log says why. This
+keeps other websites from reading the gallery through a visitor's browser
+(DNS rebinding).
 
 Updating from a version without accounts: the gallery keeps running as
 before and prints a one-time link to create the first admin; the favorites
@@ -554,7 +564,11 @@ docker run -d --name schuhkarton-faces --restart unless-stopped -p 8089:8089 \
   -e SCHUHKARTON_WORKER_TOKEN=<token> ghcr.io/dgrieser/schuhkarton-faces:latest
 ```
 
-or with [deploy/compose.yaml](deploy/compose.yaml). Then choose
+or with [deploy/compose.yaml](deploy/compose.yaml). The container does not
+start without a token: everybody who reaches its address could send it
+pictures (`SCHUHKARTON_WORKER_TOKEN=off` runs it without one on purpose,
+e.g. in a network of its own). Token and pictures travel as plain HTTP; across
+networks you do not trust, put a reverse proxy with HTTPS in front. Then choose
 *Einstellungen → Gesichter → Container* and enter `http://<host>:8089` and the
 token. The gallery sends per photo the cheapest it has: the large preview when
 it is in the cache, else the original as it is (JPEG, PNG, HEIC up to 25 MB;
@@ -670,7 +684,8 @@ page. `schuhkarton config` prints the effective configuration, and
 server:
   listen: 127.0.0.1:8088      # 0.0.0.0:8088 for the home network
   token: auto                 # viewers without an account: auto (key needed only on a network address), off, or the key itself
-  public_url: ""              # e.g. https://fotos.example.org behind a reverse proxy; with a path
+  public_url: ""              # e.g. https://fotos.example.org behind a reverse proxy (needed to look
+                              # without an account under such a name, see Accounts); with a path
                               # (https://example.org/fotos), pages reached through the proxy lead
                               # back to that path (start page, after signing in)
   tls_cert: ""                # with tls_key: serve HTTPS directly
@@ -711,8 +726,8 @@ media:
   video_previews: true
   video_preview_size: 240
   transcode: true             # H.264 for browsers without HEVC
-  ffmpeg: ""                  # paths, if not on the PATH
-  exiftool: ""
+  ffmpeg: ""                  # paths, if not on the PATH (the settings page only takes whole paths
+  exiftool: ""                # to programs called ffmpeg… and exiftool…; here anything goes)
 faces:
   mode: off                   # off, remote (container) or local (Python here)
   url: ""                     # remote: http://host:8089
@@ -740,7 +755,7 @@ ui:
   theme: system               # default for new devices: system, light, dark
   language: auto              # default for new devices: auto (the browser's), de, en
   map_tiles: https://tile.openstreetmap.org/{z}/{x}/{y}.png
-  map_attribution: © OpenStreetMap
+  map_attribution: © OpenStreetMap   # shown as plain text
 dupes:
   mode: "on"                  # search for duplicates; off
   sensitivity: normal         # strict, normal, loose
@@ -762,7 +777,7 @@ background:                   # time windows for background work; none: any time
   to: ""
 worker:                       # for "schuhkarton worker"
   listen: 0.0.0.0:8089
-  token: ""
+  token: ""                   # needed on a network address; "off": on purpose without
   workers: 12
   aura_workers: 1             # processes of the second recognition model (~500 MB each); -1: not used
 ```
@@ -815,6 +830,9 @@ written into their metadata (see [Metadata in the files](#metadata-in-the-files)
 not in the cache but in `users.json` next to the settings.
 
 Any folder layout works; Schuhkarton never sorts or renames files on its own.
+Links to files count when they lead to a file inside a library folder; links
+that lead elsewhere are left out (the scan says how many), so a link named
+like a photo cannot hand out other files of the machine.
 With `library.folder_meta` on (the default) it also reads folder names:
 `<Jahr>/<MM Monat Ort>/` gives the place, and
 `<Sammlung>/<Jahr>/<MM Monat Kategorie>/` a category. When a camera date
@@ -845,6 +863,7 @@ git tag v0.1.0 && git push origin v0.1.0
 ```sh
 make dev          # UI from ./web: reload the browser after edits
 make check        # gofmt, vet, JS syntax, tests
+make vuln         # govulncheck: known vulnerabilities in the Go version and the modules
 make build-all    # cross-compile every release target into dist/
 make snapshot     # GoReleaser dry run
 make faces-image  # build the face container locally
@@ -860,5 +879,5 @@ make faces-image  # build the face container locally
 | `internal/setup` | folder and tool checks, folder picker, model download |
 | `internal/backup` | background backup |
 | `internal/worker`, `internal/helper` | face recognition service and its Python helper |
-| `web` | the UI (vanilla JS, Leaflet from unpkg), embedded into the binary |
+| `web` | the UI (vanilla JS; Leaflet in `web/vendor`), embedded into the binary |
 | `Dockerfile.faces`, `deploy/` | face container, compose example |

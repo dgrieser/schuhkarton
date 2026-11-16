@@ -96,16 +96,45 @@ func New(opt Options) *Pool {
 	p := &Pool{opt: opt, idle: make(chan *proc, 256), live: map[*proc]bool{}}
 	p.opt.Size = max(1, p.opt.Size)
 	if opt.Python != "" {
-		p.script = filepath.Join(opt.ScriptDir, "helper.py")
-		if err := os.MkdirAll(opt.ScriptDir, 0o755); err == nil {
-			if err := os.WriteFile(p.script, script, 0o644); err != nil {
-				p.setInfo(&Info{Python: opt.Python, Error: err.Error()})
-			}
+		// without the script written here nothing is run: never a file of
+		// that name that was there before
+		if path, err := writeScript(opt.ScriptDir); err != nil {
+			p.setInfo(&Info{Python: opt.Python, Error: err.Error()})
+		} else {
+			p.script = path
 		}
 	} else {
 		p.setInfo(&Info{Error: "kein Python gefunden"})
 	}
 	return p
+}
+
+// writeScript puts helper.py into dir, replacing what is there (also a
+// link: the file is written beside it and renamed, never through it).
+func writeScript(dir string) (string, error) {
+	if dir == "" {
+		return "", errors.New("kein Ordner für helper.py")
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	tmp, err := os.CreateTemp(dir, ".helper-*.py")
+	if err != nil {
+		return "", err
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.Write(script); err != nil {
+		tmp.Close()
+		return "", err
+	}
+	if err := tmp.Close(); err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, "helper.py")
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		return "", err
+	}
+	return path, nil
 }
 
 func (p *Pool) setInfo(i *Info) {
@@ -136,8 +165,11 @@ func (p *Pool) Probe() Info {
 }
 
 func (p *Pool) start() (*proc, error) {
-	if p.opt.Python == "" || p.script == "" {
+	if p.opt.Python == "" {
 		return nil, errors.New("kein Python gefunden")
+	}
+	if p.script == "" {
+		return nil, errors.New("helper.py ließ sich nicht schreiben")
 	}
 	args := []string{"-u", p.script, "--min-score", strconv.FormatFloat(p.opt.MinScore, 'f', 3, 64)}
 	args = append(args, p.opt.Flags...)
