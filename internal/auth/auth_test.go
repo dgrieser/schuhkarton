@@ -1,7 +1,10 @@
 package auth
 
 import (
+	"fmt"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -101,6 +104,64 @@ func TestRateLimit(t *testing.T) {
 	}
 	// another client is not blocked for that name
 	if _, _, err := s.Login("A", "eins2345", "8.8.8.8"); err != nil {
+		t.Fatalf("other client: %v", err)
+	}
+}
+
+// TestRateLimitAtOnce: attempts arriving together count before their
+// passwords are checked, so no more than the limit get that far.
+func TestRateLimitAtOnce(t *testing.T) {
+	s, _ := Open(filepath.Join(t.TempDir(), "users.json"))
+	s.Create("A", "eins2345", RoleAdmin, false)
+	var wg sync.WaitGroup
+	var checked atomic.Int64
+	for i := 0; i < 4*limitMax+20; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, _, err := s.Login(fmt.Sprintf("n%d", i), "nope-nope", "7.7.7.7"); err == ErrBadLogin {
+				checked.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+	if n := checked.Load(); n != 4*limitMax {
+		t.Fatalf("%d passwords checked, want %d", n, 4*limitMax)
+	}
+	// signing in does not use up the client's attempts
+	for i := 0; i < 4*limitMax+5; i++ {
+		if _, _, err := s.Login("A", "eins2345", "6.6.6.6"); err != nil {
+			t.Fatalf("login %d: %v", i, err)
+		}
+	}
+}
+
+func TestClientKey(t *testing.T) {
+	for in, want := range map[string]string{
+		"9.9.9.9":              "9.9.9.9",
+		"::ffff:9.9.9.9":       "9.9.9.9",
+		"2001:db8:1:2:3:4:5:6": "2001:db8:1:2::/64",
+		"2001:db8:1:2::1":      "2001:db8:1:2::/64",
+		"fe80::1%eth0":         "fe80::/64",
+		"not an address":       "not an address",
+	} {
+		if got := clientKey(in); got != want {
+			t.Errorf("clientKey(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestAllowRegister(t *testing.T) {
+	s, _ := Open(filepath.Join(t.TempDir(), "users.json"))
+	for i := 0; i < limitMax; i++ {
+		if err := s.AllowRegister("5.5.5.5"); err != nil {
+			t.Fatalf("registration %d: %v", i, err)
+		}
+	}
+	if s.AllowRegister("5.5.5.5") == nil {
+		t.Fatal("expected a block")
+	}
+	if err := s.AllowRegister("4.4.4.4"); err != nil {
 		t.Fatalf("other client: %v", err)
 	}
 }

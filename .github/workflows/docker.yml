@@ -79,7 +79,7 @@ jobs:
         id: changed
         run: |
           prev=$(git rev-parse -q --verify 'refs/tags/faces-deployed^{commit}' || true)
-          if [ -z "$prev" ] || ! git diff --quiet "$prev" "$GITHUB_SHA" -- Dockerfile.faces go.mod go.sum \
+          if [ -z "$prev" ] || ! git diff --quiet "$prev" "$GITHUB_SHA" -- Dockerfile.faces deploy/faces go.mod go.sum \
               cmd/schuhkarton internal/worker internal/helper internal/config internal/version internal/gallery/facebackend.go; then
             echo "face container changed since ${prev:-ever (not deployed yet)}"
             echo "redeploy=true" >> "$GITHUB_OUTPUT"

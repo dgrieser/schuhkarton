@@ -5,10 +5,13 @@ import (
 	"crypto/subtle"
 	"errors"
 	"io/fs"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
+	"sync"
 
 	"github.com/dgrieser/schuhkarton/internal/auth"
 )
@@ -83,8 +86,8 @@ func (s *Server) gate(next http.Handler) http.Handler {
 				SameSite: http.SameSiteLaxMode, MaxAge: 365 * 24 * 3600, Secure: s.secure(r)})
 			q := r.URL.Query()
 			q.Del("t")
-			u := *r.URL
-			u.RawQuery = q.Encode()
+			// the path alone, never "//host/…" (another site to a browser)
+			u := url.URL{Path: "/" + strings.TrimLeft(r.URL.Path, `/\`), RawQuery: q.Encode()}
 			http.Redirect(w, r, u.String(), http.StatusFound)
 			return
 		}
@@ -93,7 +96,15 @@ func (s *Server) gate(next http.Handler) http.Handler {
 			id.user = s.users.Session(c.Value)
 		}
 		if s.token == "" {
-			id.keyOK = true
+			// No key is needed, but without an account only under a name
+			// that is surely this machine's (knownHost): a page of another
+			// site that lets its own name point here (DNS rebinding) must
+			// not read the gallery through the browser of somebody in the
+			// home network.
+			id.keyOK = id.user != nil || s.knownHost(r)
+			if !id.keyOK && s.cfg.Access.Anonymous {
+				s.warnHost(r.Host)
+			}
 		} else if c, err := r.Cookie(cookieName); err == nil {
 			id.keyOK = keyOK(c.Value)
 		}
@@ -131,6 +142,66 @@ func (s *Server) sameOrigin(r *http.Request) bool {
 		}
 	}
 	return false
+}
+
+// localSuffixes end names that only resolve inside a home or company
+// network: no site on the internet can make them point anywhere.
+var localSuffixes = []string{".local", ".localhost", ".lan", ".home", ".home.arpa", ".internal", ".intranet", ".localdomain", ".fritz.box"}
+
+// knownHost tells whether the request names this machine in a way no other
+// site could: by address, by a name without a dot or with a suffix of home
+// networks, by the machine's own name or by the host of server.public_url.
+func (s *Server) knownHost(r *http.Request) bool {
+	return hostKnown(r.Host, s.cfg.Server.PublicURL)
+}
+
+func hostKnown(hostport, publicURL string) bool {
+	host := hostport
+	if h, _, err := net.SplitHostPort(hostport); err == nil {
+		host = h
+	}
+	host = strings.ToLower(strings.TrimSuffix(strings.Trim(host, "[]"), "."))
+	if host == "" || host == "localhost" || !strings.Contains(host, ".") {
+		return true // HTTP/1.0 without a name, or a name without a dot
+	}
+	if i := strings.IndexByte(host, '%'); i >= 0 { // an IPv6 zone
+		host = host[:i]
+	}
+	if net.ParseIP(host) != nil {
+		return true
+	}
+	for _, suf := range localSuffixes {
+		if strings.HasSuffix(host, suf) {
+			return true
+		}
+	}
+	if u, err := url.Parse(publicURL); err == nil && publicURL != "" && strings.EqualFold(u.Hostname(), host) {
+		return true
+	}
+	if own, err := os.Hostname(); err == nil && strings.EqualFold(strings.TrimSuffix(own, "."), host) {
+		return true
+	}
+	return false
+}
+
+var hostWarned struct {
+	sync.Mutex
+	m map[string]bool
+}
+
+// warnHost logs once per name why viewing without an account was refused.
+func (s *Server) warnHost(host string) {
+	hostWarned.Lock()
+	defer hostWarned.Unlock()
+	if hostWarned.m[host] || len(hostWarned.m) >= 20 {
+		return
+	}
+	if hostWarned.m == nil {
+		hostWarned.m = map[string]bool{}
+	}
+	hostWarned.m[host] = true
+	log.Printf("Ansehen ohne Konto unter dem Namen %q abgelehnt: der Name ist nicht als Adresse dieser Galerie bekannt. "+
+		"Wenn er stimmt, server.public_url darauf setzen (Einstellungen → Zugang).", host)
 }
 
 // secure reports whether cookies should be HTTPS only.
@@ -192,8 +263,15 @@ func (s *Server) loginPage(w http.ResponseWriter, r *http.Request) {
 
 // safeNext keeps redirects on this site; anything else goes to home.
 func safeNext(n, home string) string {
-	if !strings.HasPrefix(n, "/") || strings.HasPrefix(n, "//") || strings.HasPrefix(n, "/\\") || strings.HasPrefix(n, "/login") {
+	if !strings.HasPrefix(n, "/") || strings.HasPrefix(n, "//") || strings.HasPrefix(n, "/login") {
 		return home
+	}
+	// browsers read a backslash as "/" and drop tabs and line breaks:
+	// "/<backslash>host" and "/<tab>/host" would lead to another site
+	for _, c := range n {
+		if c == '\\' || c < 0x20 || c == 0x7f {
+			return home
+		}
 	}
 	return n
 }
@@ -261,10 +339,24 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, r, res)
 }
 
+// clientIP is the address the login limit counts by: the one that
+// connected, or, when that is this machine itself (a reverse proxy running
+// here), the client the proxy names last in X-Forwarded-For. A proxy on
+// another machine is not told apart from a client that makes the header up,
+// so its clients share one limit.
 func clientIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
-		return r.RemoteAddr
+		host = r.RemoteAddr
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		xff := r.Header.Values("X-Forwarded-For")
+		if len(xff) > 0 {
+			parts := strings.Split(xff[len(xff)-1], ",")
+			if fwd := net.ParseIP(strings.TrimSpace(parts[len(parts)-1])); fwd != nil {
+				return fwd.String()
+			}
+		}
 	}
 	return host
 }
@@ -313,6 +405,10 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 	var c credentials
 	if err := readJSON(r, &c); err != nil {
 		http.Error(w, "ungültige Anfrage", http.StatusBadRequest)
+		return
+	}
+	if err := s.users.AllowRegister(clientIP(r)); err != nil {
+		writeJSON(w, r, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
 	if s.users.Pending() >= maxPending {

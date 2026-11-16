@@ -1,0 +1,23 @@
+# Updates for what Schuhkarton is built from, once a month: Go modules, the
+# actions of the workflows, the base images and the Python packages of the
+# face container (they decode pictures from outside).
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: monthly
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+  - package-ecosystem: docker
+    directories:
+      - /
+      - /deploy/heif-dec
+    schedule:
+      interval: monthly
+  - package-ecosystem: pip
+    directory: /deploy/faces
+    schedule:
+      interval: monthly

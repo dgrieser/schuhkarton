@@ -16,8 +16,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/netip"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -505,9 +507,12 @@ func (s *Store) ClaimAdmin(name, password string) error {
 // Login checks name and password and starts a session. It returns the
 // cookie value. client identifies the caller for the rate limit (IP).
 func (s *Store) Login(name, password, client string) (string, *User, error) {
+	client = clientKey(client)
 	keys := []string{"ip:" + client, "ipu:" + client + "|" + fold(name)}
-	if wait := s.limiter.blocked(keys...); wait > 0 {
-		return "", nil, fmt.Errorf("Zu viele Versuche, bitte in %d Minuten noch einmal", int(wait.Minutes())+1)
+	// the attempt counts before the password is checked: attempts arriving
+	// at the same time would otherwise all get past the limit
+	if wait := s.limiter.attempt(keys...); wait > 0 {
+		return "", nil, tooMany(wait)
 	}
 	s.mu.Lock()
 	s.refresh()
@@ -519,9 +524,9 @@ func (s *Store) Login(name, password, client string) (string, *User, error) {
 	s.mu.Unlock()
 	ok := VerifyPassword(hash, password) // also for unknown names: same timing
 	if !ok || u == nil {
-		s.limiter.fail(keys...)
 		return "", nil, ErrBadLogin
 	}
+	s.limiter.forgive(keys[0]) // not a failed attempt after all
 	s.limiter.reset(keys[1])
 	if u.Pending {
 		return "", nil, ErrPending
@@ -648,13 +653,24 @@ const (
 	argonKeyLen  = 32
 )
 
+// hashSlots limits how many passwords are hashed at the same time. Every
+// hash takes argonMemory, and anybody can ask for one by trying to sign in:
+// without a limit a burst of attempts uses up the machine's memory.
+var hashSlots = make(chan struct{}, min(4, max(2, runtime.NumCPU())))
+
+func argonKey(pw string, salt []byte, t, m uint32, p uint8, n uint32) []byte {
+	hashSlots <- struct{}{}
+	defer func() { <-hashSlots }()
+	return argon2.IDKey([]byte(pw), salt, t, m, p, n)
+}
+
 // HashPassword returns an argon2id PHC string.
 func HashPassword(pw string) (string, error) {
 	salt := make([]byte, 16)
 	if _, err := rand.Read(salt); err != nil {
 		return "", err
 	}
-	key := argon2.IDKey([]byte(pw), salt, argonTime, argonMemory, argonThreads, argonKeyLen)
+	key := argonKey(pw, salt, argonTime, argonMemory, argonThreads, argonKeyLen)
 	return fmt.Sprintf("$argon2id$v=%d$m=%d,t=%d,p=%d$%s$%s", argon2.Version, argonMemory, argonTime, argonThreads,
 		base64.RawStdEncoding.EncodeToString(salt), base64.RawStdEncoding.EncodeToString(key)), nil
 }
@@ -678,7 +694,10 @@ func VerifyPassword(hash, pw string) bool {
 	if err != nil || len(want) == 0 {
 		return false
 	}
-	got := argon2.IDKey([]byte(pw), salt, t, m, p, uint32(len(want)))
+	if len(want) > 1024 {
+		return false
+	}
+	got := argonKey(pw, salt, t, m, p, uint32(len(want)))
 	return subtle.ConstantTimeCompare(got, want) == 1
 }
 
@@ -695,6 +714,36 @@ var dummyHash = func() string {
 type limiter struct {
 	mu    sync.Mutex
 	fails map[string][]time.Time
+	swept time.Time
+}
+
+func tooMany(wait time.Duration) error {
+	return fmt.Errorf("Zu viele Versuche, bitte in %d Minuten noch einmal", int(wait.Minutes())+1)
+}
+
+// clientKey is what the limit counts a client by: its address, for IPv6 the
+// /64 network (one connection usually has all of it to choose from).
+func clientKey(client string) string {
+	ip, err := netip.ParseAddr(client)
+	if err != nil {
+		return client
+	}
+	ip = ip.Unmap().WithZone("")
+	if ip.Is6() {
+		if p, err := ip.Prefix(64); err == nil {
+			return p.String()
+		}
+	}
+	return ip.String()
+}
+
+// AllowRegister counts a registration for a client and reports whether it
+// may go on: a client gets limitMax of them in limitWindow.
+func (s *Store) AllowRegister(client string) error {
+	if wait := s.limiter.attempt("reg:" + clientKey(client)); wait > 0 {
+		return tooMany(wait)
+	}
+	return nil
 }
 
 const (
@@ -717,10 +766,8 @@ func (l *limiter) recent(k string, now time.Time) []time.Time {
 	return out
 }
 
-func (l *limiter) blocked(keys ...string) time.Duration {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	now := time.Now()
+// wait returns how long the keys are blocked; the caller holds mu.
+func (l *limiter) wait(now time.Time, keys ...string) time.Duration {
 	var wait time.Duration
 	for _, k := range keys {
 		n := limitMax
@@ -734,12 +781,46 @@ func (l *limiter) blocked(keys ...string) time.Duration {
 	return wait
 }
 
-func (l *limiter) fail(keys ...string) {
+// attempt counts an attempt for the keys unless one of them is blocked
+// (then it returns how long), in one step.
+func (l *limiter) attempt(keys ...string) time.Duration {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := time.Now()
+	if wait := l.wait(now, keys...); wait > 0 {
+		return wait
+	}
 	for _, k := range keys {
 		l.fails["k:"+k] = append(l.recent("k:"+k, now), now)
+	}
+	l.sweep(now)
+	return 0
+}
+
+// forgive takes the latest attempt of the keys back.
+func (l *limiter) forgive(keys ...string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, k := range keys {
+		if f := l.fails["k:"+k]; len(f) > 1 {
+			l.fails["k:"+k] = f[:len(f)-1]
+		} else {
+			delete(l.fails, "k:"+k)
+		}
+	}
+}
+
+// sweep forgets keys without recent attempts, now and then; the caller
+// holds mu. Without it a key lives until it is asked for again.
+func (l *limiter) sweep(now time.Time) {
+	if now.Sub(l.swept) < limitWindow {
+		return
+	}
+	l.swept = now
+	for k, f := range l.fails {
+		if len(f) == 0 || now.Sub(f[len(f)-1]) >= limitWindow {
+			delete(l.fails, k)
+		}
 	}
 }
 

@@ -8,11 +8,13 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"html"
 	"io/fs"
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -358,7 +360,13 @@ func (s *Setup) aiTest(w http.ResponseWriter, r *http.Request) {
 	case key == "********":
 		key = cur.Key()
 	case strings.HasPrefix(key, "$"):
-		key = os.Getenv(strings.Trim(key, "${}"))
+		name := strings.Trim(key, "${}")
+		if !keyVariable(name) {
+			e := map[string]any{"error": keyVariableError} // in the shape of each test's answer
+			writeJSON(w, r, map[string]any{"result": e, "ocr": e, "speech": e, "hasKey": false})
+			return
+		}
+		key = os.Getenv(name)
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
 	defer cancel()
@@ -408,6 +416,14 @@ func (s *Setup) save(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := next.Validate(); err != nil {
 		writeJSON(w, r, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	if err := checkPrograms(cur, next); err != nil {
+		writeJSON(w, r, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	if e := next.AI.APIKeyEnv; e != cur.AI.APIKeyEnv && e != "" && !keyVariable(e) {
+		writeJSON(w, r, map[string]any{"ok": false, "error": keyVariableError})
 		return
 	}
 	// without a folder the gallery (and with it this page) would not start
@@ -619,6 +635,45 @@ func merge(cur, in *config.Config) *config.Config {
 	})
 	return n
 }
+
+// checkPrograms looks at the programs the settings page names (exiftool,
+// ffmpeg, Python): Schuhkarton runs them, so the page only takes what is
+// called like the program it stands for, with its whole path. Anything else
+// goes into the configuration file by somebody who can write it.
+func checkPrograms(cur, next *config.Config) error {
+	for _, p := range []struct{ key, was, now, name string }{
+		{"media.exiftool", cur.Media.ExifTool, next.Media.ExifTool, "exiftool"},
+		{"media.ffmpeg", cur.Media.FFmpeg, next.Media.FFmpeg, "ffmpeg"},
+		{"faces.python", cur.Faces.Python, next.Faces.Python, "python"},
+	} {
+		if p.now == p.was || p.now == "" {
+			continue
+		}
+		base := strings.ToLower(filepath.Base(p.now))
+		if !filepath.IsAbs(p.now) || !(strings.HasPrefix(base, p.name) || p.name == "python" && strings.HasPrefix(base, "pypy")) {
+			return fmt.Errorf("%s %q: hier nur der ganze Pfad zu einem Programm namens %s… (anderes in der Einstellungsdatei festlegen)", p.key, p.now, p.name)
+		}
+	}
+	return nil
+}
+
+// keyVariable tells whether the settings page may read a variable of the
+// environment as the key of the AI service: one named like a key, not any
+// variable of the process (it is sent to the address the page names).
+func keyVariable(name string) bool {
+	if name == "" {
+		return false
+	}
+	for _, c := range name {
+		if !(c == '_' || c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9') {
+			return false
+		}
+	}
+	u := strings.ToUpper(name)
+	return strings.Contains(u, "KEY") || strings.Contains(u, "TOKEN")
+}
+
+const keyVariableError = "Als Schlüssel-Variable geht nur ein Name mit KEY oder TOKEN (z.B. $MITTWALD_LLM_API_KEY)"
 
 func cleanFolders(in []config.Folder) []config.Folder {
 	var out []config.Folder

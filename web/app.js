@@ -8,6 +8,8 @@
   const $$ = (s, el = document) => [...el.querySelectorAll(s)];
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const icon = (name, cls = '') => `<svg class="i ${cls}"><use href="#i-${name}"/></svg>`;
+  // forms that only group fields (password managers): Enter submits nothing
+  document.addEventListener('submit', (e) => { if (e.target.matches?.('form[data-nosubmit]')) e.preventDefault(); });
   const store = {
     get(k, d) { try { const v = localStorage.getItem('schuhkarton-' + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
     set(k, v) { try { localStorage.setItem('schuhkarton-' + k, JSON.stringify(v)); } catch { /* private mode */ } },
@@ -3123,7 +3125,7 @@
 
   function tileLayer() {
     // OpenStreetMap tiles (or the configured ones); dark mode inverts them in CSS
-    return L.tileLayer(S.config.mapTiles || 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: S.config.mapAttribution || '© OpenStreetMap' });
+    return L.tileLayer(S.config.mapTiles || 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: esc(S.config.mapAttribution || '© OpenStreetMap') });
   }
 
   // ---------------------------------------------------------------------------
@@ -3407,7 +3409,7 @@
       pop.className = 'pop pw-pop themed';
       pop.id = 'pop';
       pop.innerHTML = `<b>${t('Passwort ändern')}</b>
-        <form onsubmit="return false"><input type="text" autocomplete="username" value="${esc(this.me.name)}" hidden>
+        <form data-nosubmit><input type="text" autocomplete="username" value="${esc(this.me.name)}" hidden>
         <input type="password" id="pwOld" autocomplete="current-password" placeholder="${t('Bisheriges Passwort')}">
         <input type="password" id="pwNew" autocomplete="new-password" placeholder="${t('Neues Passwort (mind. 8 Zeichen)')}">
         <div class="row"><button class="primary" data-a="save">${t('Speichern')}</button><button data-a="cancel">${t('Abbrechen')}</button></div></form>`;

@@ -360,7 +360,7 @@ func runServe(cmd string, args []string) error {
 	}
 	defer users.Flush()
 	r := &runner{base: ctx, webDir: *f.web, sw: &handlerSwitch{}, prog: &server.ProgressBox{}, users: users, setupToken: server.NewToken()}
-	r.http = &http.Server{Handler: r.sw, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute}
+	r.http = &http.Server{Handler: server.Headers(r.sw), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute}
 	if err := r.listen(cfg.Server.Listen, cfg); err != nil {
 		return err
 	}
@@ -894,7 +894,7 @@ func runWorker(args []string) error {
 	fs := flag.NewFlagSet("schuhkarton worker", flag.ExitOnError)
 	cfgPath := fs.String("config", "", "Einstellungsdatei")
 	listen := fs.String("listen", "", "Adresse (Standard 0.0.0.0:8089)")
-	token := fs.String("token", "", "Token, den die Galerie mitschicken muss (leer: ohne Schutz)")
+	token := fs.String("token", "", "Token, den die Galerie mitschicken muss (off: ohne Schutz)")
 	python := fs.String("python", "", "Python mit OpenCV, Pillow, pillow_heif")
 	models := fs.String("models", "", "Ordner mit den Gesichtsmodellen")
 	workers := fs.Int("workers", 0, "parallele Prozesse")
@@ -918,14 +918,33 @@ func runWorker(args []string) error {
 		return errors.New("kein Python gefunden; der Gesichtserkennungs-Container bringt alles mit (siehe README)")
 	}
 	dirs := []string{firstNonEmpty(*models, cfg.Faces.ModelsDir), filepath.Join(cfg.Cache.Dir, "models"), "/models"}
-	if w.Token == "" {
-		log.Printf("Achtung: ohne Token kann jeder im Netz Bilder zur Erkennung schicken (-token oder SCHUHKARTON_WORKER_TOKEN)")
+	// Without a token everybody who reaches the address can send pictures.
+	// That is fine for this machine alone; on a network address it has to
+	// be asked for with the token "off".
+	switch {
+	case strings.EqualFold(w.Token, "off"):
+		w.Token = ""
+		log.Printf("Achtung: ohne Token kann jeder im Netz Bilder zur Erkennung schicken")
+	case w.Token == "" && !loopbackAddr(w.Listen):
+		return fmt.Errorf("kein Token: auf %s könnte jeder im Netz Bilder zur Erkennung schicken. "+
+			"Einen Token setzen (-token oder SCHUHKARTON_WORKER_TOKEN, derselbe wie faces.token der Galerie), "+
+			"nur auf diesem Rechner lauschen (-listen 127.0.0.1:8089) oder ausdrücklich darauf verzichten (-token off)", w.Listen)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	srv := worker.New(worker.Options{Listen: w.Listen, Token: w.Token, Python: py, Models: dirs,
 		Workers: w.Workers, MinScore: cfg.Faces.MinScore, AuraWorkers: max(0, w.AuraWorkers)})
 	return srv.Run(ctx)
+}
+
+// loopbackAddr tells whether a listen address is reachable from this machine only.
+func loopbackAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	ip := net.ParseIP(host)
+	return host == "localhost" || (ip != nil && ip.IsLoopback())
 }
 
 func firstNonEmpty(v ...string) string {
@@ -988,10 +1007,15 @@ func runDoctor(args []string) error {
 			fmt.Printf("  %s: Erkennung %v, Zuordnung %v, %s %s\n", cfg.Faces.URL, wi.Detection, wi.Recognition, wi.Version, strings.Join(wi.Missing, ", "))
 		}
 	case "local":
-		p := helper.New(helper.Options{Python: helper.Find(cfg.Faces.Python), ScriptDir: os.TempDir(),
+		// a folder of its own: the script is run from there (see worker.New)
+		dir, _ := os.MkdirTemp("", "schuhkarton-doctor-")
+		p := helper.New(helper.Options{Python: helper.Find(cfg.Faces.Python), ScriptDir: dir,
 			Models: []string{cfg.Faces.ModelsDir, filepath.Join(cfg.Cache.Dir, "models")}, Size: 1, MinScore: cfg.Faces.MinScore})
 		i := p.Probe()
 		p.Close()
+		if dir != "" {
+			os.RemoveAll(dir)
+		}
 		fmt.Printf("  Python %s: Erkennung %v, Zuordnung %v %s %s\n", i.Python, i.Detection, i.Recognition, strings.Join(i.Missing, ", "), i.Error)
 	}
 	fmt.Printf("\nBildbeschreibungen: %s\n", cfg.AI.Mode)

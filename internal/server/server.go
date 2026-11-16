@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -215,6 +216,13 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	admin := isAdmin(r)
 	if !admin {
 		st.Import, st.Unreadable = nil, nil // folder paths and file errors are for admins
+		// that something failed shows to everybody, what exactly (addresses
+		// of services, paths) only to admins
+		for _, e := range []*string{&st.FaceErr, &st.AIError, &st.OCRError, &st.SpeechError, &st.XMPError, &st.RulesError} {
+			if *e != "" {
+				*e = "Fehler"
+			}
+		}
 	}
 	res := map[string]any{"status": st, "scanning": s.lib.Scanning()}
 	if s.backup != nil {
@@ -305,9 +313,14 @@ func (s *Server) item(w http.ResponseWriter, r *http.Request) {
 		faces = append(faces, fc)
 	}
 	ext := strings.ToLower(path.Ext(it.Rel))
+	// where the file is on this machine is for admins; others see it inside its library folder
+	where := path.Join(s.lib.RootName(it), it.Rel)
+	if isAdmin(r) {
+		where = s.lib.Path(it)
+	}
 	res := map[string]any{
 		"id": it.ID, "kind": it.Kind, "name": path.Base(it.Rel), "album": s.lib.AlbumOf(it), "rel": it.Rel,
-		"root": s.lib.RootName(it), "path": s.lib.Path(it), "size": it.Size, "mtime": it.MTime,
+		"root": s.lib.RootName(it), "path": where, "size": it.Size, "mtime": it.MTime,
 		"taken": it.Taken, "takenSrc": it.TakenSrc, "w": it.W, "h": it.H, "aspect": it.Aspect,
 		"gps": it.GPS, "lat": it.Lat, "lon": it.Lon, "alt": it.Alt,
 		"make": it.Make, "model": it.Model, "lens": it.Lens, "software": it.Software,
@@ -369,6 +382,9 @@ func (s *Server) albums(w http.ResponseWriter, r *http.Request) { writeJSON(w, r
 
 func (s *Server) people(w http.ResponseWriter, r *http.Request) {
 	st := s.lib.Status()
+	if st.FaceErr != "" && !isAdmin(r) {
+		st.FaceErr = "Fehler" // the text names the address of the face service
+	}
 	writeJSON(w, r, map[string]any{"people": s.lib.People(), "mode": st.FaceMode, "detection": st.FaceOK,
 		"recognition": st.FaceRec, "error": st.FaceErr, "faces": st.Faces, "faceTodo": st.FaceTodo})
 }
@@ -679,7 +695,7 @@ func (s *Server) zip(w http.ResponseWriter, r *http.Request) {
 		if s.lib.Unreadable(it) != nil { // reading it would freeze the share
 			continue
 		}
-		f, err := os.Open(s.lib.Path(it))
+		f, err := s.lib.OpenOriginal(it)
 		if err != nil {
 			continue
 		}
@@ -728,9 +744,9 @@ func (s *Server) thumb(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.URL.Query().Get("v") != "" {
-		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
 	} else {
-		w.Header().Set("Cache-Control", "public, max-age=3600")
+		w.Header().Set("Cache-Control", "private, max-age=3600")
 	}
 	http.ServeFile(w, r, p)
 }
@@ -747,7 +763,7 @@ func (s *Server) face(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.Header().Set("Cache-Control", "private, max-age=86400")
 	http.ServeFile(w, r, p)
 }
 
@@ -786,9 +802,9 @@ func (s *Server) serveOriginal(w http.ResponseWriter, r *http.Request, it *galle
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
-	f, err := os.Open(s.lib.Path(it))
+	f, err := s.lib.OpenOriginal(it)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		http.Error(w, "nicht gefunden", http.StatusNotFound) // not the error: it names the path
 		return
 	}
 	defer f.Close()
@@ -825,6 +841,9 @@ func (s *Server) print(w http.ResponseWriter, r *http.Request) {
 	w.Write(b)
 }
 
+// transcodeSlots: videos converted for browsers at the same time.
+var transcodeSlots = make(chan struct{}, max(2, runtime.NumCPU()))
+
 // video plays the original, or a cached / live H.264 transcode with ?h264=1.
 func (s *Server) video(w http.ResponseWriter, r *http.Request) {
 	it := s.lib.Get(r.PathValue("id"))
@@ -854,6 +873,15 @@ func (s *Server) video(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.lib.Unreadable(it); err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	// each one is an ffmpeg encoding at full speed: a few at a time
+	select {
+	case transcodeSlots <- struct{}{}:
+		defer func() { <-transcodeSlots }()
+	default:
+		w.Header().Set("Retry-After", "20")
+		http.Error(w, "Gerade werden schon Videos umgewandelt, bitte gleich noch einmal", http.StatusServiceUnavailable)
 		return
 	}
 	w.Header().Set("Content-Type", "video/mp4")

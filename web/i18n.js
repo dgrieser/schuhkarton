@@ -807,6 +807,7 @@ window.I18N.en = {
   "Name: 1 bis 64 Zeichen, keine Steuerzeichen": "Name: 1 to 64 characters, no control characters",
   "Passwort: mindestens 8 Zeichen": "Password: at least 8 characters",
   "Registrieren ist ausgeschaltet": "Registration is turned off",
+  "Als Schlüssel-Variable geht nur ein Name mit KEY oder TOKEN (z.B. $MITTWALD_LLM_API_KEY)": "The key variable must have KEY or TOKEN in its name (e.g. $MITTWALD_LLM_API_KEY)",
   "Bitte anmelden": "Please sign in",
   "ungültige Anfrage": "invalid request",
   "Zu viele offene Anfragen; bitte später noch einmal": "Too many pending requests; please try again later",
