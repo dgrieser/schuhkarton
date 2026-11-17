@@ -259,6 +259,7 @@ type compactItem struct {
 	F      bool     `json:"f,omitempty"`
 	X      bool     `json:"x,omitempty"`
 	Pp     []string `json:"pp,omitempty"`
+	Po     []string `json:"po,omitempty"` // people with a face not approved here
 	Approx bool     `json:"ap,omitempty"`
 	Doc    bool     `json:"dc,omitempty"`
 	Notes  int      `json:"nt,omitempty"` // number of notes
@@ -267,6 +268,7 @@ type compactItem struct {
 func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 	user := userName(r)
 	items := s.lib.Items()
+	approvalOf := s.lib.FaceApprovals()
 	out := make([]compactItem, 0, len(items))
 	for _, it := range items {
 		if it.LivePhoto != "" {
@@ -284,11 +286,25 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 				c.Lv, c.Lk = lv.ID, lv.Key()[:8]
 			}
 		}
-		seen := map[string]bool{}
-		for i := range s.lib.ItemFaces(it) {
-			if pid, _ := s.lib.FacePerson(it.ID, i); pid != "" && !seen[pid] {
+		faces := s.lib.ItemFaces(it)
+		var approved []bool
+		var whole bool
+		if len(faces) > 0 {
+			approved, whole = approvalOf(it)
+		}
+		seen, open := map[string]bool{}, map[string]bool{}
+		for i := range faces {
+			pid, _ := s.lib.FacePerson(it.ID, i)
+			if pid == "" {
+				continue
+			}
+			if !seen[pid] {
 				seen[pid] = true
 				c.Pp = append(c.Pp, pid)
+			}
+			if !whole && i < len(approved) && !approved[i] && !open[pid] {
+				open[pid] = true
+				c.Po = append(c.Po, pid)
 			}
 		}
 		out = append(out, c)

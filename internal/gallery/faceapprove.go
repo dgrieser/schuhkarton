@@ -35,6 +35,17 @@ func (l *Library) FaceApproval(it *Item) (faces []bool, item bool) {
 	return approval(it, labeled)
 }
 
+// FaceApprovals is FaceApproval for many items: the labels are looked at
+// once, when it is called (for listing the whole library).
+func (l *Library) FaceApprovals() func(it *Item) (faces []bool, item bool) {
+	labeled := l.people.labeledAll()
+	return func(it *Item) ([]bool, bool) {
+		l.mu.RLock()
+		defer l.mu.RUnlock()
+		return approval(it, labeled[it.ID])
+	}
+}
+
 // FaceFlags tells whether an item was approved as a whole, and whether its
 // faces wait to be looked for again.
 func (l *Library) FaceFlags(it *Item) (whole, redo bool) {

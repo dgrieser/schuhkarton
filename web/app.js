@@ -1021,6 +1021,10 @@
       $('.adm-menu')?.remove();
       if (FS.auto) FS.exit();
       if (!fromPop) history.back();
+      if (S.personStale) {
+        S.personStale = false;
+        if (route.view === 'person') rerender();
+      }
       if (this.it) S.gallery?.scrollToItem(this.it.id);
     },
 
@@ -1387,6 +1391,9 @@
     // the photo's details again after a change of its faces
     async refreshItem(it) {
       await loadPeople();
+      // a person's page filtered by approval is shown anew once the viewer is closed (the items
+      // are loaded again meanwhile; while closed, scheduleReload shows them anew)
+      if (route.view === 'person' && this.open_ && store.get('person-approved', 'all') !== 'all') S.personStale = true;
       const d = await api(`/api/item/${it.id}`);
       if (this.it !== it) return;
       this.detail = d;
@@ -2943,7 +2950,7 @@
       const show = new Set(store.get('people-show', ['named', 'unnamed']).filter((k) => kinds.some(([x]) => x === k)));
       if (!show.size) show.add('named');
       view.innerHTML = `<div class="head"><div><h1>${t('Personen')}</h1><div class="sub">${t('{a} mit Namen · {b} ohne Namen', { a: pl(named.length, '{n} Person', '{n} Personen'), b: pl(unnamed.length, '{n} Gruppe', '{n} Gruppen') })}</div></div>
-        <div class="tools">${cardTools('people', [['count', 'Meiste Fotos'], ['name', 'Name']])}${Account.can('admin') && info.recognition ? `<button class="btn ghost" data-rematch title="${t('Namen aller nicht bestätigten Gesichter neu zuordnen, nach den bestätigten Gesichtern jeder Person; es wird nicht neu gesucht')}">${icon('people')}<span>${t('Namen neu zuordnen')}</span></button>` : ''}${Account.can('admin') && info.detection ? `<button class="btn ghost" data-rethink title="${t('Gesichter in allen Fotos neu suchen, die nicht bestätigt sind, auch zusätzliche; auf Wunsch auch in Fotos, deren Gesichter alle einzeln bestätigt sind; bestätigte Gesichter, Namen und von Hand markierte bleiben')}">${icon('refresh')}<span>${t('Gesichter neu suchen')}</span></button>` : ''}<div class="kindset" role="group" aria-label="${t('Anzeigen')}">${kinds.map(([k, l, ic]) =>
+        <div class="tools">${cardTools('people', [['count', 'Meiste Fotos'], ['name', 'Name']])}${Account.can('admin') && info.recognition ? `<button class="btn ghost icon-sm" data-rematch title="${t('Namen aller nicht bestätigten Gesichter neu zuordnen, nach den bestätigten Gesichtern jeder Person; es wird nicht neu gesucht')}">${icon('people')}<span>${t('Neu zuordnen')}</span></button>` : ''}${Account.can('admin') && info.detection ? `<button class="btn ghost icon-sm" data-rethink title="${t('Gesichter in allen Fotos neu suchen, die nicht bestätigt sind, auch zusätzliche; auf Wunsch auch in Fotos, deren Gesichter alle einzeln bestätigt sind; bestätigte Gesichter, Namen und von Hand markierte bleiben')}">${icon('refresh')}<span>${t('Neu suchen')}</span></button>` : ''}<div class="kindset" role="group" aria-label="${t('Anzeigen')}">${kinds.map(([k, l, ic]) =>
           `<button data-pshow="${k}" class="${show.has(k) ? 'on' : ''}" aria-pressed="${show.has(k)}" title="${t('{x} zeigen oder ausblenden', { x: t(l) })}">${icon(ic)}<span>${t(l)}</span></button>`).join('')}</div></div></div>
         ${banner}<div data-psec></div>
         ${!S.people.length && info.recognition ? `<div class="empty">${icon('people')}<h2>${t('Noch keine Personen')}</h2><p>${t('Die Gesichtssuche läuft im Hintergrund.')}</p></div>` : ''}`;
@@ -3032,7 +3039,11 @@
         view.innerHTML = `<div class="empty"><h2>${t('Person nicht gefunden')}</h2><p><a class="link" href="#/personen">${t('Zur Übersicht')}</a></p></div>`;
         return;
       }
-      const items = S.items.filter((it) => it.pp?.includes(id));
+      const all = S.items.filter((it) => it.pp?.includes(id));
+      // approved or not: whether the person's faces in a photo are approved (po: the people with
+      // a face not approved in it; all: no filter)
+      const appr = ['ok', 'open'].includes(store.get('person-approved', 'all')) ? store.get('person-approved', 'all') : 'all';
+      const items = appr === 'all' ? all : all.filter((it) => !!it.po?.includes(id) === (appr === 'open'));
       const names = [...new Set(S.people.filter((x) => x.name && x.id !== id).map((x) => x.name))].sort();
       galleryView(view, {
         title: '', items, kinds: true,
@@ -3041,7 +3052,11 @@
       const head = $('.head', view);
       head.firstElementChild.outerHTML = `<div class="person-head"><span class="face"><img src="${faceURL(p.cover.item, p.cover.idx)}" alt=""></span><div>
         <input class="name-in" id="pname" value="${esc(p.name)}" placeholder="${Account.can('user') ? t('Name hinzufügen') : t('Unbenannt')}" list="pn2" ${Account.can('user') ? '' : 'readonly'}><datalist id="pn2">${names.map((n) => `<option value="${esc(n)}">`).join('')}</datalist>
-        <div class="sub">${pl(items.length, '{n} Foto', '{n} Fotos')}</div></div></div>`;
+        <div class="sub">${appr !== 'all' ? `${pl(items.length, '{n} Foto', '{n} Fotos')} ${t('von {n}', { n: num(all.length) })}` : pl(items.length, '{n} Foto', '{n} Fotos')}</div></div></div>`;
+      const apprSet = [['all', 'Alle', 'people'], ['ok', 'Bestätigt', 'check'], ['open', 'Offen', 'face']];
+      $('.head .tools', view).insertAdjacentHTML('afterbegin', `<div class="kindset seg" role="group" aria-label="${t('Bestätigung')}">${apprSet.map(([k, l, ic]) =>
+        `<button data-pappr="${k}" class="${appr === k ? 'on' : ''}" aria-pressed="${appr === k}" title="${t({ all: 'Alle Fotos der Person', ok: 'Fotos, in denen ihre Gesichter bestätigt sind', open: 'Fotos, in denen ein Gesicht von ihr nicht bestätigt ist' }[k])}">${icon(ic)}<span>${t(l)}</span></button>`).join('')}</div>`);
+      for (const b of $$('[data-pappr]', view)) b.onclick = () => { store.set('person-approved', b.dataset.pappr); rerender(); };
       $('.head .tools', view).insertAdjacentHTML('afterbegin', `<button class="btn view-btn pact" id="pact" data-need="user" title="${t('Person')}: ${t('Ausblenden')}, ${t('Kein Gesicht')}" aria-haspopup="menu">${icon('face')}${icon('down')}</button>`);
       const inp = $('#pname', view);
       const save = async () => {
@@ -3077,7 +3092,7 @@
         else toast(t('Ausgeblendet'));
       };
       $('#pact', view).onclick = (e) => menu(e.currentTarget, [
-        { head: p.name || t('Unbenannt'), sub: pl(items.length, '{n} Foto', '{n} Fotos') },
+        { head: p.name || t('Unbenannt'), sub: pl(all.length, '{n} Foto', '{n} Fotos') },
         { icon: 'eye-off', label: t('Ausblenden'), run: hide },
         { icon: 'face-x', label: t('Kein Gesicht'), run: noFace },
       ]);

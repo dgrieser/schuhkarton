@@ -430,6 +430,9 @@ body.has-scrubber .view { padding-right: 64px; }
   margin: calc(var(--ring) / -2) 0 0 calc(var(--ring) / -2); border-radius: 50%; background: transparent; transition: background .15s;
 }
 @media (hover: hover) { .vbtn:not(.live-btn):hover::before { background: rgba(255, 255, 255, .14); } }
+/* the focus ring follows the round hover circle, not the button's box (narrower than tall) */
+.vbtn:not(.live-btn):focus-visible { outline: 0; }
+.vbtn:not(.live-btn):focus-visible::before { box-shadow: 0 0 0 2px var(--accent); }
 .vbtn:not(.live-btn):active::before { background: rgba(255, 255, 255, .2); }
 .vbtn.on { color: var(--accent); }
 .vbtn.live-btn { width: auto; border-radius: 99px; padding: 0 12px; font: 700 11px/1 system-ui; letter-spacing: .1em; gap: 6px; display: inline-flex; align-items: center; }
@@ -458,11 +461,10 @@ body.has-scrubber .view { padding-right: 64px; }
 .v-strip button:hover { opacity: 1; transform: translateY(-2px); }
 .v-strip img { width: 100%; height: 100%; object-fit: cover; }
 .viewer.idle .v-top, .viewer.idle .v-strip, .viewer.idle .v-nav, .viewer.idle #vLive { opacity: 0; pointer-events: none; }
-/* the loading animation of the viewer: the stage's bottom right corner (above the strip, beside the
+/* the loading animation of the viewer: the stage's bottom right corner (beside the strip, above the
    details on a phone), also while the bars are hidden */
-.v-activity { position: absolute; right: calc(16px + env(safe-area-inset-right)); bottom: 92px; z-index: 6; width: 40px; height: 40px;
-  border-radius: 50%; background: rgba(0, 0, 0, .45); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); pointer-events: none; }
-.viewer.marking .v-activity { bottom: 16px; }
+.v-activity { position: absolute; right: calc(16px + env(safe-area-inset-right)); bottom: calc(16px + env(safe-area-inset-bottom)); z-index: 6;
+  width: 40px; height: 40px; border-radius: 50%; background: rgba(0, 0, 0, .45); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); pointer-events: none; }
 .viewer.idle { cursor: none; }
 .v-faces { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
 .v-face {
@@ -744,7 +746,6 @@ body > .pop.name-pop.sheet { z-index: 130; } /* a person of a selection: over th
   .v-info { position: absolute; left: 0; right: 0; bottom: 0; width: auto; height: var(--sheet, 50dvh); border-left: 0; border-top: 1px solid #222; border-radius: 18px 18px 0 0; z-index: 8; }
   .v-nav { display: none; }
   .v-strip { display: none; }
-  .v-activity { bottom: calc(16px + env(safe-area-inset-bottom)); }
   .selbar { left: 0; right: 0; bottom: 0; transform: none; width: auto; max-width: none; max-height: 85dvh; border-radius: 18px 18px 0 0; border-bottom: 0; }
   @keyframes rise { from { transform: translateY(20px); opacity: 0; } }
 }
@@ -771,7 +772,6 @@ body > .pop.name-pop.sheet { z-index: 130; } /* a person of a selection: over th
   /* grip on the sheet's top edge: drag to any height, down to close */
   .viewer.info .v-grip { display: block; }
   .viewer.info .v-strip { display: none; }
-  .viewer.info .v-activity { bottom: 16px; }
   .head h1 { font-size: 24px; }
   .mapwrap { grid-template-columns: 1fr; grid-template-rows: 1fr 38%; }
 }
@@ -1200,6 +1200,7 @@ select.sel, .setup .user select, .setup #nrole, .adm-shift select {
   .head:has(.person-head) { flex-wrap: wrap; }
   .head:has(.person-head) .tools { width: 100%; }
   #phide span { display: none; }
+  .btn.icon-sm span { display: none; } /* symbol only, the title says what it does */
 }
 
 /* --- kind switches: photos, videos, documents, any mix ------------------------------- */
@@ -1210,6 +1211,8 @@ select.sel, .setup .user select, .setup #nrole, .adm-shift select {
 .kindset button.on { background: color-mix(in srgb, var(--accent) 16%, var(--surface3)); border-color: color-mix(in srgb, var(--accent) 45%, transparent); color: var(--text); }
 .kindset button.on svg { color: var(--accent); }
 .kindset button:not(.on) span { text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--muted) 60%, transparent); }
+/* one choice of several (not switches): the others are not struck through */
+.kindset.seg button:not(.on) span { text-decoration: none; }
 .chip.docs-hint { border-style: dashed; }
 @media (max-width: 720px) {
   .kindset button { padding: 0 9px; }
