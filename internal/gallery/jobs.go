@@ -265,7 +265,7 @@ func (l *Library) scanFaces(ctx context.Context, it *Item) bool {
 	// crops first under a name of their own: faces marked by hand or
 	// labeled keep their index and crop, found ones move to where they end up
 	tmp := prefix + "-new"
-	labeled := l.people.labeled(it.ID)
+	labeled := l.people.labeled(it.ID, false)
 	want := faceGenWant(l.FaceStatus(), it)
 	l.mu.RLock()
 	redo := it.FaceRedo // looked at again (RethinkFaces); approving meanwhile calls it off
@@ -327,7 +327,7 @@ func (l *Library) scanFaces(ctx context.Context, it *Item) bool {
 			}
 		}
 	}
-	labeled = l.people.labeled(it.ID) // names given while the search ran count too
+	labeled = l.people.labeled(it.ID, false) // names given while the search ran count too
 	l.mu.Lock()
 	approved := it.FacesOK
 	if approved {

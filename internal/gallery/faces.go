@@ -419,14 +419,16 @@ func (l *Library) RestoreFaceLabels(labels map[string]string) error {
 	return nil
 }
 
-// labeled returns the indexes of an item's faces that carry a label.
-func (s *peopleStore) labeled(item string) map[int]bool {
+// labeled returns the indexes of an item's faces that carry a label (settled:
+// only labels that settle a face, see approvedLabel; else every label, which
+// keeps a face at its index when faces are found again).
+func (s *peopleStore) labeled(item string, settled bool) map[int]bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	var out map[int]bool
-	for k := range s.labels {
+	for k, v := range s.labels {
 		rest, ok := strings.CutPrefix(k, item+":")
-		if !ok {
+		if !ok || (settled && !approvedLabel(v)) {
 			continue
 		}
 		if i, err := strconv.Atoi(rest); err == nil {
@@ -451,14 +453,19 @@ func (s *peopleStore) setNoFace(item string, idx []int) {
 	}
 }
 
-// labeledAll returns labeled for every item with labels.
-func (s *peopleStore) labeledAll() map[string]map[int]bool {
+// approvedLabel tells whether a label settles a face: a name, hidden or no
+// face. "Not this person" (!name) does not: who it is stays open.
+func approvedLabel(label string) bool { return label != "" && !strings.HasPrefix(label, "!") }
+
+// labeledAll returns labeled for every item with labels (settled: only
+// labels that settle a face, for approval).
+func (s *peopleStore) labeledAll(settled bool) map[string]map[int]bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := map[string]map[int]bool{}
-	for k := range s.labels {
+	for k, v := range s.labels {
 		item, rest, ok := strings.Cut(k, ":")
-		if !ok {
+		if !ok || (settled && !approvedLabel(v)) {
 			continue
 		}
 		if i, err := strconv.Atoi(rest); err == nil {

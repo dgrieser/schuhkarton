@@ -7,8 +7,8 @@ import (
 
 // Approval: a face somebody has looked at stays as it is when the faces of
 // photos are found again (RethinkFaces). Faces drawn by hand and faces with
-// a label (a name, "not this person", hidden, no face) count as approved
-// without more; others are approved one by one (Face.OK). A photo is
+// a label that settles them (a name, hidden, no face; not "not this person",
+// which leaves open who it is) count as approved without more; others are approved one by one (Face.OK). A photo is
 // approved when all its faces are, or when it was approved as a whole
 // (Item.FacesOK, also a photo without faces).
 
@@ -29,7 +29,7 @@ func hasApprovedFace(faces []Face) bool {
 // FaceApproval tells for each face of an item whether it is approved, and
 // whether the item is.
 func (l *Library) FaceApproval(it *Item) (faces []bool, item bool) {
-	labeled := l.people.labeled(it.ID)
+	labeled := l.people.labeled(it.ID, true)
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 	return approval(it, labeled)
@@ -38,7 +38,7 @@ func (l *Library) FaceApproval(it *Item) (faces []bool, item bool) {
 // FaceApprovals is FaceApproval for many items: the labels are looked at
 // once, when it is called (for listing the whole library).
 func (l *Library) FaceApprovals() func(it *Item) (faces []bool, item bool) {
-	labeled := l.people.labeledAll()
+	labeled := l.people.labeledAll(true)
 	return func(it *Item) ([]bool, bool) {
 		l.mu.RLock()
 		defer l.mu.RUnlock()
@@ -156,7 +156,7 @@ func approvedLocked(it *Item) Approval {
 // approved one by one (a face may still be missing); never those approved
 // as a whole. Videos are left out: their frames are dear.
 func (l *Library) rethinkable(complete bool) []*Item {
-	labeled := l.people.labeledAll()
+	labeled := l.people.labeledAll(true)
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 	var out []*Item
