@@ -233,7 +233,7 @@ func (l *Library) mediaTodo() (thumbs, previews, faces []*Item) {
 		}
 		if faceOK && (it.Kind == Photo || (it.Kind == Video && it.LivePhoto == "" && l.media.ffmpeg != "")) {
 			want := faceGenWant(fs, it)
-			done := it.FacesDone && (!recog || !needsEmbedding(it.Faces)) && it.FaceGen&want == want
+			done := it.FacesDone && !it.FaceRedo && (!recog || !needsEmbedding(it.Faces)) && it.FaceGen&want == want
 			if done || off {
 				nFace++
 			} else {
@@ -267,6 +267,9 @@ func (l *Library) scanFaces(ctx context.Context, it *Item) bool {
 	tmp := prefix + "-new"
 	labeled := l.people.labeled(it.ID)
 	want := faceGenWant(l.FaceStatus(), it)
+	l.mu.RLock()
+	redo := it.FaceRedo // looked at again (RethinkFaces); approving meanwhile calls it off
+	l.mu.RUnlock()
 	var faces []Face
 	var err error
 	if it.Kind == Video {
@@ -284,6 +287,18 @@ func (l *Library) scanFaces(ctx context.Context, it *Item) bool {
 		l.logf("faces %s: %v", it.Rel, err)
 		if isTransient(err) {
 			return true // container unreachable: try again on the next pass
+		}
+		if redo { // looked at again: what was found before stays
+			l.mu.Lock()
+			it.FaceRedo = false
+			l.mu.Unlock()
+			if crops, _ := filepath.Glob(tmp + "_*.jpg"); len(crops) > 0 {
+				for _, c := range crops {
+					os.Remove(c)
+				}
+			}
+			l.markDirty()
+			return true
 		}
 		faces = nil
 	}
@@ -312,9 +327,62 @@ func (l *Library) scanFaces(ctx context.Context, it *Item) bool {
 			}
 		}
 	}
+	labeled = l.people.labeled(it.ID) // names given while the search ran count too
 	l.mu.Lock()
+	approved := it.FacesOK
+	if approved {
+		// approved as a whole (also before or while the search ran): no face comes or
+		// goes, those found only lend their embeddings to the faces there
+		labeled = make(map[int]bool, len(it.Faces))
+		for i := range it.Faces {
+			labeled[i] = true
+		}
+	}
 	merged, place := mergeFaces(it.Faces, faces, labeled, l.people.threshNew)
-	it.Faces, it.FacesDone, it.FaceGen = merged, true, want
+	if approved {
+		n := len(it.Faces)
+		merged = merged[:n:n]
+		for i, to := range place {
+			if to >= n {
+				place[i] = -1
+			}
+		}
+		extra = nil
+	}
+	// an old face left at its place (not taken by a found face) that the second
+	// search found again stays as it is: it is not missing, and the found one is
+	// not taken in a second time (marked taken, the list keeps its order)
+	var again []int
+	if len(extra) > 0 && len(it.Faces) > 0 {
+		taken := make(map[int]bool, len(place))
+		for _, to := range place {
+			taken[to] = true
+		}
+		extra = append([]Face(nil), extra...)
+		for i, f := range it.Faces {
+			if i >= len(merged) || taken[i] || !sameBox(merged[i], f) {
+				continue
+			}
+			for k := range extra {
+				if (extra[k].Emb != nil || extra[k].Emb2 != nil) && sameSpot(extra[k], f) {
+					extra[k].Emb, extra[k].Emb2 = nil, nil
+					again = append(again, i)
+					break
+				}
+			}
+		}
+	}
+	var gone []int
+	if redo && !approved {
+		// looked at again: an old face not found any more and not approved goes
+		// aside as no face (removing it would move the indexes after it)
+		gone = leftover(it.Faces, labeled, append(place[:len(place):len(place)], again...))
+		if len(gone) > 0 {
+			// under l.mu: no approval comes in between
+			l.people.setNoFace(it.ID, gone)
+		}
+	}
+	it.Faces, it.FacesDone, it.FaceGen, it.FaceRedo = merged, true, want, false
 	if it.Kind == Photo && want&genExtra != 0 && err == nil {
 		it.Extra = extra
 		if len(extra) > 0 {
@@ -328,6 +396,11 @@ func (l *Library) scanFaces(ctx context.Context, it *Item) bool {
 			os.Remove(from)
 		} else {
 			os.Rename(from, fmt.Sprintf("%s_%d.jpg", prefix, to))
+		}
+	}
+	if len(gone) > 0 {
+		if err := l.people.save(); err != nil {
+			l.logf("faces %s: %v", it.Rel, err)
 		}
 	}
 	l.applyMetaFaces(it) // names from the file's metadata (a new cache)

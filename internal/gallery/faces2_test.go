@@ -180,6 +180,21 @@ func TestExtraFacesTakenIn(t *testing.T) {
 	if l.promoteExtras(true) {
 		t.Error("taken in twice")
 	}
+	// looked for again with another face approved: the face taken in is found
+	// again by the second search, so it is not missing, and not taken in twice
+	if _, err := l.ApproveFaces(a.ID, []int{0}, false, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.RethinkFaces(false); err != nil {
+		t.Fatal(err)
+	}
+	l.scanFaces(ctx, a)
+	if l.IsNoFace(a.ID, 1) || len(l.ItemFaces(a)) != 2 {
+		t.Fatalf("taken face after looking again: no face %v, %d faces", l.IsNoFace(a.ID, 1), len(l.ItemFaces(a)))
+	}
+	if l.promoteExtras(true) {
+		t.Error("taken in twice after looking again")
+	}
 }
 
 // boxFaces finds no face; asked with a box it embeds the box itself

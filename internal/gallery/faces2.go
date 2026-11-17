@@ -204,7 +204,7 @@ func (l *Library) promoteExtras(force bool) bool {
 	var todo []extraOf
 	l.mu.RLock()
 	for _, it := range l.items {
-		if len(it.Extra) > 0 {
+		if len(it.Extra) > 0 && !it.FacesOK { // approved as a whole: no face comes in
 			todo = append(todo, extraOf{it: it, extra: it.Extra})
 		}
 	}
@@ -368,8 +368,8 @@ func (l *Library) promoteExtras(force bool) bool {
 	}
 	n := 0
 	for it, ms := range byItem {
-		if l.byID[it.ID] != it {
-			continue // scanned anew meanwhile
+		if l.byID[it.ID] != it || it.FacesOK {
+			continue // scanned anew or approved meanwhile
 		}
 		faces := append([]Face(nil), it.Faces...)
 		gone := map[int]bool{}

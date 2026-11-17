@@ -458,6 +458,11 @@ body.has-scrubber .view { padding-right: 64px; }
 .v-strip button:hover { opacity: 1; transform: translateY(-2px); }
 .v-strip img { width: 100%; height: 100%; object-fit: cover; }
 .viewer.idle .v-top, .viewer.idle .v-strip, .viewer.idle .v-nav, .viewer.idle #vLive { opacity: 0; pointer-events: none; }
+/* the loading animation of the viewer: the stage's bottom right corner (above the strip, beside the
+   details on a phone), also while the bars are hidden */
+.v-activity { position: absolute; right: calc(16px + env(safe-area-inset-right)); bottom: 92px; z-index: 6; width: 40px; height: 40px;
+  border-radius: 50%; background: rgba(0, 0, 0, .45); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); pointer-events: none; }
+.viewer.marking .v-activity { bottom: 16px; }
 .viewer.idle { cursor: none; }
 .v-faces { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
 .v-face {
@@ -537,6 +542,13 @@ body.has-scrubber .view { padding-right: 64px; }
   -webkit-touch-callout: none; user-select: none; -webkit-user-select: none; } /* a long press opens the face's menu */
 .v-info .faces img { -webkit-user-drag: none; }
 .v-info .faces img { width: 52px; height: 52px; border-radius: 50%; object-fit: cover; background: #222; }
+/* an approved face: a small check on its picture */
+.v-info .faces a.ok { position: relative; }
+.v-info .faces .face-ok { position: absolute; left: 44px; top: 36px; display: grid; place-items: center; width: 18px; height: 18px; border-radius: 50%;
+  background: var(--accent); color: #111; box-shadow: 0 0 0 2px #111; }
+.v-info .faces .face-ok .i { width: 11px; height: 11px; stroke-width: 3; }
+.v-info h3 .faces-ok { display: inline-flex; align-items: center; gap: 4px; margin-left: 8px; font-size: 12px; text-transform: none; letter-spacing: 0; color: var(--accent); }
+.v-info h3 .faces-ok .i { width: 14px; height: 14px; }
 .v-info .faces .face-t { display: inline-flex; align-items: center; gap: 3px; margin-top: -2px; padding: 2px 6px; border-radius: 999px; background: rgba(255, 255, 255, 0.1); color: #e6e8eb; font-size: 10.5px; font-variant-numeric: tabular-nums; cursor: pointer; }
 .v-info .faces .face-t:hover { background: rgba(255, 255, 255, 0.2); }
 .v-info .faces .face-t .i { width: 9px; height: 9px; }
@@ -651,7 +663,7 @@ body > .pop.name-pop.sheet { z-index: 130; } /* a person of a selection: over th
   opacity: 0; pointer-events: none; transition: opacity .2s, transform .25s var(--ease);
 }
 .toast.on { opacity: 1; transform: translateX(-50%) translateY(0); }
-.toast.act { display: flex; align-items: center; gap: 10px; padding: 6px 6px 6px 18px; }
+.toast.act { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px 10px; padding: 6px 6px 6px 18px; }
 .toast.act.on { pointer-events: auto; }
 /* a touch screen: every toast can be swiped away (the script moves it) */
 @media (pointer: coarse) { .toast.on { pointer-events: auto; touch-action: none; -webkit-user-select: none; user-select: none; } }
@@ -732,6 +744,7 @@ body > .pop.name-pop.sheet { z-index: 130; } /* a person of a selection: over th
   .v-info { position: absolute; left: 0; right: 0; bottom: 0; width: auto; height: var(--sheet, 50dvh); border-left: 0; border-top: 1px solid #222; border-radius: 18px 18px 0 0; z-index: 8; }
   .v-nav { display: none; }
   .v-strip { display: none; }
+  .v-activity { bottom: calc(16px + env(safe-area-inset-bottom)); }
   .selbar { left: 0; right: 0; bottom: 0; transform: none; width: auto; max-width: none; max-height: 85dvh; border-radius: 18px 18px 0 0; border-bottom: 0; }
   @keyframes rise { from { transform: translateY(20px); opacity: 0; } }
 }
@@ -758,6 +771,7 @@ body > .pop.name-pop.sheet { z-index: 130; } /* a person of a selection: over th
   /* grip on the sheet's top edge: drag to any height, down to close */
   .viewer.info .v-grip { display: block; }
   .viewer.info .v-strip { display: none; }
+  .viewer.info .v-activity { bottom: 16px; }
   .head h1 { font-size: 24px; }
   .mapwrap { grid-template-columns: 1fr; grid-template-rows: 1fr 38%; }
 }

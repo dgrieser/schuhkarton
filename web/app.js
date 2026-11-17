@@ -58,19 +58,21 @@
   const markSnip = (s) => esc(s).replace(/\x01/g, '<mark>').replace(/\x02/g, '</mark>');
 
   let toastT;
-  // toast(msg) shows a short note; with action and onAction it gets a button (e.g. "Rückgängig").
+  // toast(msg) shows a short note; with action and onAction it gets a button (e.g. "Rückgängig"),
+  // with action a list of [label, onAction] a button each.
   // ms: how long it stays (default: longer with a button). The one kind of message everywhere.
   function toast(msg, action, onAction, ms) {
     const el = $('#toast');
     swipeToast(el);
     clearTimeout(el.goneT);
     el.style.transform = el.style.opacity = el.style.transition = '';
-    el.innerHTML = `<span>${esc(msg)}</span>${action ? `<button type="button">${esc(action)}</button>` : ''}`;
-    el.classList.toggle('act', !!action);
+    const acts = !action ? [] : Array.isArray(action) ? action : [[action, onAction]];
+    el.innerHTML = `<span>${esc(msg)}</span>${acts.map(([l]) => `<button type="button">${esc(l)}</button>`).join('')}`;
+    el.classList.toggle('act', acts.length > 0);
     el.classList.add('on');
     clearTimeout(toastT);
-    toastT = setTimeout(() => el.classList.remove('on'), ms || (action ? 10000 : 2400));
-    if (action) $('button', el).onclick = () => { el.classList.remove('on'); onAction(); };
+    toastT = setTimeout(() => el.classList.remove('on'), ms || (acts.length ? 10000 : 2400));
+    el.querySelectorAll('button').forEach((b, i) => { b.onclick = () => { el.classList.remove('on'); acts[i][1](); }; });
   }
 
   // on a touch screen a toast can be swiped away: sideways or down (once per element)
@@ -286,7 +288,7 @@
   const thumbURL = (it) => `/t/${it.id}/s.jpg?v=${it.v}`;
   const largeURL = (it) => `/t/${it.id}/m.jpg?v=${it.v}`;
   const previewURL = (it) => (it.k === 2 ? `/t/${it.id}/p.mp4?v=${it.v}` : it.lv ? `/t/${it.lv}/p.mp4?v=${it.lk}` : '');
-  const faceURL = (item, idx) => `/f/${item}/${idx}`;
+  const faceURL = (item, idx, v) => `/f/${item}/${idx}${v ? `?v=${encodeURIComponent(v)}` : ''}`; // v: the crop's version
 
   // Documents (items in folders like "Dokumente", library.documents) are a kind
   // of their own: hidden by default, any mix of photos, videos and documents.
@@ -1169,11 +1171,18 @@
           }
         }
       }
+      // the faces of the photo (also none) approved as a whole: none comes or goes when
+      // faces are looked for again (also offered when every face is approved on its own:
+      // a face may still be missing)
+      const approveBtn = !Account.can('user') || it.k !== 1 ? ''
+        : d.facesMine ? `<span class="faces-ok" title="${t('Die Gesichter in diesem Bild sind vollständig bestätigt und bleiben so, wenn neu gesucht wird')}">${icon('check')}<span>${t('Bestätigt')}</span></span><button class="link ai-redo mark-face" data-unapprove title="${t('Bestätigung aufheben')}">${icon('x')}</button>`
+          : `<button class="link ai-redo mark-face" data-approve title="${t('Die Gesichter in diesem Bild sind vollständig (auch wenn keins da ist): keins kommt dazu oder fällt weg, wenn neu gesucht wird')}">${icon('check')}<span>${t('Bestätigen')}</span></button>`;
       const faces = (d.faces || []).map((f) => {
         const per = f.person ? S.peopleById.get(f.person) : null;
         const name = f.name || (per ? t('Unbenannt') : t('Unbekannt'));
         const at = it.k === 2 ? `<small class="face-t" data-seek title="${t('Im Video zeigen')}">${icon('play', 'fill')}${fmtDur(f.t)}</small>` : '';
-        return `<a href="${f.person ? `#/person/${encodeURIComponent(f.person)}` : '#'}" data-face="${f.idx}"><img src="${faceURL(it.id, f.idx)}" alt="">${esc(name)}${at}</a>`;
+        const ok = f.ok ? `<span class="face-ok" title="${t('Bestätigt')}">${icon('check')}</span>` : '';
+        return `<a href="${f.person ? `#/person/${encodeURIComponent(f.person)}` : '#'}" data-face="${f.idx}"${f.ok ? ' class="ok"' : ''}><img src="${faceURL(it.id, f.idx, f.v)}" alt="">${ok}${esc(name)}${at}</a>`;
       }).join('');
       p.innerHTML = `
         <h3>${t('Aufnahme')}</h3>
@@ -1183,7 +1192,7 @@
           <div class="place">${d.place ? `<a class="link" href="#/ort/${encodeURIComponent(d.place)}">${esc(d.place)}</a>` : t('Ohne Ortsname')}
           ${d.gps ? `<div class="muted">${d.lat.toFixed(5)}, ${d.lon.toFixed(5)}${d.alt ? ` · ${Math.round(d.alt)} m` : ''}</div>` : ''}</div>
           ${d.gps ? `<div class="minimap" id="vMap"${this.mapOpen ? '' : ' hidden'}></div>` : ''}` : ''}
-        ${faces || Account.can('user') ? `<h3>${t('Personen')}${Account.can('user') ? ` <button class="link ai-redo mark-face" data-markface title="${t('Ein Gesicht selbst einrahmen, z.B. wenn es nicht erkannt wurde')}">${icon('face-plus')}<span>${t('Gesicht markieren')}</span></button>` : ''}</h3>${faces ? `<div class="faces">${faces}</div>` : ''}` : ''}
+        ${faces || Account.can('user') ? `<h3>${t('Personen')}${Account.can('user') ? ` <button class="link ai-redo mark-face" data-markface title="${t('Ein Gesicht selbst einrahmen, z.B. wenn es nicht erkannt wurde')}">${icon('face-plus')}<span>${t('Gesicht markieren')}</span></button>` : ''}${approveBtn}</h3>${faces ? `<div class="faces">${faces}</div>` : ''}` : ''}
         ${ai ? `<h3>${t('Beschreibung')} <span class="ai-badge" title="${t('Von einem KI-Modell geschrieben')}">${t('KI')}</span></h3>
           ${aiText ? `<div class="ai-desc">${aiText}</div>` : ''}
           ${aiTags.length ? `<div class="chips">${aiTags.map((k) => `<a class="chip" href="#/suche/${encodeURIComponent(k)}">${esc(k)}</a>`).join('')}</div>` : ''}
@@ -1223,6 +1232,8 @@
         drawMap();
       });
       $('[data-markface]', p)?.addEventListener('click', () => this.markFace());
+      $('[data-approve]', p)?.addEventListener('click', () => this.approveFaces({ all: true, ok: true }));
+      $('[data-unapprove]', p)?.addEventListener('click', () => this.approveFaces({ all: true, ok: false }));
       $('[data-redesc]', p)?.addEventListener('click', () => window.SK?.redescribe?.([it.id]));
       $('[data-reocr]', p)?.addEventListener('click', () => window.SK?.rerecognize?.([it.id]));
       $('[data-respeech]', p)?.addEventListener('click', () => window.SK?.retranscribe?.([it.id]));
@@ -1328,7 +1339,19 @@
         user && ['user', f.name ? t('Name ändern …') : t('Benennen …'), () => this.namePop(a, f)],
         user && ['eye-off', f.person ? t('Nicht diese Person') : t('Ausblenden'), () => this.saveFace(f, '')],
         user && ['face-x', t('Kein Gesicht'), () => this.saveFace(f, '-')],
+        user && !f.ok && ['check', t('Bestätigen'), () => this.approveFaces({ faces: [f.idx], ok: true })],
+        user && f.mine && !f.manual && ['x', t('Bestätigung aufheben'), () => this.approveFaces({ faces: [f.idx], ok: false })],
       ].filter(Boolean));
+    },
+
+    // approves faces of the photo (ok false: takes it back); all: every face and the photo as a whole
+    async approveFaces(req) {
+      const it = this.it;
+      const res = await post(`/api/faces/${it.id}/approve`, req).catch((e) => ({ error: e.message }));
+      if (res.error) { toast(t('Fehler: {e}', { e: String(res.error).replace(/^\d{3} /, '') })); return; }
+      toast(req.ok ? (req.all ? t('Gesichter bestätigt') : t('Gesicht bestätigt')) : t('Bestätigung aufgehoben'),
+        t('Rückgängig'), async () => { await post(`/api/faces/${it.id}/approve`, { undo: res.undo }); await this.refreshItem(it); });
+      await this.refreshItem(it);
     },
 
     // sharing, the original and printing: one button, its menu. The link opens this photo in the
@@ -2920,7 +2943,7 @@
       const show = new Set(store.get('people-show', ['named', 'unnamed']).filter((k) => kinds.some(([x]) => x === k)));
       if (!show.size) show.add('named');
       view.innerHTML = `<div class="head"><div><h1>${t('Personen')}</h1><div class="sub">${t('{a} mit Namen · {b} ohne Namen', { a: pl(named.length, '{n} Person', '{n} Personen'), b: pl(unnamed.length, '{n} Gruppe', '{n} Gruppen') })}</div></div>
-        <div class="tools">${cardTools('people', [['count', 'Meiste Fotos'], ['name', 'Name']])}<div class="kindset" role="group" aria-label="${t('Anzeigen')}">${kinds.map(([k, l, ic]) =>
+        <div class="tools">${cardTools('people', [['count', 'Meiste Fotos'], ['name', 'Name']])}${Account.can('admin') && info.recognition ? `<button class="btn ghost" data-rematch title="${t('Namen aller nicht bestätigten Gesichter neu zuordnen, nach den bestätigten Gesichtern jeder Person; es wird nicht neu gesucht')}">${icon('people')}<span>${t('Namen neu zuordnen')}</span></button>` : ''}${Account.can('admin') && info.detection ? `<button class="btn ghost" data-rethink title="${t('Gesichter in allen Fotos neu suchen, die nicht bestätigt sind, auch zusätzliche; auf Wunsch auch in Fotos, deren Gesichter alle einzeln bestätigt sind; bestätigte Gesichter, Namen und von Hand markierte bleiben')}">${icon('refresh')}<span>${t('Gesichter neu suchen')}</span></button>` : ''}<div class="kindset" role="group" aria-label="${t('Anzeigen')}">${kinds.map(([k, l, ic]) =>
           `<button data-pshow="${k}" class="${show.has(k) ? 'on' : ''}" aria-pressed="${show.has(k)}" title="${t('{x} zeigen oder ausblenden', { x: t(l) })}">${icon(ic)}<span>${t(l)}</span></button>`).join('')}</div></div></div>
         ${banner}<div data-psec></div>
         ${!S.people.length && info.recognition ? `<div class="empty">${icon('people')}<h2>${t('Noch keine Personen')}</h2><p>${t('Die Gesichtssuche läuft im Hintergrund.')}</p></div>` : ''}`;
@@ -2943,6 +2966,30 @@
         bindShowHidden(sec, rerender, true); // the group is back among the others
       };
       bindCardTools($('.head', view), sec, 'people', () => draw());
+      // background jobs over the faces not approved: asked how many first, then started
+      // (complete: also the photos whose faces are all approved one by one, offered as a second button)
+      const bgJob = (sel, path, none, ask, started, unit) => $(sel, view)?.addEventListener('click', async () => {
+        const fail = (e) => toast(t('Fehler: {e}', { e: String(e).replace(/^\d{3} /, '') }));
+        const c = await api(path).catch((e) => ({ error: e.message }));
+        if (c.error) { fail(c.error); return; }
+        const more = (c.complete || 0) - c.n;
+        if (!c.n && more <= 0) { toast(t(none)); return; }
+        const start = (complete) => async () => {
+          const res = await post(path, { complete }).catch((e) => ({ error: e.message }));
+          if (res.error) { fail(res.error); return; }
+          toast(t(started, { x: unit(res.n) }));
+          setTimeout(() => { if (route.view === 'personen') VIEWS.personen(view); }, 3000);
+        };
+        const acts = [...(c.n ? [[t('Starten'), start(false)]] : []),
+          ...(more > 0 ? [[t('Auch vollständig bestätigte (+{n})', { n: num(more) }), start(true)]] : [])];
+        toast(t(ask, { x: unit(c.n) }), acts);
+      });
+      // names of the faces not approved, matched anew against the approved faces (no search)
+      bgJob('[data-rematch]', '/api/faces/rematch', 'Keine Gesichter ohne Bestätigung',
+        '{x} nicht bestätigt: Namen neu zuordnen?', 'Namen werden im Hintergrund neu zugeordnet ({x})', (n) => pl(n, '{n} Gesicht', '{n} Gesichter'));
+      // the faces of all photos not approved as a whole are looked for again
+      bgJob('[data-rethink]', '/api/faces/rethink', 'Alle Fotos sind bestätigt oder warten schon',
+        '{x} nicht bestätigt: Gesichter neu suchen?', '{x} werden im Hintergrund neu durchsucht', (n) => pl(n, '{n} Foto', '{n} Fotos'));
       for (const b of $$('[data-pshow]', view)) {
         b.onclick = () => {
           const k = b.dataset.pshow;

@@ -137,6 +137,9 @@ type Face struct {
 	// knew the person; it joins that person unless said not to be.
 	Src  string
 	Hint string
+	// OK: approved by hand, the face stays as it is when faces are found
+	// again (faceapprove.go)
+	OK bool
 }
 
 // Item is one photo or video.
@@ -192,6 +195,10 @@ type Item struct {
 	// FaceGen: what the faces were looked for with (faceGen bits).
 	Extra   []Face
 	FaceGen uint8
+	// FacesOK: all faces approved by hand, also none (faceapprove.go);
+	// FaceRedo: the faces are found again (RethinkFaces).
+	FacesOK  bool
+	FaceRedo bool
 
 	key string // cache key, derived from path, size and mtime
 }
@@ -340,6 +347,7 @@ type Library struct {
 	promotedAt   atomic.Int64  // when promoteExtras last looked (unix seconds)
 	promoteNow   atomic.Bool   // a face was named: promoteExtras looks at once
 	extrasNew    atomic.Bool   // a scan found faces of the second search
+	rematching   atomic.Bool   // RematchNames runs
 	scannedOnce  atomic.Bool   // the first scan is through
 	firstScan    chan struct{} // closed when the first scan is through
 	firstOnce    sync.Once

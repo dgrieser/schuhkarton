@@ -528,7 +528,7 @@ func encodeJPEG(img image.Image, q int) ([]byte, error) {
 }
 
 // mergeFaces puts what detection found next to the faces that keep their
-// index: those marked by hand and those with a label (labeled is the set of
+// index: those marked by hand, approved and those with a label (labeled is the set of
 // their indexes; names, "not this person", hidden and no face belong to the
 // index, and so does the crop). A found face that is one of them is dropped
 // (it may lend its embedding); the others take the places of the other faces
@@ -544,7 +544,7 @@ func mergeFaces(old, found []Face, labeled map[int]bool, same float32) (out []Fa
 	keep := make([]bool, len(old))
 	kept := false
 	for i, f := range old {
-		keep[i] = f.Manual || labeled[i]
+		keep[i] = faceKept(f, labeled[i])
 		kept = kept || keep[i]
 	}
 	if !kept {

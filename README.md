@@ -49,6 +49,21 @@ or another one.
   `faces.named_threshold`); the others follow in the chosen order. A framed
   face is looked at by the face service for this right away, and keeps what
   it found when it is saved.
+  Faces can be approved: one by one (*Bestätigen* in a face's menu in the
+  details) or all faces of a photo at once (*Bestätigen* next to
+  *Personen*, also for a photo without faces). Faces framed by hand and faces
+  with a name, "not this person", hidden or "no face" count as approved
+  already. Two jobs on the people page (admins) run in the background over
+  what is not approved:
+  *Namen neu zuordnen* matches the name of every face not approved anew,
+  against the approved faces of each person only, without looking for faces:
+  a face clearly like a named person goes to that person, the others are
+  grouped by likeness. *Gesichter neu suchen* looks for the faces of all
+  photos not approved again, extra faces too (on request also photos whose
+  faces are all approved one by one, for faces missed): approved faces stay
+  as they are, the others are replaced by what is found now, faces found anew
+  are added and named by grouping, and a face not found again is put aside
+  as no face. Videos are left out.
 - **Backup:** copies photos, cache and settings to a folder (a USB disk or a
   share) in the background. It only adds and updates; nothing in the backup is
   ever deleted.

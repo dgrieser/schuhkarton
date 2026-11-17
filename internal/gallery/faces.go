@@ -439,6 +439,38 @@ func (s *peopleStore) labeled(item string) map[int]bool {
 	return out
 }
 
+// setNoFace marks faces of an item as no face (faces a new search did not
+// find again); the caller saves. A face labeled meanwhile keeps its label.
+func (s *peopleStore) setNoFace(item string, idx []int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, i := range idx {
+		if k := (FaceRef{item, i}).key(); s.labels[k] == "" {
+			s.labels[k] = labelNoFace
+		}
+	}
+}
+
+// labeledAll returns labeled for every item with labels.
+func (s *peopleStore) labeledAll() map[string]map[int]bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := map[string]map[int]bool{}
+	for k := range s.labels {
+		item, rest, ok := strings.Cut(k, ":")
+		if !ok {
+			continue
+		}
+		if i, err := strconv.Atoi(rest); err == nil {
+			if out[item] == nil {
+				out[item] = map[int]bool{}
+			}
+			out[item][i] = true
+		}
+	}
+	return out
+}
+
 // IsNoFace tells whether a face was marked as no face.
 func (l *Library) IsNoFace(item string, idx int) bool {
 	l.people.mu.RLock()
