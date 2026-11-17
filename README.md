@@ -68,6 +68,17 @@ or another one.
   as no face. Videos are left out.
   A person's page filters their photos by approval (*Alle*, *Bestätigt*,
   *Offen*: a face of theirs in the photo is not approved).
+  *Schnell benennen* and *Schnell bestätigen* on the people page are quick
+  rounds of a handful of faces, each zoomed to the face, chosen for the most
+  gain per answer. Naming shows one typical, clear face of each of the
+  largest groups without a name; the name goes to that face and, not
+  approved, to the rest of its group. Approving shows faces with a name that
+  are not approved where the recognition is least sure (close to
+  `named_threshold`, or another person about as alike), weighed by how many
+  similar faces each stands for, people with few approved faces first,
+  spread over people and photos. Yes, no (then the right name) or skip; keys
+  J/N/S, a swipe on a phone, Z to go back. Afterwards *Neu zuordnen* matches
+  the other faces against the answers.
 - **Backup:** copies photos, cache and settings to a folder (a USB disk or a
   share) in the background. It only adds and updates; nothing in the backup is
   ever deleted.

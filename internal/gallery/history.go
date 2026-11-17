@@ -52,7 +52,7 @@ const (
 	ChRestore   = "restore"   // out of the trash
 	ChPurge     = "purge"     // trash emptied: gone for good
 	ChMove      = "move"      // Undo: []MoveFrom
-	ChFaces     = "faces"     // face names; Undo: labels before (RestoreFaceLabels)
+	ChFaces     = "faces"     // face names; Undo: labels before (RestoreFaceLabels), and hints before (HintUndoPrefix)
 	ChHide      = "hide"      // a person hidden; Undo: {"hid"}
 	ChShow      = "show"      // a hidden person shown again
 	ChNote      = "note"      // Undo: noteUndo
@@ -326,11 +326,15 @@ func renameInJSON(raw json.RawMessage, ids map[string]string) json.RawMessage {
 			out := make(map[string]any, len(t))
 			for k, val := range t {
 				nk := k
-				if n, ok := ids[k]; ok {
-					nk = n
-				} else if i := strings.LastIndex(k, ":"); i > 0 { // "id:index" (the id may be "trash:entry")
-					if n, ok := ids[k[:i]]; ok {
-						nk = n + k[i:]
+				pre, rest := "", k
+				if r, ok := strings.CutPrefix(k, HintUndoPrefix); ok { // "hint:id:index"
+					pre, rest = HintUndoPrefix, r
+				}
+				if n, ok := ids[rest]; ok {
+					nk = pre + n
+				} else if i := strings.LastIndex(rest, ":"); i > 0 { // "id:index" (the id may be "trash:entry")
+					if n, ok := ids[rest[:i]]; ok {
+						nk = pre + n + rest[i:]
 					}
 				}
 				out[nk] = walk(val)
@@ -831,6 +835,15 @@ func (l *Library) UndoChange(id, by string) (EditResult, error) {
 		if err = json.Unmarshal(cp.Undo, &labels); err != nil {
 			break
 		}
+		// hints the name gave the rest of a group (a quick round): "hint:item:idx"
+		hints := map[string]string{}
+		for k, v := range labels {
+			if h, ok := strings.CutPrefix(k, HintUndoPrefix); ok {
+				hints[h] = v
+				delete(labels, k)
+			}
+		}
+		l.RestoreHints(hints)
 		// faces of photos that are gone for good (or in the trash) are left out
 		for k := range labels {
 			if i := strings.LastIndex(k, ":"); i <= 0 || l.Get(k[:i]) == nil {

@@ -77,6 +77,8 @@ func New(ctx context.Context, o Options) http.Handler {
 	mux.HandleFunc("POST /api/people/hidden/{id}/show", s.requireUser(s.showHidden))
 	mux.HandleFunc("POST /api/face/{id}/{idx}", s.requireUser(s.labelFace))
 	mux.HandleFunc("POST /api/faces/labels", s.requireUser(s.restoreFaceLabels))
+	mux.HandleFunc("GET /api/faces/quiz", s.requireUser(s.quizFaces))
+	mux.HandleFunc("POST /api/faces/hints", s.requireUser(s.restoreHints))
 	mux.HandleFunc("POST /api/items/people", s.itemsPeople)
 	mux.HandleFunc("POST /api/items/people/{id}", s.requireUser(s.labelPersonIn))
 	mux.HandleFunc("POST /api/face/{id}/add", s.requireUser(s.addFace))
@@ -518,6 +520,11 @@ func (s *Server) showHidden(w http.ResponseWriter, r *http.Request) {
 func (s *Server) labelFace(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name string `json:"name"`
+		// Group: the rest of the face's group gets the name as a hint (a quick
+		// round: one answer names the group, not approved)
+		Group bool `json:"group"`
+		// Not: the face is not this person (whoever it is grouped with now)
+		Not string `json:"not"`
 	}
 	idx, err := strconv.Atoi(r.PathValue("idx"))
 	if err != nil || readJSON(r, &req) != nil {
@@ -528,16 +535,74 @@ func (s *Server) labelFace(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unknown face", http.StatusBadRequest)
 		return
 	}
-	old, _ := s.personBefore(s.lib.PersonOf(r.PathValue("id"), idx))
+	person := s.lib.PersonOf(r.PathValue("id"), idx)
+	old, _ := s.personBefore(person)
+	if req.Not != "" {
+		prev, err := s.lib.RejectFace(r.PathValue("id"), idx, req.Not)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		key := r.PathValue("id") + ":" + strconv.Itoa(idx)
+		s.recordFaces(r, []string{r.PathValue("id")}, map[string]any{"op": faceOp(""), "from": old, "to": "", "n": 1}, map[string]string{key: prev})
+		writeJSON(w, r, map[string]any{"ok": true, "undo": map[string]string{key: prev}})
+		return
+	}
+	var hints map[string]string
+	if req.Group && person != "" {
+		// before the label: the group as it is now
+		if h, err := s.lib.HintGroup(person, req.Name, gallery.FaceRef{Item: r.PathValue("id"), Idx: idx}); err == nil {
+			hints = h
+		}
+	}
 	prev, err := s.lib.LabelFace(r.PathValue("id"), idx, req.Name)
 	if err != nil {
+		if hints != nil {
+			s.lib.RestoreHints(hints)
+		}
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	key := r.PathValue("id") + ":" + strconv.Itoa(idx)
-	s.recordFaces(r, []string{r.PathValue("id")}, map[string]any{"op": faceOp(req.Name), "from": old, "to": strings.TrimSpace(req.Name), "n": 1}, map[string]string{key: prev})
-	// what the face had, for undo
-	writeJSON(w, r, map[string]any{"ok": true, "undo": map[string]string{r.PathValue("id") + ":" + strconv.Itoa(idx): prev}})
+	before := map[string]string{key: prev}
+	for k, h := range hints { // undone with it in the history
+		before[gallery.HintUndoPrefix+k] = h
+	}
+	s.recordFaces(r, []string{r.PathValue("id")}, map[string]any{"op": faceOp(req.Name), "from": old, "to": strings.TrimSpace(req.Name), "n": 1 + len(hints)}, before)
+	// what the face had, for undo (and the hints of its group before)
+	res := map[string]any{"ok": true, "undo": map[string]string{r.PathValue("id") + ":" + strconv.Itoa(idx): prev}}
+	if hints != nil {
+		res["hints"] = hints
+		res["group"] = len(hints)
+	}
+	writeJSON(w, r, res)
+}
+
+// quizFaces chooses the faces of a quick round (mode name or approve).
+func (s *Server) quizFaces(w http.ResponseWriter, r *http.Request) {
+	n, _ := strconv.Atoi(r.URL.Query().Get("n"))
+	faces, err := s.lib.QuizFaces(r.URL.Query().Get("mode"), n)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if faces == nil {
+		faces = []gallery.QuizFace{}
+	}
+	writeJSON(w, r, map[string]any{"faces": faces})
+}
+
+// restoreHints sets hints back, as "hints" of an answer of labelFace said (undo).
+func (s *Server) restoreHints(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Hints map[string]string `json:"hints"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	s.lib.RestoreHints(req.Hints)
+	writeJSON(w, r, map[string]any{"ok": true})
 }
 
 // approveFaces approves faces of an item, or takes that back: the faces
