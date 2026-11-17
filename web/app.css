@@ -479,6 +479,14 @@ body.has-scrubber .view { padding-right: 64px; }
   background: rgba(0, 0, 0, .72); padding: 2px 8px; border-radius: 6px; font-size: 12px; font-weight: 600;
 }
 .v-face.unknown { border-style: dashed; border-color: rgba(255, 255, 255, .6); }
+/* the tick beside the name of a named face not approved yet: a white ring, the yellow approved mark once ticked */
+.v-face span:has(.v-tick) { display: inline-flex; align-items: center; gap: 6px; padding-right: 3px; }
+.v-tick { display: grid; place-items: center; width: 18px; height: 18px; padding: 0; border: 2px solid #fff; border-radius: 50%; background: transparent; color: transparent; cursor: pointer; position: relative; }
+.v-tick::after { content: ''; position: absolute; inset: -8px; } /* a bigger target for a finger */
+.v-tick .i { width: 12px; height: 12px; stroke-width: 3; }
+.v-tick:hover { background: rgba(255, 255, 255, .2); }
+.v-tick:disabled { cursor: progress; }
+.v-tick.on { background: var(--accent); border-color: var(--accent); color: #111; } /* as the approved mark in the details */
 /* "Im Bild zeigen": the face blinks twice */
 .v-face.flash { z-index: 1; animation: face-flash .7s ease 2; }
 @keyframes face-flash { 50% { border-color: var(--accent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 45%, transparent), 0 0 0 9999px rgba(0, 0, 0, .35); } }

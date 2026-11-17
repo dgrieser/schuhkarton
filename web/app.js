@@ -1038,6 +1038,7 @@
 
     async show() {
       const it = (this.it = this.list[this.i]);
+      this.ticks = new Set(); // faces approved with their tick on this visit: the tick stays to untick
       this.mark?.end();
       this.resetZoom();
       $('#pop')?.remove();
@@ -1284,9 +1285,27 @@
       }
       const ov = document.createElement('div');
       ov.className = 'v-faces';
-      ov.innerHTML = faces.map((f) => `<div class="v-face ${f.name ? '' : 'unknown'}" data-idx="${f.idx}" style="left:${f.X * 100}%;top:${f.Y * 100}%;width:${f.W * 100}%;height:${f.H * 100}%"><span>${esc(f.name || (f.person ? t('Unbenannt') : '?'))}</span></div>`).join('');
+      // a named face not approved yet gets a round tick beside its name to approve it at once; ticked,
+      // it stays on this visit (to untick), and is gone once the photo is shown again
+      const user = Account.can('user');
+      const tick = (f) => (user && f.name && (!f.ok || (f.mine && this.ticks.has(f.idx)))
+        ? `<button type="button" class="v-tick${f.ok ? ' on' : ''}" data-tick="${f.idx}" title="${f.ok ? t('Bestätigung aufheben') : t('Bestätigen')}" aria-pressed="${!!f.ok}">${icon('check')}</button>` : '');
+      ov.innerHTML = faces.map((f) => `<div class="v-face ${f.name ? '' : 'unknown'}" data-idx="${f.idx}" style="left:${f.X * 100}%;top:${f.Y * 100}%;width:${f.W * 100}%;height:${f.H * 100}%"><span>${esc(f.name || (f.person ? t('Unbenannt') : '?'))}${tick(f)}</span></div>`).join('');
       this.media.appendChild(ov);
-      for (const b of $$('.v-face', ov)) b.onclick = (e) => { e.stopPropagation(); this.namePop(b, d.faces.find((x) => x.idx === +b.dataset.idx)); };
+      const it = this.it;
+      for (const b of $$('.v-face', ov)) {
+        b.onclick = (e) => {
+          e.stopPropagation();
+          const tk = e.target.closest('[data-tick]');
+          const f = d.faces.find((x) => x.idx === +b.dataset.idx);
+          if (!tk) { this.namePop(b, f); return; }
+          if (tk.disabled) return; // one change at a time: the next click goes by what was saved
+          this.ticks.add(f.idx);
+          tk.classList.toggle('on', !f.ok); // at once; the details follow
+          tk.disabled = true;
+          this.approveFaces({ faces: [f.idx], ok: !f.ok }).then((done) => { if (!done && this.it === it) this.drawFaces(); });
+        };
+      }
     },
 
     // a face of a video: pause at the second it was found at and show its box
@@ -1352,10 +1371,11 @@
     async approveFaces(req) {
       const it = this.it;
       const res = await post(`/api/faces/${it.id}/approve`, req).catch((e) => ({ error: e.message }));
-      if (res.error) { toast(t('Fehler: {e}', { e: String(res.error).replace(/^\d{3} /, '') })); return; }
+      if (res.error) { toast(t('Fehler: {e}', { e: String(res.error).replace(/^\d{3} /, '') })); return false; }
       toast(req.ok ? (req.all ? t('Gesichter bestätigt') : t('Gesicht bestätigt')) : t('Bestätigung aufgehoben'),
         t('Rückgängig'), async () => { await post(`/api/faces/${it.id}/approve`, { undo: res.undo }); await this.refreshItem(it); });
-      await this.refreshItem(it);
+      await this.refreshItem(it).catch(() => { if (this.it === it) this.drawFaces(); });
+      return true;
     },
 
     // sharing, the original and printing: one button, its menu. The link opens this photo in the
@@ -1780,7 +1800,8 @@
         <form class="np-form" hidden><input class="np-name" placeholder="${t('Name der neuen Person')}" autocomplete="off" enterkeyhint="done">
           <div class="row"><button class="primary">${t('Speichern')}</button><button type="button" data-a="back">${t('Zurück')}</button></div></form>
         ${face.add ? `<div class="row np-acts"><button type="button" data-a="noname">${t('Ohne Namen speichern')}</button><button type="button" data-a="cancel">${t('Abbrechen')}</button></div>`
-          : `<div class="row np-acts"><button type="button" data-a="not">${face.person ? t('Nicht diese Person') : t('Ausblenden')}</button>
+          : `<div class="row np-acts">${m || face.idx === undefined ? '' : face.mine ? `<button type="button" data-a="unok" title="${t('Bestätigung aufheben')}">${icon('x')}<span>${t('Bestätigung aufheben')}</span></button>`
+              : !face.ok ? `<button type="button" data-a="ok" title="${t('Das Gesicht stimmt: es bleibt so, wenn neu gesucht wird')}">${icon('check')}<span>${t('Bestätigen')}</span></button>` : ''}<button type="button" data-a="not">${face.person ? t('Nicht diese Person') : t('Ausblenden')}</button>
             <button type="button" data-a="noface" title="${t('Falsch erkannt: kein Gesicht. Wird nicht mehr gezeigt, andere Gesichter bleiben.')}">${icon('face-x')}<span>${t('Kein Gesicht')}</span></button></div>`}`;
       // a sheet in the viewer shares it with the picture; one for a selection lies over the page
       (sheet && !m ? this.el : document.body).appendChild(pop);
@@ -1930,6 +1951,7 @@
         if (a === 'noname' || a === 'not') save('');
         if (a === 'cancel') close();
         if (a === 'noface') save('-');
+        if (a === 'ok' || a === 'unok') { close(); this.approveFaces({ faces: [face.idx], ok: a === 'ok' }); }
         if (a === 'sort') {
           const btn = e.target.closest('[data-a]');
           menu(btn, SORTS.map(([k, l]) => ({ icon: k === sort ? 'check' : 'none', label: l, run: () => resort(k) })));

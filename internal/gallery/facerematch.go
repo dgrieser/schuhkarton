@@ -27,6 +27,7 @@ type rematchFace struct {
 	emb   []float32
 	emb2  []float32
 	weak  bool
+	label string // "!…": the people it is not
 	cands []match2
 	hint  string
 }
@@ -193,11 +194,11 @@ func (l *Library) rematchSnapshot() ([]*rematchRef, []rematchFace, map[frame]map
 		for i, f := range it.Faces {
 			key := FaceRef{it.ID, i}.key()
 			label := labels[key]
-			if !faceKept(f, label != "") {
+			if !faceKept(f, approvedLabel(label)) {
 				if it.FacesOK || (f.Emb == nil && f.Emb2 == nil) {
 					continue
 				}
-				r := rematchFace{it: it, idx: i, f: f, hint: ""}
+				r := rematchFace{it: it, idx: i, f: f, hint: "", label: label}
 				if f.Emb != nil {
 					r.emb = normalize(f.Emb)
 				}
@@ -302,6 +303,9 @@ func rematchCands(f rematchFace, refs []*rematchRef, need float32) []match2 {
 	// the people most alike by their centroids, then face by face
 	var ps []pre
 	for _, r := range refs {
+		if rejects(f.label, r.name) {
+			continue // said not to be
+		}
 		s1, s2 := cdot(f.emb, r.cent1), cdot(f.emb2, r.cent2)
 		if s1 < -1 && s2 < -1 {
 			continue

@@ -6,7 +6,7 @@ import "testing"
 // alike by the approved faces (as their hint), once per picture; approved
 // faces keep theirs, and a face like nobody loses its hint.
 func TestRematchNames(t *testing.T) {
-	l, _ := testLib(t, "a.jpg", "b.jpg", "c.jpg", "d.jpg", "e.jpg", "f.jpg")
+	l, _ := testLib(t, "a.jpg", "b.jpg", "c.jpg", "d.jpg", "e.jpg", "f.jpg", "g.jpg")
 	l.faces = &listFaces{}
 	ada, bob, nobody, other := []float32{1, 0, 0, 0}, []float32{0, 1, 0, 0}, []float32{0, 0, 1, 0}, []float32{0, 0, 0, 1}
 	near := func(e []float32) []float32 {
@@ -22,6 +22,7 @@ func TestRematchNames(t *testing.T) {
 		"d.jpg": {box(0, near(ada), ""), box(.5, ada, "")},       // both like Ada: one gets her
 		"e.jpg": {box(0, nobody, "Ada")},                         // like nobody: hint goes
 		"f.jpg": {box(0, near(bob), ""), box(.5, near(ada), "")}, // Bob there already (named)
+		"g.jpg": {box(0, near(ada), "Ada")},                      // said not to be Ada
 	}
 	items := map[string]*Item{}
 	for rel := range set {
@@ -44,11 +45,28 @@ func TestRematchNames(t *testing.T) {
 	if _, err := l.ApproveFaces(c.ID, []int{0}, false, true); err != nil {
 		t.Fatal(err)
 	}
-	if n := l.RematchCount(); n != 5 {
-		t.Fatalf("%d faces to match, want 5", n)
+	// "not this person" leaves open who it is: not approved, matched anew
+	g := items["g.jpg"]
+	if _, err := l.LabelFace(g.ID, 0, "!Ada"); err != nil {
+		t.Fatal(err)
+	}
+	if f, ok := l.FaceApproval(g); ok || f[0] {
+		t.Fatalf("not this person counted as approved: %v %v", f, ok)
+	}
+	if _, err := l.ApproveFaces(g.ID, []int{0}, false, true); err != nil {
+		t.Fatal(err)
+	}
+	if f, _ := l.FaceApproval(g); !f[0] {
+		t.Fatal("not this person could not be approved")
+	}
+	if _, err := l.ApproveFaces(g.ID, []int{0}, false, false); err != nil {
+		t.Fatal(err)
+	}
+	if n := l.RematchCount(); n != 6 {
+		t.Fatalf("%d faces to match, want 6", n)
 	}
 	looked, changed := l.rematch()
-	if looked != 5 {
+	if looked != 6 {
 		t.Errorf("looked at %d", looked)
 	}
 	hint := func(rel string, i int) string { return l.ItemFaces(byRel(l, rel))[i].Hint }
@@ -67,8 +85,11 @@ func TestRematchNames(t *testing.T) {
 	if h := hint("f.jpg", 1); h != "Ada" {
 		t.Errorf("f: %q", h)
 	}
-	if changed != 4 {
-		t.Errorf("%d changed, want 4", changed)
+	if h := hint("g.jpg", 0); h != "" {
+		t.Errorf("g got %q, the name it is not", h)
+	}
+	if changed != 5 {
+		t.Errorf("%d changed, want 5", changed)
 	}
 	if _, name := l.FacePerson(byRel(l, "b.jpg").ID, 0); name != "Ada" {
 		t.Errorf("grouping did not follow: %q", name)
