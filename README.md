@@ -50,9 +50,10 @@ or another one.
   face is looked at by the face service for this right away, and keeps what
   it found when it is saved.
   Faces can be approved: one by one (*Bestätigen* in a face's menu in the
-  details or in its name sheet, or the round tick beside the name of a named
-  face on the picture) or all faces of a photo at once (*Bestätigen* next to
-  *Personen*, also for a photo without faces). Faces framed by hand and faces
+  details or in its name sheet, or the round tick of a named face beside its
+  name on the picture and on its picture in the details) or all faces of a photo at once (*Bestätigen* next to
+  *Personen*, also for a photo without faces, or *Alle bestätigen* on the
+  picture while its faces are shown). Faces framed by hand and faces
   with a name, hidden or "no face" count as approved already ("not this
   person" does not: who it is stays open). Two jobs on the people page (admins) run in the background over
   what is not approved:

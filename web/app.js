@@ -1039,6 +1039,8 @@
     async show() {
       const it = (this.it = this.list[this.i]);
       this.ticks = new Set(); // faces approved with their tick on this visit: the tick stays to untick
+      this.allUndo = null; // what was approved before "Alle bestätigen" on this visit
+      $('#vApproveAll')?.remove(); // it was for the photo before
       this.mark?.end();
       this.resetZoom();
       $('#pop')?.remove();
@@ -1186,8 +1188,10 @@
         const per = f.person ? S.peopleById.get(f.person) : null;
         const name = f.name || (per ? t('Unbenannt') : t('Unbekannt'));
         const at = it.k === 2 ? `<small class="face-t" data-seek title="${t('Im Video zeigen')}">${icon('play', 'fill')}${fmtDur(f.t)}</small>` : '';
-        const ok = f.ok ? `<span class="face-ok" title="${t('Bestätigt')}">${icon('check')}</span>` : '';
-        return `<a href="${f.person ? `#/person/${encodeURIComponent(f.person)}` : '#'}" data-face="${f.idx}"${f.ok ? ' class="ok"' : ''}><img src="${faceURL(it.id, f.idx, f.v)}" alt="">${ok}${esc(name)}${at}</a>`;
+        // a named face not approved yet: the tick to approve it at once (as on the picture)
+        const ok = this.tickable(f) ? `<button type="button" class="face-ok face-tick${f.ok ? ' on' : ''}" data-tick title="${f.ok ? t('Bestätigung aufheben') : t('Bestätigen')}" aria-pressed="${!!f.ok}">${icon('check')}</button>`
+          : f.ok ? `<span class="face-ok" title="${t('Bestätigt')}">${icon('check')}</span>` : '';
+        return `<a href="${f.person ? `#/person/${encodeURIComponent(f.person)}` : '#'}" data-face="${f.idx}"${ok ? ' class="ok"' : ''}><img src="${faceURL(it.id, f.idx, f.v)}" alt="">${ok}${esc(name)}${at}</a>`;
       }).join('');
       p.innerHTML = `
         <h3>${t('Aufnahme')}</h3>
@@ -1264,17 +1268,83 @@
         a.onclick = (e) => {
           if (held) { e.preventDefault(); held = false; return; } // the finger lifting off after a long press
           if (e.target.closest('[data-seek]')) { e.preventDefault(); this.seekFace(f); return; }
+          const tk = e.target.closest('[data-tick]');
+          if (tk) { e.preventDefault(); this.tickFace(f, tk); return; }
           if (!f.person || e.altKey) { e.preventDefault(); this.namePop(a, f); }
           else this.close(true);
         };
       }
     },
 
+    // whether a face gets the tick to approve it at once: named, not approved yet, or ticked on this
+    // visit (to untick); gone once the photo is shown again
+    tickable(f) {
+      return Account.can('user') && !!f.name && (!f.ok || (!!f.mine && this.ticks?.has(f.idx)));
+    },
+
+    // approves a face with its tick (ticked: takes it back); the tick shows the change at once
+    tickFace(f, tk) {
+      if (tk.disabled) return; // one change at a time: the next click goes by what was saved
+      const it = this.it;
+      this.ticks.add(f.idx);
+      tk.classList.toggle('on', !f.ok);
+      tk.disabled = true;
+      this.approveFaces({ faces: [f.idx], ok: !f.ok }).then((done) => { if (!done && this.it === it) { this.renderInfo(); this.drawFaces(); } });
+    },
+
+    // all faces of the photo approved at once (as "Bestätigen" in the details, also a photo without
+    // faces); ticked on this visit it stays to untick
+    drawApproveAll(d) {
+      if (!Account.can('user') || this.it.k !== 1 || (d.facesMine && !this.ticks?.has('all'))) return;
+      const all = document.createElement('button');
+      all.type = 'button';
+      all.id = 'vApproveAll';
+      all.className = `v-approve-all${d.facesMine ? ' on' : ''}`;
+      all.title = d.facesMine ? t('Bestätigung aufheben') : t('Alle Gesichter in diesem Bild stimmen: sie bleiben so, wenn neu gesucht wird');
+      all.innerHTML = `${icon('check')}<span>${d.facesMine ? t('Bestätigt') : t('Alle bestätigen')}</span>`;
+      const it = this.it;
+      all.onclick = (e) => {
+        e.stopPropagation();
+        if (all.disabled || this.it !== it) return;
+        const ok = !d.facesMine;
+        this.ticks.add('all');
+        all.classList.toggle('on', ok);
+        all.disabled = true;
+        // unticked: back to what was approved before (faces approved one by one stay)
+        const req = ok ? { all: true, ok: true } : this.allUndo ? { undo: this.allUndo } : { all: true, ok: false };
+        this.approveFaces(req).then((res) => {
+          if (ok && res && this.it === it) this.allUndo = res.undo;
+          if (!res && this.it === it) this.drawFaces();
+        });
+      };
+      $('#vStage').appendChild(all);
+    },
+
+    // a tick that another name or frame covers, or that lies beyond the right edge, goes to the
+    // left of its name (kept on the right when it is no better there)
+    placeTicks(ov) {
+      const stage = $('#vStage').getBoundingClientRect(), right = Math.min(stage.right, innerWidth) - 2;
+      const out = (tk) => tk.getBoundingClientRect().right > right;
+      const covered = (tk) => {
+        const r = tk.getBoundingClientRect(), e = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        return !e || e.closest('.v-tick') !== tk;
+      };
+      for (const sp of $$('.tick-left', ov)) sp.classList.remove('tick-left'); // measured anew
+      for (const tk of $$('.v-tick', ov)) {
+        const sp = tk.parentElement, wasOut = out(tk);
+        if (!wasOut && !covered(tk)) continue;
+        sp.classList.add('tick-left');
+        if (!wasOut && covered(tk)) sp.classList.remove('tick-left'); // covered on both sides: as it was
+      }
+    },
+
     drawFaces() {
       $('.v-faces', this.media)?.remove();
+      $('#vApproveAll')?.remove();
       $('#vFaces').classList.toggle('on', this.showFaces);
       this.el.classList.toggle('faces-on', this.showFaces);
       const d = this.detail;
+      if (this.showFaces && d) this.drawApproveAll(d);
       if (!this.showFaces || !d?.faces?.length || (this.it.k !== 1 && this.it.k !== 2)) return;
       let faces = d.faces;
       if (this.it.k === 2) { // a video: the faces of the frame it is paused at
@@ -1287,23 +1357,21 @@
       ov.className = 'v-faces';
       // a named face not approved yet gets a round tick beside its name to approve it at once; ticked,
       // it stays on this visit (to untick), and is gone once the photo is shown again
-      const user = Account.can('user');
-      const tick = (f) => (user && f.name && (!f.ok || (f.mine && this.ticks.has(f.idx)))
+      const tick = (f) => (this.tickable(f)
         ? `<button type="button" class="v-tick${f.ok ? ' on' : ''}" data-tick="${f.idx}" title="${f.ok ? t('Bestätigung aufheben') : t('Bestätigen')}" aria-pressed="${!!f.ok}">${icon('check')}</button>` : '');
       ov.innerHTML = faces.map((f) => `<div class="v-face ${f.name ? '' : 'unknown'}" data-idx="${f.idx}" style="left:${f.X * 100}%;top:${f.Y * 100}%;width:${f.W * 100}%;height:${f.H * 100}%"><span>${esc(f.name || (f.person ? t('Unbenannt') : '?'))}${tick(f)}</span></div>`).join('');
       this.media.appendChild(ov);
-      const it = this.it;
+      this.placeTicks(ov);
+      // the picture got another size (the details opened, the window): placed anew
+      this.tickRO ??= new ResizeObserver(() => { const o = $('.v-faces', this.media); if (o) this.placeTicks(o); });
+      this.tickRO.observe(this.media);
       for (const b of $$('.v-face', ov)) {
         b.onclick = (e) => {
           e.stopPropagation();
           const tk = e.target.closest('[data-tick]');
           const f = d.faces.find((x) => x.idx === +b.dataset.idx);
-          if (!tk) { this.namePop(b, f); return; }
-          if (tk.disabled) return; // one change at a time: the next click goes by what was saved
-          this.ticks.add(f.idx);
-          tk.classList.toggle('on', !f.ok); // at once; the details follow
-          tk.disabled = true;
-          this.approveFaces({ faces: [f.idx], ok: !f.ok }).then((done) => { if (!done && this.it === it) this.drawFaces(); });
+          if (tk) this.tickFace(f, tk);
+          else this.namePop(b, f);
         };
       }
     },
@@ -1372,10 +1440,11 @@
       const it = this.it;
       const res = await post(`/api/faces/${it.id}/approve`, req).catch((e) => ({ error: e.message }));
       if (res.error) { toast(t('Fehler: {e}', { e: String(res.error).replace(/^\d{3} /, '') })); return false; }
-      toast(req.ok ? (req.all ? t('Gesichter bestätigt') : t('Gesicht bestätigt')) : t('Bestätigung aufgehoben'),
-        t('Rückgängig'), async () => { await post(`/api/faces/${it.id}/approve`, { undo: res.undo }); await this.refreshItem(it); });
+      const msg = req.ok ? (req.all ? t('Gesichter bestätigt') : t('Gesicht bestätigt')) : t('Bestätigung aufgehoben');
+      if (res.undo) toast(msg, t('Rückgängig'), async () => { await post(`/api/faces/${it.id}/approve`, { undo: res.undo }); await this.refreshItem(it); });
+      else toast(msg);
       await this.refreshItem(it).catch(() => { if (this.it === it) this.drawFaces(); });
-      return true;
+      return res;
     },
 
     // sharing, the original and printing: one button, its menu. The link opens this photo in the
@@ -2160,13 +2229,13 @@
     const pts = new Map();
     let start = null, pinch = null, moved = false, multi = false, held = false, menued = false, lastTap = null, tapT = 0, longT = 0, lastType = 'mouse';
     V.stage.addEventListener('dblclick', (e) => {
-      if (V.it?.k !== 1 || lastType !== 'mouse') return; // touch double taps are handled in end()
+      if (V.it?.k !== 1 || lastType !== 'mouse' || e.target.closest('.v-approve-all')) return; // touch double taps are handled in end()
       V.animateZoom();
       V.zoom.s > 1 ? V.resetZoom() : V.zoomAt(e.clientX, e.clientY, 2.5);
     });
     V.stage.addEventListener('pointerdown', (e) => {
       lastType = e.pointerType;
-      if (e.target.closest('video[controls]') || e.target.closest('.v-face')) return;
+      if (e.target.closest('video[controls]') || e.target.closest('.v-face, .v-approve-all')) return; // their own clicks
       V.stage.setPointerCapture(e.pointerId);
       pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
       V.media.style.transition = '';

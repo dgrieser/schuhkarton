@@ -311,6 +311,8 @@ window.I18N.en = {
   "{x} werden im Hintergrund neu durchsucht": "{x} are being searched again in the background",
   "Namen aller nicht bestätigten Gesichter neu zuordnen, nach den bestätigten Gesichtern jeder Person; es wird nicht neu gesucht": "Match the names of all faces not approved anew, against the approved faces of each person; no faces are looked for",
   "Neu zuordnen": "Rematch",
+  "Alle bestätigen": "Approve all",
+  "Alle Gesichter in diesem Bild stimmen: sie bleiben so, wenn neu gesucht wird": "All faces in this picture are right: they stay as they are when faces are looked for again",
   "Das Gesicht stimmt: es bleibt so, wenn neu gesucht wird": "The face is right: it stays as it is when faces are looked for again",
   "Keine Gesichter ohne Bestätigung": "No faces without approval",
   "{x} nicht bestätigt: Namen neu zuordnen?": "{x} not approved: match their names anew?",
