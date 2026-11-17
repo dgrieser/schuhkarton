@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"io/fs"
 	"log"
@@ -79,6 +80,11 @@ func New(ctx context.Context, o Options) http.Handler {
 	mux.HandleFunc("POST /api/items/people", s.itemsPeople)
 	mux.HandleFunc("POST /api/items/people/{id}", s.requireUser(s.labelPersonIn))
 	mux.HandleFunc("POST /api/face/{id}/add", s.requireUser(s.addFace))
+	mux.HandleFunc("POST /api/faces/{id}/approve", s.requireUser(s.approveFaces))
+	mux.HandleFunc("GET /api/faces/rethink", s.requireAdmin(s.rethinkCount))
+	mux.HandleFunc("POST /api/faces/rethink", s.requireAdmin(s.rethinkFaces))
+	mux.HandleFunc("GET /api/faces/rematch", s.requireAdmin(s.rematchCount))
+	mux.HandleFunc("POST /api/faces/rematch", s.requireAdmin(s.rematchNames))
 	mux.HandleFunc("POST /api/face/{id}/suggest", s.requireUser(s.suggestForBox))
 	mux.HandleFunc("GET /api/face/{id}/{idx}/suggest", s.requireUser(s.suggestForFace))
 	mux.HandleFunc("POST /api/fav", s.requireUser(s.fav))
@@ -303,13 +309,22 @@ func (s *Server) item(w http.ResponseWriter, r *http.Request) {
 		Name       string  `json:"name,omitempty"`
 		Manual     bool    `json:"manual,omitempty"`
 		T          float32 `json:"t,omitempty"` // video: the second it was found at
+		V          string  `json:"v"`           // version of the crop: changes with the box
+		// OK: approved (by hand, by a name or drawn by hand); Mine: approved
+		// with "Bestätigen", so it can be taken back
+		OK   bool `json:"ok,omitempty"`
+		Mine bool `json:"mine,omitempty"`
 	}
 	var faces []face
+	approved, itemOK := s.lib.FaceApproval(it)
+	whole, redo := s.lib.FaceFlags(it)
 	for i, f := range s.lib.ItemFaces(it) {
 		if s.lib.IsNoFace(it.ID, i) {
 			continue // marked as no face
 		}
-		fc := face{X: f.X, Y: f.Y, W: f.W, H: f.H, Idx: i, Manual: f.Manual, T: f.T}
+		fc := face{X: f.X, Y: f.Y, W: f.W, H: f.H, Idx: i, Manual: f.Manual, T: f.T, Mine: f.OK}
+		fc.OK = i < len(approved) && approved[i]
+		fc.V = strconv.FormatUint(uint64(crc32.ChecksumIEEE([]byte(fmt.Sprint(f.X, f.Y, f.W, f.H, f.T)))), 36)
 		fc.Person, fc.Name = s.lib.FacePerson(it.ID, i) // a name just given shows before grouping caught up
 		faces = append(faces, fc)
 	}
@@ -329,6 +344,7 @@ func (s *Server) item(w http.ResponseWriter, r *http.Request) {
 		"duration": it.Duration, "codec": it.Codec, "ext": ext,
 		"desc": it.Desc, "keywords": it.Keywords, "place": it.Place, "category": it.Category,
 		"live": it.LiveVideo, "fav": s.lib.IsFav(userName(r), it), "faces": faces, "v": it.Key()[:8],
+		"facesOK": itemOK, "facesMine": whole, "faceRedo": redo,
 	}
 	if ed := s.lib.EditedFields(it); len(ed) > 0 {
 		res["edited"] = ed
@@ -506,6 +522,75 @@ func (s *Server) labelFace(w http.ResponseWriter, r *http.Request) {
 	s.recordFaces(r, []string{r.PathValue("id")}, map[string]any{"op": faceOp(req.Name), "from": old, "to": strings.TrimSpace(req.Name), "n": 1}, map[string]string{key: prev})
 	// what the face had, for undo
 	writeJSON(w, r, map[string]any{"ok": true, "undo": map[string]string{r.PathValue("id") + ":" + strconv.Itoa(idx): prev}})
+}
+
+// approveFaces approves faces of an item, or takes that back: the faces
+// listed, or with all every face and the item as a whole.
+func (s *Server) approveFaces(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Faces []int `json:"faces"`
+		All   bool  `json:"all"`
+		OK    bool  `json:"ok"`
+		// Undo: sets what was approved back, as "undo" of an answer said
+		Undo *gallery.Approval `json:"undo"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Undo != nil {
+		if err := s.lib.SetApproval(r.PathValue("id"), *req.Undo); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, r, map[string]any{"ok": true})
+		return
+	}
+	prev, err := s.lib.ApproveFaces(r.PathValue("id"), req.Faces, req.All, req.OK)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, r, map[string]any{"ok": true, "undo": prev})
+}
+
+// rethinkCount tells how many photos "Gesichter neu suchen" would look at.
+func (s *Server) rethinkCount(w http.ResponseWriter, r *http.Request) {
+	n, complete := s.lib.RethinkCount()
+	writeJSON(w, r, map[string]any{"n": n, "complete": complete})
+}
+
+// rethinkFaces looks for the faces of all photos not approved again; with
+// complete, also of those whose faces are all approved one by one.
+func (s *Server) rethinkFaces(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Complete bool `json:"complete"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	n, err := s.lib.RethinkFaces(req.Complete)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	writeJSON(w, r, map[string]any{"ok": true, "n": n})
+}
+
+// rematchCount tells how many faces "Namen neu zuordnen" would look at.
+func (s *Server) rematchCount(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, r, map[string]any{"n": s.lib.RematchCount()})
+}
+
+// rematchNames matches the names of all faces not approved anew.
+func (s *Server) rematchNames(w http.ResponseWriter, r *http.Request) {
+	n, err := s.lib.RematchNames()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	writeJSON(w, r, map[string]any{"ok": true, "n": n})
 }
 
 // addFace adds a face drawn by hand (on a video at second t).
@@ -764,7 +849,13 @@ func (s *Server) face(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	w.Header().Set("Cache-Control", "private, max-age=86400")
+	// a crop can change at the same address when the faces are found again:
+	// kept long only under a version (?v=, the face's box)
+	if r.URL.Query().Get("v") != "" {
+		w.Header().Set("Cache-Control", "private, max-age=86400")
+	} else {
+		w.Header().Set("Cache-Control", "private, max-age=3600")
+	}
 	http.ServeFile(w, r, p)
 }
 

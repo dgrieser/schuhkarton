@@ -249,11 +249,12 @@ func (l *Library) Scan(ctx context.Context) error {
 			// the same file, read again only for its metadata (a sidecar
 			// the share hung on): the faces found in it stay
 			it.Faces, it.FacesDone, it.Extra, it.FaceGen = o.Faces, true, o.Extra, o.FaceGen
-		} else if o != nil && hasManualFace(o.Faces) {
+			it.FacesOK, it.FaceRedo = o.FacesOK, o.FaceRedo
+		} else if o != nil && (hasManualFace(o.Faces) || o.FacesOK || hasApprovedFace(o.Faces)) {
 			// faces marked by hand cannot be found again: they stay at their
 			// index with their crops (detection runs again and fills in
 			// around them)
-			it.Faces = o.Faces
+			it.Faces, it.FacesOK = o.Faces, o.FacesOK // so do approved ones (faceapprove.go)
 			keptFaces = append(keptFaces, [2]*Item{o, it})
 		}
 		items = append(items, it)
@@ -390,7 +391,7 @@ func (l *Library) checkFormats(ctx context.Context, items []*Item) (refresh []st
 		}
 		faces := len(it.Faces)
 		if turned {
-			it.Faces, it.FacesDone = nil, false
+			it.Faces, it.FacesDone, it.FacesOK = nil, false, false
 		}
 		l.mu.Unlock()
 		if turned {
