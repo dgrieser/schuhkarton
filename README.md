@@ -50,9 +50,10 @@ or another one.
   face is looked at by the face service for this right away, and keeps what
   it found when it is saved.
   Faces can be approved: one by one (*Bestätigen* in a face's menu in the
-  details or in its name sheet, or the round tick beside the name of a named
-  face on the picture) or all faces of a photo at once (*Bestätigen* next to
-  *Personen*, also for a photo without faces). Faces framed by hand and faces
+  details or in its name sheet, or the round tick of a named face beside its
+  name on the picture and on its picture in the details) or all faces of a photo at once (*Bestätigen* next to
+  *Personen*, also for a photo without faces, or *Alle bestätigen* on the
+  picture while its faces are shown). Faces framed by hand and faces
   with a name, hidden or "no face" count as approved already ("not this
   person" does not: who it is stays open). Two jobs on the people page (admins) run in the background over
   what is not approved:
@@ -67,6 +68,17 @@ or another one.
   as no face. Videos are left out.
   A person's page filters their photos by approval (*Alle*, *Bestätigt*,
   *Offen*: a face of theirs in the photo is not approved).
+  *Schnell benennen* and *Schnell bestätigen* on the people page are quick
+  rounds of a handful of faces, each zoomed to the face, chosen for the most
+  gain per answer. Naming shows one typical, clear face of each of the
+  largest groups without a name; the name goes to that face and, not
+  approved, to the rest of its group. Approving shows faces with a name that
+  are not approved where the recognition is least sure (close to
+  `named_threshold`, or another person about as alike), weighed by how many
+  similar faces each stands for, people with few approved faces first,
+  spread over people and photos. Yes, no (then the right name) or skip; keys
+  J/N/S, a swipe on a phone, Z to go back. Afterwards *Neu zuordnen* matches
+  the other faces against the answers.
 - **Backup:** copies photos, cache and settings to a folder (a USB disk or a
   share) in the background. It only adds and updates; nothing in the backup is
   ever deleted.

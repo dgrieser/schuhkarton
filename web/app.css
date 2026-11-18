@@ -460,7 +460,16 @@ body.has-scrubber .view { padding-right: 64px; }
 .v-strip button.on { opacity: 1; outline: 2px solid #fff; outline-offset: 1px; }
 .v-strip button:hover { opacity: 1; transform: translateY(-2px); }
 .v-strip img { width: 100%; height: 100%; object-fit: cover; }
-.viewer.idle .v-top, .viewer.idle .v-strip, .viewer.idle .v-nav, .viewer.idle #vLive { opacity: 0; pointer-events: none; }
+.viewer.idle .v-top, .viewer.idle .v-strip, .viewer.idle .v-nav, .viewer.idle #vLive, .viewer.idle .v-approve-all { opacity: 0; pointer-events: none; }
+/* all faces of the photo approved at once: above the loading animation in the bottom right corner */
+.v-approve-all { position: absolute; right: calc(16px + env(safe-area-inset-right)); bottom: calc(66px + env(safe-area-inset-bottom)); z-index: 6;
+  display: inline-flex; align-items: center; gap: 6px; height: 38px; padding: 0 14px 0 10px; border: 0; border-radius: 999px;
+  background: rgba(0, 0, 0, .55); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); color: #fff; font-size: 13px; font-weight: 600; cursor: pointer;
+  transition: opacity .2s; }
+.v-approve-all .i { width: 18px; height: 18px; padding: 2px; border: 2px solid #fff; border-radius: 50%; color: transparent; stroke-width: 3; box-sizing: content-box; }
+.v-approve-all.on .i { border-color: var(--accent); background: var(--accent); color: #111; }
+.v-approve-all:hover { background: rgba(0, 0, 0, .7); }
+.v-approve-all:disabled { cursor: progress; }
 /* the loading animation of the viewer: the stage's bottom right corner (beside the strip, above the
    details on a phone), also while the bars are hidden */
 .v-activity { position: absolute; right: calc(16px + env(safe-area-inset-right)); bottom: calc(16px + env(safe-area-inset-bottom)); z-index: 6;
@@ -479,8 +488,13 @@ body.has-scrubber .view { padding-right: 64px; }
   background: rgba(0, 0, 0, .72); padding: 2px 8px; border-radius: 6px; font-size: 12px; font-weight: 600;
 }
 .v-face.unknown { border-style: dashed; border-color: rgba(255, 255, 255, .6); }
+/* names (and their ticks) lie above the frames of other faces, the one pointed at above the others */
+.v-face span { z-index: 1; }
+.v-face span:hover, .v-face span:focus-within { z-index: 2; }
 /* the tick beside the name of a named face not approved yet: a white ring, the yellow approved mark once ticked */
 .v-face span:has(.v-tick) { display: inline-flex; align-items: center; gap: 6px; padding-right: 3px; }
+/* covered or beyond the right edge: the tick left of the name */
+.v-face span.tick-left { flex-direction: row-reverse; padding-left: 3px; padding-right: 8px; }
 .v-tick { display: grid; place-items: center; width: 18px; height: 18px; padding: 0; border: 2px solid #fff; border-radius: 50%; background: transparent; color: transparent; cursor: pointer; position: relative; }
 .v-tick::after { content: ''; position: absolute; inset: -8px; } /* a bigger target for a finger */
 .v-tick .i { width: 12px; height: 12px; stroke-width: 3; }
@@ -491,7 +505,7 @@ body.has-scrubber .view { padding-right: 64px; }
 .v-face.flash { z-index: 1; animation: face-flash .7s ease 2; }
 @keyframes face-flash { 50% { border-color: var(--accent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 45%, transparent), 0 0 0 9999px rgba(0, 0, 0, .35); } }
 /* marking a face by hand */
-.viewer.marking .v-top, .viewer.marking .v-strip, .viewer.marking .v-nav, .viewer.marking .v-faces, .viewer.marking #vLive { opacity: 0; pointer-events: none; }
+.viewer.marking .v-top, .viewer.marking .v-strip, .viewer.marking .v-nav, .viewer.marking .v-faces, .viewer.marking #vLive, .viewer.marking .v-approve-all { opacity: 0; pointer-events: none; }
 /* moving the box selects no text and opens no callout */
 .viewer.marking, .viewer.marking :not(input, textarea), .v-mark-tools, .v-mark-tools * { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 .v-mark { position: absolute; inset: 0; z-index: 4; cursor: crosshair; touch-action: none; background: rgba(0, 0, 0, .18); }
@@ -557,6 +571,11 @@ body.has-scrubber .view { padding-right: 64px; }
 .v-info .faces .face-ok { position: absolute; left: 44px; top: 36px; display: grid; place-items: center; width: 18px; height: 18px; border-radius: 50%;
   background: var(--accent); color: #111; box-shadow: 0 0 0 2px #111; }
 .v-info .faces .face-ok .i { width: 11px; height: 11px; stroke-width: 3; }
+/* the tick of a named face not approved yet: a white ring, the approved mark once ticked */
+.v-info .faces .face-tick { padding: 0; border: 2px solid #fff; background: rgba(0, 0, 0, .45); color: transparent; cursor: pointer; }
+.v-info .faces .face-tick::after { content: ''; position: absolute; inset: -8px; } /* a bigger target for a finger */
+.v-info .faces .face-tick.on { border-color: var(--accent); background: var(--accent); color: #111; }
+.v-info .faces .face-tick:disabled { cursor: progress; }
 .v-info h3 .faces-ok { display: inline-flex; align-items: center; gap: 4px; margin-left: 8px; font-size: 12px; text-transform: none; letter-spacing: 0; color: var(--accent); }
 .v-info h3 .faces-ok .i { width: 14px; height: 14px; }
 .v-info .faces .face-t { display: inline-flex; align-items: center; gap: 3px; margin-top: -2px; padding: 2px 6px; border-radius: 999px; background: rgba(255, 255, 255, 0.1); color: #e6e8eb; font-size: 10.5px; font-variant-numeric: tabular-nums; cursor: pointer; }
@@ -754,6 +773,7 @@ body > .pop.name-pop.sheet { z-index: 130; } /* a person of a selection: over th
   .v-info { position: absolute; left: 0; right: 0; bottom: 0; width: auto; height: var(--sheet, 50dvh); border-left: 0; border-top: 1px solid #222; border-radius: 18px 18px 0 0; z-index: 8; }
   .v-nav { display: none; }
   .v-strip { display: none; }
+  .viewer:not(.info) .v-approve-all { bottom: calc(140px + env(safe-area-inset-bottom)); } /* above the messages */
   .selbar { left: 0; right: 0; bottom: 0; transform: none; width: auto; max-width: none; max-height: 85dvh; border-radius: 18px 18px 0 0; border-bottom: 0; }
   @keyframes rise { from { transform: translateY(20px); opacity: 0; } }
 }
@@ -1440,7 +1460,7 @@ select.sel, .setup .user select, .setup #nrole, .adm-shift select {
    sends the full-size picture instead. Videos print the page as it is. */
 @media print {
   body:has(> #viewer:not([hidden]) .v-media > img) > :not(#viewer),
-  #viewer:not([hidden]):has(.v-media > img) :is(.v-top, .v-nav, .v-strip, .v-info, .v-grip, .v-faces, .live-v, #vLive) { display: none !important; }
+  #viewer:not([hidden]):has(.v-media > img) :is(.v-top, .v-nav, .v-strip, .v-info, .v-grip, .v-faces, .live-v, #vLive, .v-activity, .v-approve-all) { display: none !important; }
   #viewer:not([hidden]):has(.v-media > img), #viewer:not([hidden]):has(.v-media > img) :is(.v-main, .v-stage, .v-media) {
     position: static !important; inset: auto !important; display: block !important; transform: none !important; will-change: auto !important;
     width: auto !important; height: auto !important; background: none !important; overflow: visible !important;
@@ -1534,3 +1554,41 @@ body.side-mini #sideToggle { position: static; margin: -6px auto 10px; }
   .hx-row > .btn { grid-column: 2; justify-self: start; }
   .hx-th { width: 44px; height: 44px; }
 }
+
+/* --- quick rounds: name or approve a handful of faces, one after the other ---------------- */
+.quiz { position: fixed; inset: 0; z-index: 60; display: flex; flex-direction: column; background: #0b0b0c; color: #e9eaec;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+.qz-top { display: flex; align-items: center; gap: 12px; padding: 10px 12px 10px 18px; }
+.qz-top b { font-size: 16px; }
+.qz-prog { color: rgba(255, 255, 255, .6); font-variant-numeric: tabular-nums; font-size: 14px; }
+.qz-top .qz-x { margin-left: auto; color: #fff; }
+.qz-body { flex: 1; min-height: 0; display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 0 16px 16px; overflow: auto; }
+.qz-crop { position: relative; flex: none; width: min(100%, 560px); height: min(48dvh, 460px); border-radius: 14px; overflow: hidden; background: #000; touch-action: pan-y; user-select: none; }
+.qz-crop img { position: absolute; max-width: none; pointer-events: none; }
+.qz-box { position: absolute; border: 2px solid rgba(255, 255, 255, .9); border-radius: 8px; box-shadow: 0 0 0 1px rgba(0, 0, 0, .35), 0 0 0 9999px rgba(0, 0, 0, .28); pointer-events: none; }
+.qz-q { font-size: 20px; text-align: center; }
+.qz-q b { color: var(--accent); }
+.qz-sub { color: rgba(255, 255, 255, .62); font-size: 13px; text-align: center; margin-top: -6px; }
+.qz-acts { width: min(100%, 560px); display: grid; gap: 10px; }
+.qz-yesno { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.qz-yesno button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 56px; border-radius: 14px; border: 1px solid #333; background: #1c1d20; color: #fff; font-size: 17px; font-weight: 650; cursor: pointer; }
+.qz-yesno .i { width: 22px; height: 22px; stroke-width: 2.6; }
+.qz-yesno .qz-yes { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.qz-yesno .qz-no:hover { background: #2a2b2f; }
+.qz-chips { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+.qz-chip { display: inline-flex; align-items: center; gap: 8px; height: 44px; padding: 0 14px 0 5px; border-radius: 999px; border: 1px solid #333; background: #1c1d20; color: #fff; font-size: 14px; font-weight: 600; cursor: pointer; }
+.qz-chip img { width: 34px; height: 34px; border-radius: 50%; object-fit: cover; background: #333; }
+.qz-chip:hover { background: #2a2b2f; }
+.qz-form { display: flex; gap: 8px; }
+.qz-form input { flex: 1; min-width: 0; height: 44px; padding: 0 14px; border-radius: 12px; border: 1px solid #3a3b3f; background: #16171a; color: #fff; font-size: 16px; }
+.qz-form input:focus { outline: 2px solid var(--accent); outline-offset: 0; }
+.qz-form .btn { height: 44px; width: 52px; justify-content: center; }
+.qz-more { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+.qz-more button, .qz-end .row button { display: inline-flex; align-items: center; gap: 6px; height: 38px; padding: 0 14px; border-radius: 10px; border: 1px solid #333; background: #16171a; color: #ddd; font-size: 13.5px; cursor: pointer; }
+.qz-more .i, .qz-end .row .i { width: 16px; height: 16px; }
+.qz-end { margin: auto; display: grid; justify-items: center; gap: 12px; text-align: center; max-width: 440px; }
+.qz-end > .i { width: 44px; height: 44px; color: var(--accent); }
+.qz-end h2 { margin: 0; }
+.qz-end p { margin: 0; color: rgba(255, 255, 255, .75); }
+.qz-end .row { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+.qz-end .row button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 650; }

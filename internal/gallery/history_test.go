@@ -163,6 +163,12 @@ func TestRenameInJSON(t *testing.T) {
 	if faces["x:2"] != "Anna" {
 		t.Errorf("trash face key not renamed: %v", faces)
 	}
+	// the hint a group's name gave a face (a quick round)
+	faces = nil
+	json.Unmarshal(renameInJSON(json.RawMessage(`{"hint:a:3":"","a:1":"Ben"}`), map[string]string{"a": "z"}), &faces)
+	if _, ok := faces["hint:z:3"]; !ok || faces["z:1"] != "Ben" {
+		t.Errorf("hint key not renamed: %v", faces)
+	}
 }
 
 // Pages follow the order of the changes, also within one second.

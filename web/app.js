@@ -1039,6 +1039,8 @@
     async show() {
       const it = (this.it = this.list[this.i]);
       this.ticks = new Set(); // faces approved with their tick on this visit: the tick stays to untick
+      this.allUndo = null; // what was approved before "Alle bestätigen" on this visit
+      $('#vApproveAll')?.remove(); // it was for the photo before
       this.mark?.end();
       this.resetZoom();
       $('#pop')?.remove();
@@ -1186,8 +1188,10 @@
         const per = f.person ? S.peopleById.get(f.person) : null;
         const name = f.name || (per ? t('Unbenannt') : t('Unbekannt'));
         const at = it.k === 2 ? `<small class="face-t" data-seek title="${t('Im Video zeigen')}">${icon('play', 'fill')}${fmtDur(f.t)}</small>` : '';
-        const ok = f.ok ? `<span class="face-ok" title="${t('Bestätigt')}">${icon('check')}</span>` : '';
-        return `<a href="${f.person ? `#/person/${encodeURIComponent(f.person)}` : '#'}" data-face="${f.idx}"${f.ok ? ' class="ok"' : ''}><img src="${faceURL(it.id, f.idx, f.v)}" alt="">${ok}${esc(name)}${at}</a>`;
+        // a named face not approved yet: the tick to approve it at once (as on the picture)
+        const ok = this.tickable(f) ? `<button type="button" class="face-ok face-tick${f.ok ? ' on' : ''}" data-tick title="${f.ok ? t('Bestätigung aufheben') : t('Bestätigen')}" aria-pressed="${!!f.ok}">${icon('check')}</button>`
+          : f.ok ? `<span class="face-ok" title="${t('Bestätigt')}">${icon('check')}</span>` : '';
+        return `<a href="${f.person ? `#/person/${encodeURIComponent(f.person)}` : '#'}" data-face="${f.idx}"${ok ? ' class="ok"' : ''}><img src="${faceURL(it.id, f.idx, f.v)}" alt="">${ok}${esc(name)}${at}</a>`;
       }).join('');
       p.innerHTML = `
         <h3>${t('Aufnahme')}</h3>
@@ -1264,17 +1268,83 @@
         a.onclick = (e) => {
           if (held) { e.preventDefault(); held = false; return; } // the finger lifting off after a long press
           if (e.target.closest('[data-seek]')) { e.preventDefault(); this.seekFace(f); return; }
+          const tk = e.target.closest('[data-tick]');
+          if (tk) { e.preventDefault(); this.tickFace(f, tk); return; }
           if (!f.person || e.altKey) { e.preventDefault(); this.namePop(a, f); }
           else this.close(true);
         };
       }
     },
 
+    // whether a face gets the tick to approve it at once: named, not approved yet, or ticked on this
+    // visit (to untick); gone once the photo is shown again
+    tickable(f) {
+      return Account.can('user') && !!f.name && (!f.ok || (!!f.mine && this.ticks?.has(f.idx)));
+    },
+
+    // approves a face with its tick (ticked: takes it back); the tick shows the change at once
+    tickFace(f, tk) {
+      if (tk.disabled) return; // one change at a time: the next click goes by what was saved
+      const it = this.it;
+      this.ticks.add(f.idx);
+      tk.classList.toggle('on', !f.ok);
+      tk.disabled = true;
+      this.approveFaces({ faces: [f.idx], ok: !f.ok }).then((done) => { if (!done && this.it === it) { this.renderInfo(); this.drawFaces(); } });
+    },
+
+    // all faces of the photo approved at once (as "Bestätigen" in the details, also a photo without
+    // faces); ticked on this visit it stays to untick
+    drawApproveAll(d) {
+      if (!Account.can('user') || this.it.k !== 1 || (d.facesMine && !this.ticks?.has('all'))) return;
+      const all = document.createElement('button');
+      all.type = 'button';
+      all.id = 'vApproveAll';
+      all.className = `v-approve-all${d.facesMine ? ' on' : ''}`;
+      all.title = d.facesMine ? t('Bestätigung aufheben') : t('Alle Gesichter in diesem Bild stimmen: sie bleiben so, wenn neu gesucht wird');
+      all.innerHTML = `${icon('check')}<span>${d.facesMine ? t('Bestätigt') : t('Alle bestätigen')}</span>`;
+      const it = this.it;
+      all.onclick = (e) => {
+        e.stopPropagation();
+        if (all.disabled || this.it !== it) return;
+        const ok = !d.facesMine;
+        this.ticks.add('all');
+        all.classList.toggle('on', ok);
+        all.disabled = true;
+        // unticked: back to what was approved before (faces approved one by one stay)
+        const req = ok ? { all: true, ok: true } : this.allUndo ? { undo: this.allUndo } : { all: true, ok: false };
+        this.approveFaces(req).then((res) => {
+          if (ok && res && this.it === it) this.allUndo = res.undo;
+          if (!res && this.it === it) this.drawFaces();
+        });
+      };
+      $('#vStage').appendChild(all);
+    },
+
+    // a tick that another name or frame covers, or that lies beyond the right edge, goes to the
+    // left of its name (kept on the right when it is no better there)
+    placeTicks(ov) {
+      const stage = $('#vStage').getBoundingClientRect(), right = Math.min(stage.right, innerWidth) - 2;
+      const out = (tk) => tk.getBoundingClientRect().right > right;
+      const covered = (tk) => {
+        const r = tk.getBoundingClientRect(), e = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        return !e || e.closest('.v-tick') !== tk;
+      };
+      for (const sp of $$('.tick-left', ov)) sp.classList.remove('tick-left'); // measured anew
+      for (const tk of $$('.v-tick', ov)) {
+        const sp = tk.parentElement, wasOut = out(tk);
+        if (!wasOut && !covered(tk)) continue;
+        sp.classList.add('tick-left');
+        if (!wasOut && covered(tk)) sp.classList.remove('tick-left'); // covered on both sides: as it was
+      }
+    },
+
     drawFaces() {
       $('.v-faces', this.media)?.remove();
+      $('#vApproveAll')?.remove();
       $('#vFaces').classList.toggle('on', this.showFaces);
       this.el.classList.toggle('faces-on', this.showFaces);
       const d = this.detail;
+      if (this.showFaces && d) this.drawApproveAll(d);
       if (!this.showFaces || !d?.faces?.length || (this.it.k !== 1 && this.it.k !== 2)) return;
       let faces = d.faces;
       if (this.it.k === 2) { // a video: the faces of the frame it is paused at
@@ -1287,23 +1357,21 @@
       ov.className = 'v-faces';
       // a named face not approved yet gets a round tick beside its name to approve it at once; ticked,
       // it stays on this visit (to untick), and is gone once the photo is shown again
-      const user = Account.can('user');
-      const tick = (f) => (user && f.name && (!f.ok || (f.mine && this.ticks.has(f.idx)))
+      const tick = (f) => (this.tickable(f)
         ? `<button type="button" class="v-tick${f.ok ? ' on' : ''}" data-tick="${f.idx}" title="${f.ok ? t('Bestätigung aufheben') : t('Bestätigen')}" aria-pressed="${!!f.ok}">${icon('check')}</button>` : '');
       ov.innerHTML = faces.map((f) => `<div class="v-face ${f.name ? '' : 'unknown'}" data-idx="${f.idx}" style="left:${f.X * 100}%;top:${f.Y * 100}%;width:${f.W * 100}%;height:${f.H * 100}%"><span>${esc(f.name || (f.person ? t('Unbenannt') : '?'))}${tick(f)}</span></div>`).join('');
       this.media.appendChild(ov);
-      const it = this.it;
+      this.placeTicks(ov);
+      // the picture got another size (the details opened, the window): placed anew
+      this.tickRO ??= new ResizeObserver(() => { const o = $('.v-faces', this.media); if (o) this.placeTicks(o); });
+      this.tickRO.observe(this.media);
       for (const b of $$('.v-face', ov)) {
         b.onclick = (e) => {
           e.stopPropagation();
           const tk = e.target.closest('[data-tick]');
           const f = d.faces.find((x) => x.idx === +b.dataset.idx);
-          if (!tk) { this.namePop(b, f); return; }
-          if (tk.disabled) return; // one change at a time: the next click goes by what was saved
-          this.ticks.add(f.idx);
-          tk.classList.toggle('on', !f.ok); // at once; the details follow
-          tk.disabled = true;
-          this.approveFaces({ faces: [f.idx], ok: !f.ok }).then((done) => { if (!done && this.it === it) this.drawFaces(); });
+          if (tk) this.tickFace(f, tk);
+          else this.namePop(b, f);
         };
       }
     },
@@ -1372,10 +1440,11 @@
       const it = this.it;
       const res = await post(`/api/faces/${it.id}/approve`, req).catch((e) => ({ error: e.message }));
       if (res.error) { toast(t('Fehler: {e}', { e: String(res.error).replace(/^\d{3} /, '') })); return false; }
-      toast(req.ok ? (req.all ? t('Gesichter bestätigt') : t('Gesicht bestätigt')) : t('Bestätigung aufgehoben'),
-        t('Rückgängig'), async () => { await post(`/api/faces/${it.id}/approve`, { undo: res.undo }); await this.refreshItem(it); });
+      const msg = req.ok ? (req.all ? t('Gesichter bestätigt') : t('Gesicht bestätigt')) : t('Bestätigung aufgehoben');
+      if (res.undo) toast(msg, t('Rückgängig'), async () => { await post(`/api/faces/${it.id}/approve`, { undo: res.undo }); await this.refreshItem(it); });
+      else toast(msg);
       await this.refreshItem(it).catch(() => { if (this.it === it) this.drawFaces(); });
-      return true;
+      return res;
     },
 
     // sharing, the original and printing: one button, its menu. The link opens this photo in the
@@ -2160,13 +2229,13 @@
     const pts = new Map();
     let start = null, pinch = null, moved = false, multi = false, held = false, menued = false, lastTap = null, tapT = 0, longT = 0, lastType = 'mouse';
     V.stage.addEventListener('dblclick', (e) => {
-      if (V.it?.k !== 1 || lastType !== 'mouse') return; // touch double taps are handled in end()
+      if (V.it?.k !== 1 || lastType !== 'mouse' || e.target.closest('.v-approve-all')) return; // touch double taps are handled in end()
       V.animateZoom();
       V.zoom.s > 1 ? V.resetZoom() : V.zoomAt(e.clientX, e.clientY, 2.5);
     });
     V.stage.addEventListener('pointerdown', (e) => {
       lastType = e.pointerType;
-      if (e.target.closest('video[controls]') || e.target.closest('.v-face')) return;
+      if (e.target.closest('video[controls]') || e.target.closest('.v-face, .v-approve-all')) return; // their own clicks
       V.stage.setPointerCapture(e.pointerId);
       pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
       V.media.style.transition = '';
@@ -2972,7 +3041,7 @@
       const show = new Set(store.get('people-show', ['named', 'unnamed']).filter((k) => kinds.some(([x]) => x === k)));
       if (!show.size) show.add('named');
       view.innerHTML = `<div class="head"><div><h1>${t('Personen')}</h1><div class="sub">${t('{a} mit Namen · {b} ohne Namen', { a: pl(named.length, '{n} Person', '{n} Personen'), b: pl(unnamed.length, '{n} Gruppe', '{n} Gruppen') })}</div></div>
-        <div class="tools">${cardTools('people', [['count', 'Meiste Fotos'], ['name', 'Name']])}${Account.can('admin') && info.recognition ? `<button class="btn ghost icon-sm" data-rematch title="${t('Namen aller nicht bestätigten Gesichter neu zuordnen, nach den bestätigten Gesichtern jeder Person; es wird nicht neu gesucht')}">${icon('people')}<span>${t('Neu zuordnen')}</span></button>` : ''}${Account.can('admin') && info.detection ? `<button class="btn ghost icon-sm" data-rethink title="${t('Gesichter in allen Fotos neu suchen, die nicht bestätigt sind, auch zusätzliche; auf Wunsch auch in Fotos, deren Gesichter alle einzeln bestätigt sind; bestätigte Gesichter, Namen und von Hand markierte bleiben')}">${icon('refresh')}<span>${t('Neu suchen')}</span></button>` : ''}<div class="kindset" role="group" aria-label="${t('Anzeigen')}">${kinds.map(([k, l, ic]) =>
+        <div class="tools">${cardTools('people', [['count', 'Meiste Fotos'], ['name', 'Name']])}${Account.can('user') && info.recognition ? `<button class="btn ghost icon-sm" data-quiz="name" title="${t('Ein paar Gesichter schnell benennen, die das meiste bringen: je eins der größten Gruppen ohne Namen')}">${icon('tag')}<span>${t('Schnell benennen')}</span></button><button class="btn ghost icon-sm" data-quiz="approve" title="${t('Ein paar zugeordnete Namen schnell bestätigen, bei denen die Erkennung am unsichersten ist')}">${icon('check')}<span>${t('Schnell bestätigen')}</span></button>` : ''}${Account.can('admin') && info.recognition ? `<button class="btn ghost icon-sm" data-rematch title="${t('Namen aller nicht bestätigten Gesichter neu zuordnen, nach den bestätigten Gesichtern jeder Person; es wird nicht neu gesucht')}">${icon('people')}<span>${t('Neu zuordnen')}</span></button>` : ''}${Account.can('admin') && info.detection ? `<button class="btn ghost icon-sm" data-rethink title="${t('Gesichter in allen Fotos neu suchen, die nicht bestätigt sind, auch zusätzliche; auf Wunsch auch in Fotos, deren Gesichter alle einzeln bestätigt sind; bestätigte Gesichter, Namen und von Hand markierte bleiben')}">${icon('refresh')}<span>${t('Neu suchen')}</span></button>` : ''}<div class="kindset" role="group" aria-label="${t('Anzeigen')}">${kinds.map(([k, l, ic]) =>
           `<button data-pshow="${k}" class="${show.has(k) ? 'on' : ''}" aria-pressed="${show.has(k)}" title="${t('{x} zeigen oder ausblenden', { x: t(l) })}">${icon(ic)}<span>${t(l)}</span></button>`).join('')}</div></div></div>
         ${banner}<div data-psec></div>
         ${!S.people.length && info.recognition ? `<div class="empty">${icon('people')}<h2>${t('Noch keine Personen')}</h2><p>${t('Die Gesichtssuche läuft im Hintergrund.')}</p></div>` : ''}`;
@@ -3013,6 +3082,7 @@
           ...(more > 0 ? [[t('Auch vollständig bestätigte (+{n})', { n: num(more) }), start(true)]] : [])];
         toast(t(ask, { x: unit(c.n) }), acts);
       });
+      for (const b of $$('[data-quiz]', view)) b.onclick = () => Quiz.open(b.dataset.quiz);
       // names of the faces not approved, matched anew against the approved faces (no search)
       bgJob('[data-rematch]', '/api/faces/rematch', 'Keine Gesichter ohne Bestätigung',
         '{x} nicht bestätigt: Namen neu zuordnen?', 'Namen werden im Hintergrund neu zugeordnet ({x})', (n) => pl(n, '{n} Gesicht', '{n} Gesichter'));
@@ -3566,10 +3636,281 @@
   };
 
   // internals for admin.js (admin tools) — not a public API
+  // ---------------------------------------------------------------------------
+  // quick rounds: a handful of faces the server chose, one after the other, zoomed to the face,
+  // to name (one answer names the face's group, not approved yet) or to approve (yes / no).
+  // Afterwards "Neu zuordnen" matches the other faces against what was answered.
+  // ---------------------------------------------------------------------------
+  const Quiz = {
+    el: null, mode: 'name', list: [], i: 0, done: [], stats: null, busy: false, sid: 0,
+
+    async open(mode) {
+      if (!Account.need('user')) return;
+      this.close(true);
+      this.sid++; // answers still on their way from a round before are dropped
+      this.busy = false;
+      this.mode = mode;
+      this.stats = { named: 0, approved: 0, rejected: 0, skipped: 0 };
+      const el = (this.el = document.createElement('div'));
+      el.className = 'quiz';
+      el.innerHTML = `<div class="qz-top"><b>${mode === 'name' ? t('Schnell benennen') : t('Schnell bestätigen')}</b><span class="qz-prog"></span>
+        <button type="button" class="btn ghost icon qz-x" data-q="close" title="${t('Schließen')} (Esc)">${icon('x')}</button></div>
+        <div class="qz-body">${loading()}</div>`;
+      document.body.appendChild(el);
+      document.body.classList.add('locked');
+      el.addEventListener('click', (e) => this.onClick(e));
+      this.keyFn = (e) => this.onKey(e);
+      addEventListener('keydown', this.keyFn, true);
+      this.resizeFn = () => this.place();
+      addEventListener('resize', this.resizeFn);
+      await this.round();
+    },
+
+    close(quiet = false) {
+      if (!this.el) return;
+      this.el.remove();
+      this.el = null;
+      document.body.classList.remove('locked');
+      this.sid++;
+      removeEventListener('keydown', this.keyFn, true);
+      removeEventListener('resize', this.resizeFn);
+      if (!quiet && this.done.length) scheduleReload();
+      this.done = [];
+    },
+
+    // a new round: the faces the server finds most worth it now
+    async round() {
+      const body = $('.qz-body', this.el), sid = this.sid;
+      body.innerHTML = loading();
+      const res = await api(`/api/faces/quiz?mode=${this.mode}&n=12`).catch((e) => ({ error: e.message }));
+      if (!this.el || sid !== this.sid) return;
+      if (res.error) { body.innerHTML = `<div class="empty"><h2>${t('Fehler: {e}', { e: esc(String(res.error).replace(/^\d{3} /, '')) })}</h2></div>`; return; }
+      this.list = res.faces || [];
+      this.i = 0;
+      this.done = [];
+      if (!this.list.length) { this.end(true); return; }
+      for (const f of this.list) { const im = new Image(); im.src = largeURL({ id: f.item, v: f.v }); } // ready when it comes
+      this.show();
+    },
+
+    show() {
+      const f = this.list[this.i];
+      if (!f) { this.end(); return; }
+      $('.qz-prog', this.el).textContent = `${this.i + 1} / ${this.list.length}`;
+      const body = $('.qz-body', this.el);
+      const info = this.mode === 'name'
+        ? `<div class="qz-q">${t('Wer ist das?')}</div><div class="qz-sub">${f.photos > 1 ? t('Gilt für die ganze Gruppe ({n}), noch nicht bestätigt', { n: pl(f.photos, '{n} Foto', '{n} Fotos') }) : ''}</div>`
+        : `<div class="qz-q">${t('Ist das {name}?', { name: `<b>${esc(f.name)}</b>` })}</div>`;
+      body.innerHTML = `<div class="qz-crop"><img alt="" draggable="false"><div class="qz-box"></div></div>${info}<div class="qz-acts"></div>`;
+      const img = $('.qz-crop img', body);
+      img.src = largeURL({ id: f.item, v: f.v });
+      this.place();
+      this.bindSwipe($('.qz-crop', body));
+      if (this.mode === 'name') this.namePicker(f, true);
+      else this.approveActs(f);
+    },
+
+    // the photo zoomed so the face is about 40 % of the frame's height, in its middle
+    place() {
+      const f = this.list[this.i], crop = $('.qz-crop', this.el);
+      if (!f || !crop) return;
+      const cw = crop.clientWidth, ch = crop.clientHeight, a = f.aspect || 1;
+      let iw = Math.min((0.4 * ch) / (f.h / a), (0.4 * cw) / f.w);
+      iw = clamp(iw, cw * 0.5, cw * 14);
+      const ih = iw / a;
+      const left = cw / 2 - (f.x + f.w / 2) * iw, top = ch / 2 - (f.y + f.h / 2) * ih;
+      const img = $('img', crop), box = $('.qz-box', crop);
+      Object.assign(img.style, { width: `${iw}px`, height: `${ih}px`, left: `${left}px`, top: `${top}px` });
+      Object.assign(box.style, { width: `${f.w * iw}px`, height: `${f.h * ih}px`, left: `${left + f.x * iw}px`, top: `${top + f.y * ih}px` });
+    },
+
+    approveActs(f) {
+      $('.qz-acts', this.el).innerHTML = `<div class="qz-yesno">
+          <button type="button" class="qz-no" data-q="no" title="${t('Nein')} (N, ←)">${icon('x')}<span>${t('Nein')}</span></button>
+          <button type="button" class="qz-yes" data-q="yes" title="${t('Ja')} (J, Enter, →)">${icon('check')}<span>${t('Ja')}</span></button></div>
+        <div class="row qz-more">${this.done.length ? `<button type="button" data-q="back">${icon('left')}<span>${t('Zurück')}</span></button>` : ''}<button type="button" data-q="skip">${t('Überspringen')}</button></div>`;
+    },
+
+    // names to choose from: the people the face looks like first, then the recent ones; a name
+    // can be typed too
+    async namePicker(f, group, not = '') {
+      const acts = $('.qz-acts', this.el);
+      const names = [...new Set(S.people.filter((p) => p.name).map((p) => p.name))].sort((a, b) => a.localeCompare(b));
+      const cover = new Map();
+      for (const p of S.people) if (p.name && !(cover.get(p.name)?.count >= p.count)) cover.set(p.name, p);
+      const chip = (n) => { const p = cover.get(n); return `<button type="button" class="qz-chip" data-name="${esc(n)}">${p ? `<img src="${faceURL(p.cover.item, p.cover.idx)}" alt="">` : ''}<span>${esc(n)}</span></button>`; };
+      const draw = (sugg) => {
+        const top = [...new Set([...sugg, ...store.get('recent-names', [])])].filter((n) => cover.has(n) && n !== not).slice(0, 8);
+        acts.innerHTML = `${top.length ? `<div class="qz-chips">${top.map(chip).join('')}</div>` : ''}
+          <form class="qz-form"><input class="qz-name" list="qzNames" placeholder="${t('Name eingeben …')}" autocomplete="off" enterkeyhint="done"><datalist id="qzNames">${names.map((n) => `<option value="${esc(n)}">`).join('')}</datalist><button class="btn primary" title="Enter">${icon('check')}</button></form>
+          <div class="row qz-more">${this.done.length ? `<button type="button" data-q="back">${icon('left')}<span>${t('Zurück')}</span></button>` : ''}${this.mode === 'name'
+            ? `<button type="button" data-q="noface">${icon('face-x')}<span>${t('Kein Gesicht')}</span></button><button type="button" data-q="hide">${icon('eye-off')}<span>${t('Ausblenden')}</span></button>` : ''}<button type="button" data-q="skip">${this.mode === 'name' ? t('Überspringen') : t('Weiter')}</button></div>`;
+        const form = $('.qz-form', acts), inp = $('.qz-name', acts);
+        form.onsubmit = (e) => { e.preventDefault(); const n = inp.value.trim(); if (n) this.answerName(f, n, group); };
+        if (!isTouch) inp.focus();
+      };
+      draw([]);
+      const sid = this.sid;
+      const sugg = await api(`/api/face/${f.item}/${f.idx}/suggest`).then((r) => (r.suggestions || r || []).map((s) => s.name)).catch(() => []);
+      // drawn again with the suggestions, unless somebody started typing
+      if (sid === this.sid && this.list[this.i] === f && acts.isConnected && !$('.qz-name', acts)?.value) draw(Array.isArray(sugg) ? sugg : []);
+    },
+
+    onClick(e) {
+      if (this.busy && !e.target.closest('[data-q="close"]')) return; // an answer is being saved
+      const n = e.target.closest('[data-name]')?.dataset.name;
+      const f = this.list[this.i];
+      if (n && f) { this.answerName(f, n, this.mode === 'name'); return; }
+      const q = e.target.closest('[data-q]')?.dataset.q;
+      if (!q) return;
+      if (q === 'close') this.close();
+      else if (q === 'yes') this.approve(f);
+      else if (q === 'no') this.reject(f);
+      else if (q === 'skip') { this.stats.skipped++; this.next(); }
+      else if (q === 'back') this.back();
+      else if (q === 'noface') this.label(f, '-', false, 'named');
+      else if (q === 'hide') this.label(f, '~', false, 'named');
+      else if (q === 'again') this.round();
+      else if (q === 'rematch') this.rematch(e.target.closest('button'));
+    },
+
+    onKey(e) {
+      if (!this.el) return;
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); this.close(); return; }
+      if (isTyping(e.target)) return;
+      const f = this.list[this.i];
+      const k = e.key.toLowerCase();
+      e.stopPropagation(); // the viewer and the gallery below get no keys
+      if (this.busy) return;
+      if (!f) { if (k === 'backspace' || k === 'z') { e.preventDefault(); this.back(); } return; } // the end: back to the last answer
+      if (this.mode === 'approve' && $('.qz-yesno', this.el)) {
+        if (k === 'j' || k === 'y' || k === 'enter' || k === 'arrowright') { e.preventDefault(); this.approve(f); }
+        else if (k === 'n' || k === 'arrowleft') { e.preventDefault(); this.reject(f); }
+        else if (k === 's' || k === 'arrowdown') { e.preventDefault(); this.stats.skipped++; this.next(); }
+      }
+      if (k === 'backspace' || k === 'z') { e.preventDefault(); this.back(); }
+    },
+
+    // a swipe on the picture: right yes, left no (approving)
+    bindSwipe(crop) {
+      let st = null;
+      crop.onpointerdown = (e) => { st = { x: e.clientX, y: e.clientY }; };
+      crop.onpointerup = (e) => {
+        if (!st || this.busy || this.mode !== 'approve' || !$('.qz-yesno', this.el)) return;
+        const dx = e.clientX - st.x, dy = e.clientY - st.y;
+        st = null;
+        if (Math.abs(dx) < 70 || Math.abs(dy) > Math.abs(dx)) return;
+        const f = this.list[this.i];
+        if (dx > 0) this.approve(f); else this.reject(f);
+      };
+    },
+
+    // one answer at a time; null when it failed or the round was closed meanwhile
+    async send(fn) {
+      if (this.busy) return null;
+      this.busy = true;
+      const sid = this.sid;
+      try {
+        const res = await fn();
+        return sid === this.sid ? res : null;
+      } catch (e) {
+        if (sid === this.sid) toast(t('Fehler: {e}', { e: String(e.message || e).replace(/^\d{3} /, '') }));
+        return null;
+      } finally { if (sid === this.sid) this.busy = false; }
+    },
+
+    // yes: the face gets the name shown (approved by it), whoever it is grouped with meanwhile
+    async approve(f) {
+      const res = await this.send(() => post(`/api/face/${f.item}/${f.idx}`, { name: f.name }));
+      if (!res) return;
+      this.done.push({ f, i: this.i, labels: res.undo, stat: 'approved' });
+      this.stats.approved++;
+      this.next();
+    },
+
+    // not this person: said so, then the right name can be given (or not)
+    async reject(f) {
+      const res = await this.send(() => post(`/api/face/${f.item}/${f.idx}`, { not: f.name })); // the name shown
+      if (!res) return;
+      this.done.push({ f, i: this.i, labels: res.undo, stat: 'rejected' });
+      this.stats.rejected++;
+      $('.qz-q', this.el).innerHTML = t('Wer ist das dann?');
+      this.namePicker(f, false, f.name); // not the name it was said not to be
+    },
+
+    answerName(f, name, group) {
+      store.set('recent-names', [name, ...store.get('recent-names', []).filter((n) => n !== name)].slice(0, 12));
+      this.label(f, name, group, 'named');
+    },
+
+    async label(f, name, group, stat) {
+      const res = await this.send(() => post(`/api/face/${f.item}/${f.idx}`, { name, group }));
+      if (!res) return;
+      // after "no" in approving: one step together with it (back undoes both)
+      const prev = this.done[this.done.length - 1];
+      if (this.mode === 'approve' && prev?.f === f && prev.stat === 'rejected') {
+        prev.labels2 = res.undo;
+        this.stats.named++;
+      } else {
+        this.done.push({ f, i: this.i, labels: res.undo, hints: res.hints, stat });
+        this.stats[stat]++;
+      }
+      this.next();
+    },
+
+    next() {
+      this.i++;
+      this.show();
+    },
+
+    // the last answer undone, its face shown again
+    async back() {
+      const d = this.done.pop();
+      if (!d) return;
+      const sid = this.sid;
+      const ok = await this.send(async () => {
+        if (d.labels2) await post('/api/faces/labels', { labels: d.labels2 });
+        if (d.labels) await post('/api/faces/labels', { labels: d.labels });
+        if (d.hints) await post('/api/faces/hints', { hints: d.hints });
+        if (d.approve) await post(`/api/faces/${d.f.item}/approve`, { undo: d.approve });
+        return true;
+      });
+      if (sid !== this.sid) return; // the round was closed meanwhile
+      if (!ok) { this.done.push(d); return; }
+      this.stats[d.stat] = Math.max(0, this.stats[d.stat] - 1);
+      if (d.labels2) this.stats.named = Math.max(0, this.stats.named - 1);
+      this.i = d.i;
+      this.show();
+    },
+
+    end(none = false) {
+      const s = this.stats;
+      $('.qz-prog', this.el).textContent = '';
+      const parts = [s.named && pl(s.named, '{n} benannt', '{n} benannt'), s.approved && pl(s.approved, '{n} bestätigt', '{n} bestätigt'),
+        s.rejected && pl(s.rejected, '{n} abgelehnt', '{n} abgelehnt')].filter(Boolean);
+      const admin = Account.can('admin');
+      $('.qz-body', this.el).innerHTML = `<div class="qz-end">${icon(none ? 'check' : 'people')}
+        <h2>${none ? (this.mode === 'name' ? t('Keine Gruppen ohne Namen') : t('Nichts zu bestätigen')) : t('Runde fertig')}</h2>
+        ${parts.length ? `<p>${parts.join(' · ')}</p>` : ''}
+        ${!none && admin ? `<p class="qz-sub">${t('Mit „Neu zuordnen“ lernen die übrigen Gesichter aus den Antworten.')}</p>` : ''}
+        <div class="row">${this.done.length ? `<button type="button" data-q="back">${icon('left')}<span>${t('Zurück')}</span></button>` : ''}${none ? '' : `<button type="button" class="primary" data-q="again">${t('Weitere Runde')}</button>`}
+          ${admin && (s.named || s.approved || s.rejected) ? `<button type="button" data-q="rematch">${icon('people')}<span>${t('Neu zuordnen')}</span></button>` : ''}
+          <button type="button" data-q="close">${t('Fertig')}</button></div></div>`;
+      scheduleReload(); // the answers stay undoable (Zurück) until the next round
+    },
+
+    async rematch(btn) {
+      btn.disabled = true;
+      const res = await post('/api/faces/rematch', {}).catch((e) => ({ error: e.message }));
+      if (res.error) { toast(t('Fehler: {e}', { e: String(res.error).replace(/^\d{3} /, '') })); btn.disabled = false; return; }
+      toast(t('Namen werden im Hintergrund neu zugeordnet ({x})', { x: pl(res.n, '{n} Gesicht', '{n} Gesichter') }));
+    },
+  };
+
   window.SK = {
     t, LANG, S, VIEWS, Viewer, Gallery, Account, api, post, toast, esc, icon, $, $$, num, plural, pl, clamp, debounce,
     fmtLong, fmtTime, fmtMonth, thumbURL, largeURL, tileLayer, galleryView,
-    route: () => route, render, rerender, loadItems, loadPeople, scheduleReload, selectionChanged, endSelection, updateCounts, sheetGrip, phoneMQ,
+    Quiz, route: () => route, render, rerender, loadItems, loadPeople, scheduleReload, selectionChanged, endSelection, updateCounts, sheetGrip, phoneMQ,
     fmtSize, fmtDay, shown, isTyping, menu, pageSelection, pageSelActive: () => !!pageSel, loader, loading, Busy, ring,
   };
 
