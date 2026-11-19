@@ -233,6 +233,7 @@ func (l *Library) LabelFace(item string, idx int, name string) (string, error) {
 	prev := s.labels[k]
 	s.setLabel(k, strings.TrimSpace(name))
 	s.mu.Unlock()
+	l.notTwin(item, idx) // somebody decided: no automatic putting aside to undo any more
 	if err := s.save(); err != nil {
 		return prev, err
 	}
@@ -394,12 +395,16 @@ func (l *Library) NoFacePerson(id string) (map[string]string, error) {
 // and LabelFace): "" removes a label. Keys are "item:index" of faces that
 // exist.
 func (l *Library) RestoreFaceLabels(labels map[string]string) error {
-	for k := range labels {
-		item, idx, ok := strings.Cut(k, ":")
-		n, err := strconv.Atoi(idx)
-		it := l.Get(item)
-		if !ok || err != nil || it == nil || n < 0 || n >= len(l.ItemFaces(it)) {
-			return fmt.Errorf("unknown face %q", k)
+	if err := l.checkFaceKeys(labels); err != nil {
+		return err
+	}
+	for k, v := range labels { // a label set back by somebody: no automatic putting aside any more
+		if strings.TrimSpace(v) != labelNoFace {
+			if id, rest, ok := strings.Cut(k, ":"); ok {
+				if i, err := strconv.Atoi(rest); err == nil {
+					l.notTwin(id, i)
+				}
+			}
 		}
 	}
 	s := l.people
@@ -451,6 +456,68 @@ func (s *peopleStore) setNoFace(item string, idx []int) {
 			s.labels[k] = labelNoFace
 		}
 	}
+}
+
+// labelOf returns a face's label (key "item:idx"); the caller may hold l.mu.
+func (s *peopleStore) labelOf(k string) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.labels[k]
+}
+
+// clearNoFace removes the no face labels of faces of an item (put aside
+// automatically, coming back); the caller may hold l.mu.
+func (s *peopleStore) clearNoFace(item string, idx []int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, i := range idx {
+		if k := (FaceRef{item, i}).key(); s.labels[k] == labelNoFace {
+			delete(s.labels, k)
+		}
+	}
+}
+
+// setNoFaceKeys puts faces (keys "item:idx") aside as no face, those
+// without a label; the caller may hold l.mu. It tells whether any changed.
+func (s *peopleStore) setNoFaceKeys(keys []string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for _, k := range keys {
+		if s.labels[k] == "" {
+			s.labels[k] = labelNoFace
+			n++
+		}
+	}
+	return n > 0
+}
+
+// clearNoFaceKeys removes the no face labels of faces (keys "item:idx");
+// the caller may hold l.mu. It tells whether any went (to be saved).
+func (s *peopleStore) clearNoFaceKeys(keys []string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for _, k := range keys {
+		if s.labels[k] == labelNoFace {
+			delete(s.labels, k)
+			n++
+		}
+	}
+	return n > 0
+}
+
+// checkFaceKeys tells whether every key ("item:idx") is a face there is.
+func (l *Library) checkFaceKeys(keys map[string]string) error {
+	for k := range keys {
+		item, idx, ok := strings.Cut(k, ":")
+		n, err := strconv.Atoi(idx)
+		it := l.Get(item)
+		if !ok || err != nil || it == nil || n < 0 || n >= len(l.ItemFaces(it)) {
+			return fmt.Errorf("unknown face %q", k)
+		}
+	}
+	return nil
 }
 
 // approvedLabel tells whether a label settles a face: a name, hidden or no
@@ -628,12 +695,14 @@ func (l *Library) regroup() {
 }
 
 func (l *Library) recluster() {
+	l.dropDuplicateFaces() // a face found twice counts once
 	if apart, changed := l.people.cluster(l.faceSnapshot()); changed {
 		l.logf("faces: %d faces kept apart from a person already in their picture (same_photo_threshold %.2f)", apart, l.people.threshSame)
 	}
 	// faces of the second search whose person is known now join it (right
 	// away after somebody named a face)
 	if l.promoteExtras(l.promoteNow.Swap(false)) {
+		l.dropDuplicateFaces() // faces taken in that are there already
 		l.people.cluster(l.faceSnapshot())
 	}
 	l.kickXMP() // names go into the files

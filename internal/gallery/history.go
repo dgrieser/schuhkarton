@@ -327,8 +327,10 @@ func renameInJSON(raw json.RawMessage, ids map[string]string) json.RawMessage {
 			for k, val := range t {
 				nk := k
 				pre, rest := "", k
-				if r, ok := strings.CutPrefix(k, HintUndoPrefix); ok { // "hint:id:index"
-					pre, rest = HintUndoPrefix, r
+				for _, p := range []string{HintUndoPrefix, TwinUndoPrefix} { // "hint:id:index", "twin:id:index"
+					if r, ok := strings.CutPrefix(k, p); ok {
+						pre, rest = p, r
+					}
 				}
 				if n, ok := ids[rest]; ok {
 					nk = pre + n
@@ -836,21 +838,39 @@ func (l *Library) UndoChange(id, by string) (EditResult, error) {
 			break
 		}
 		// hints the name gave the rest of a group (a quick round): "hint:item:idx"
-		hints := map[string]string{}
+		hints, twins := map[string]string{}, map[string]string{}
 		for k, v := range labels {
 			if h, ok := strings.CutPrefix(k, HintUndoPrefix); ok {
 				hints[h] = v
 				delete(labels, k)
+			} else if b, ok := strings.CutPrefix(k, TwinUndoPrefix); ok {
+				twins[b] = v
+				delete(labels, k)
 			}
 		}
-		l.RestoreHints(hints)
 		// faces of photos that are gone for good (or in the trash) are left out
 		for k := range labels {
 			if i := strings.LastIndex(k, ":"); i <= 0 || l.Get(k[:i]) == nil {
 				delete(labels, k)
 			}
 		}
+		if cp.Info["op"] == "dupes" {
+			// only the faces still put aside as found twice, as they were (not one
+			// named since, or another face at that place now), checked and changed
+			// in one go
+			var n int
+			if n, err = l.undoTwins(labels, twins); err == nil && n == 0 {
+				err = errors.New("die Gesichter haben sich seitdem geändert")
+			}
+			res.Changed = n
+			break
+		}
+		restored := l.RestoreHints(hints) // also when the face named is gone: the group's hints are its own
 		if len(labels) == 0 {
+			if restored > 0 {
+				res.Changed = restored
+				break
+			}
 			err = errors.New("die Fotos sind nicht mehr da")
 			break
 		}

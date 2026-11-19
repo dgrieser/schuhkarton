@@ -140,6 +140,14 @@ type Face struct {
 	// OK: approved by hand, the face stays as it is when faces are found
 	// again (faceapprove.go)
 	OK bool
+	// NotDup: put aside as found twice, and that was undone: never taken
+	// for a face found twice again. Twin: put aside (no face) as found twice,
+	// automatically, not by somebody (facedupes.go)
+	NotDup bool
+	Twin   bool
+	TwinID string // which putting aside (history), to undo only that one
+	// Missing: put aside as no face because a search did not find it again
+	Missing bool
 }
 
 // Item is one photo or video.
@@ -813,20 +821,56 @@ func (l *Library) setItems(items []*Item) {
 		m[it.ID] = it
 	}
 	l.mu.Lock()
+	// faces put aside automatically (found twice) that go now (the photo is
+	// gone, replaced, in the trash): their no face goes with them, under the
+	// same lock as grouping puts faces aside, so a photo coming at that place
+	// later does not find it
+	var twins, back []string
+	for _, o := range l.items {
+		n := m[o.ID]
+		for i, f := range o.Faces {
+			if f.Twin && (n == nil || i >= len(n.Faces) || !n.Faces[i].Twin) {
+				twins = append(twins, FaceRef{o.ID, i}.key())
+			}
+		}
+	}
+	// and the other way: a photo coming back (from the trash) with faces put
+	// aside so gets their no face back
+	for _, n := range items {
+		if o := l.byID[n.ID]; o != nil {
+			continue
+		}
+		for i, f := range n.Faces {
+			if f.Twin {
+				back = append(back, FaceRef{n.ID, i}.key())
+			}
+		}
+	}
+	dropped := len(twins) > 0 && l.people.clearNoFaceKeys(twins)
+	if len(back) > 0 && l.people.setNoFaceKeys(back) {
+		dropped = true
+	}
 	l.items, l.byID = items, m
 	l.mu.Unlock()
+	if dropped {
+		l.people.save()
+	}
 	l.bump()
 }
 
-func (l *Library) saveIndex() {
+func (l *Library) saveIndex() { l.saveIndexErr() }
+
+// saveIndexErr is saveIndex, telling whether it worked.
+func (l *Library) saveIndexErr() (err error) {
 	l.saveMu.Lock()
 	defer l.saveMu.Unlock()
 	l.cancelSave() // this save takes what a pending one would save
 	l.dirty.Store(false)
 	start := time.Now()
 	l.lastSave.Store(start.UnixNano()) // a markDirty meanwhile counts from here
-	failed := func(err error) {
-		l.logf("save index: %v", err)
+	failed := func(e error) {
+		err = e
+		l.logf("save index: %v", e)
 		l.dirty.Store(true) // try again later
 		l.scheduleSave(saveEvery)
 	}
@@ -834,19 +878,19 @@ func (l *Library) saveIndex() {
 	// every reader, the viewer too); compressing and writing come after
 	var buf bytes.Buffer
 	l.mu.RLock()
-	err := gob.NewEncoder(&buf).Encode(indexFile{Version: indexVersion, Items: l.items, Formats: l.formatsKnown.Load(), VideoSidecars: true})
+	err = gob.NewEncoder(&buf).Encode(indexFile{Version: indexVersion, Items: l.items, Formats: l.formatsKnown.Load(), VideoSidecars: true})
 	l.mu.RUnlock()
 	locked := time.Since(start)
 	if err != nil {
 		failed(err)
-		return
+		return err
 	}
 	path := filepath.Join(l.opt.CacheDir, "index.gob.gz")
 	tmp := path + ".tmp"
 	f, err := os.Create(tmp)
 	if err != nil {
 		failed(err)
-		return
+		return err
 	}
 	// the fastest compression: on a small machine the default took 2.4x as
 	// long for an index a seventh smaller (most of it is face embeddings,
@@ -868,6 +912,7 @@ func (l *Library) saveIndex() {
 	if d := time.Since(start); d > 5*time.Second {
 		l.logf("save index: %v (%v of it holding the library lock)", d.Round(100*time.Millisecond), locked.Round(100*time.Millisecond))
 	}
+	return err
 }
 
 // saveDelay is the wait before a save, so that changes coming together

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sort"
 	"sync"
 	"time"
 
@@ -266,6 +267,7 @@ func (l *Library) scanFaces(ctx context.Context, it *Item) bool {
 	// labeled keep their index and crop, found ones move to where they end up
 	tmp := prefix + "-new"
 	labeled := l.people.labeled(it.ID, false)
+	twinsCleared := false
 	want := faceGenWant(l.FaceStatus(), it)
 	l.mu.RLock()
 	redo := it.FaceRedo // looked at again (RethinkFaces); approving meanwhile calls it off
@@ -327,9 +329,22 @@ func (l *Library) scanFaces(ctx context.Context, it *Item) bool {
 			}
 		}
 	}
-	labeled = l.people.labeled(it.ID, false) // names given while the search ran count too
 	l.mu.Lock()
 	approved := it.FacesOK
+	labeled = l.people.labeled(it.ID, false) // under l.mu: names given (or faces put aside) while the search ran count too
+	if !approved && onlyTwinsKept(it.Faces, labeled, func(i int) bool { return l.people.labelOf(FaceRef{it.ID, i}.key()) == labelNoFace }) {
+		// nothing kept but faces put aside as found twice: the faces are found
+		// afresh (those twins' no face would keep the old ones), grouping decides again
+		var idx []int
+		for i, f := range it.Faces {
+			if f.Twin {
+				idx = append(idx, i)
+				delete(labeled, i)
+			}
+		}
+		l.people.clearNoFace(it.ID, idx)
+		twinsCleared = true
+	}
 	if approved {
 		// approved as a whole (also before or while the search ran): no face comes or
 		// goes, those found only lend their embeddings to the faces there
@@ -338,7 +353,7 @@ func (l *Library) scanFaces(ctx context.Context, it *Item) bool {
 			labeled[i] = true
 		}
 	}
-	merged, place := mergeFaces(it.Faces, faces, labeled, l.people.threshNew)
+	merged, place, cover := mergeFacesOpt(it.Faces, faces, labeled, l.people.threshNew, it.Kind == Photo)
 	if approved {
 		n := len(it.Faces)
 		merged = merged[:n:n]
@@ -359,17 +374,35 @@ func (l *Library) scanFaces(ctx context.Context, it *Item) bool {
 			taken[to] = true
 		}
 		extra = append([]Face(nil), extra...)
-		for i, f := range it.Faces {
-			if i >= len(merged) || taken[i] || !sameBox(merged[i], f) {
+		// faces of the second search and old faces in pairs, those fitting best
+		// first, each once
+		type pair struct {
+			k, i int
+			iou  float32
+		}
+		var pairs []pair
+		for k := range extra {
+			if extra[k].Emb == nil && extra[k].Emb2 == nil {
 				continue
 			}
-			for k := range extra {
-				if (extra[k].Emb != nil || extra[k].Emb2 != nil) && sameSpot(extra[k], f) {
-					extra[k].Emb, extra[k].Emb2 = nil, nil
-					again = append(again, i)
-					break
+			for i, f := range it.Faces {
+				if i >= len(merged) || taken[i] || !sameBox(merged[i], f) || !sameFrame(extra[k], f) {
+					continue
+				}
+				if v := boxIoU(extra[k], f); v > 0.4 && !twoPeople(extra[k], f, l.people.threshNew) {
+					pairs = append(pairs, pair{k, i, v})
 				}
 			}
+		}
+		sort.Slice(pairs, func(a, b int) bool { return pairs[a].iou > pairs[b].iou })
+		usedK, usedI := map[int]bool{}, map[int]bool{}
+		for _, p := range pairs {
+			if usedK[p.k] || usedI[p.i] {
+				continue
+			}
+			usedK[p.k], usedI[p.i] = true, true
+			extra[p.k].Emb, extra[p.k].Emb2 = nil, nil
+			again = append(again, p.i)
 		}
 	}
 	var gone []int
@@ -380,6 +413,39 @@ func (l *Library) scanFaces(ctx context.Context, it *Item) bool {
 		if len(gone) > 0 {
 			// under l.mu: no approval comes in between
 			l.people.setNoFace(it.ID, gone)
+			for _, i := range gone {
+				if i < len(merged) {
+					merged[i].Missing = true // not found again: no twin's partner any more
+				}
+			}
+		}
+	}
+	// a twin put aside whose face is not there any more (not found again, or
+	// another face at its place now) comes back; grouping decides afresh
+	var back []int
+	missing := map[int]bool{} // not found again by this search: no twin's partner any more
+	for _, i := range gone {
+		missing[i] = true
+	}
+	if !approved { // approved as a whole: no face comes or goes
+		back = lonelyTwins(merged, missing, func(i int) bool { // found again by this search
+			for _, j := range again {
+				if j == i {
+					return true
+				}
+			}
+			for _, j := range cover { // taken in by it in the merge
+				if j == i {
+					return true
+				}
+			}
+			return false
+		})
+	}
+	if len(back) > 0 {
+		l.people.clearNoFace(it.ID, back)
+		for _, i := range back {
+			merged[i].Twin, merged[i].TwinID = false, ""
 		}
 	}
 	it.Faces, it.FacesDone, it.FaceGen, it.FaceRedo = merged, true, want, false
@@ -398,7 +464,7 @@ func (l *Library) scanFaces(ctx context.Context, it *Item) bool {
 			os.Rename(from, fmt.Sprintf("%s_%d.jpg", prefix, to))
 		}
 	}
-	if len(gone) > 0 {
+	if len(gone) > 0 || len(back) > 0 || twinsCleared {
 		if err := l.people.save(); err != nil {
 			l.logf("faces %s: %v", it.Rel, err)
 		}

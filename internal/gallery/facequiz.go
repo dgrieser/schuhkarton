@@ -482,8 +482,8 @@ func (l *Library) RejectFace(item string, idx int, name string) (string, error) 
 const HintUndoPrefix = "hint:"
 
 // RestoreHints sets hints back (key "item:idx" -> hint), as HintGroup
-// returned them.
-func (l *Library) RestoreHints(hints map[string]string) {
+// returned them. It returns how many faces there were for them.
+func (l *Library) RestoreHints(hints map[string]string) int {
 	l.mu.Lock()
 	byItem := map[*Item]map[int]string{}
 	for k, h := range hints {
@@ -498,10 +498,12 @@ func (l *Library) RestoreHints(hints map[string]string) {
 		}
 		byItem[it][i] = h
 	}
+	n := 0
 	for it, hs := range byItem {
 		faces := append([]Face(nil), it.Faces...)
 		for i, h := range hs {
 			faces[i].Hint = h
+			n++
 		}
 		it.Faces = faces
 	}
@@ -510,4 +512,5 @@ func (l *Library) RestoreHints(hints map[string]string) {
 		l.markDirty()
 		l.regroup()
 	}
+	return n
 }

@@ -16,6 +16,12 @@ import (
 // its item are found again.
 func faceKept(f Face, labeled bool) bool { return f.Manual || f.OK || labeled }
 
+// rescanKept tells whether a face keeps its index and box when the faces
+// of its item are found again: approved, or said not to be found twice
+// (its box is what somebody looked at). A face found again there lends it
+// its embeddings.
+func rescanKept(f Face, labeled bool) bool { return faceKept(f, labeled) || f.NotDup }
+
 // hasApprovedFace tells whether one of the faces was approved by hand.
 func hasApprovedFace(faces []Face) bool {
 	for _, f := range faces {
@@ -209,7 +215,7 @@ func (l *Library) RethinkFaces(complete bool) (int, error) {
 func leftover(old []Face, labeled map[int]bool, place []int) []int {
 	kept := false
 	for i, f := range old {
-		kept = kept || faceKept(f, labeled[i])
+		kept = kept || rescanKept(f, labeled[i])
 	}
 	if !kept {
 		return nil // the found faces replaced all old ones
@@ -220,7 +226,7 @@ func leftover(old []Face, labeled map[int]bool, place []int) []int {
 	}
 	var out []int
 	for i, f := range old {
-		if !faceKept(f, labeled[i]) && !taken[i] {
+		if !rescanKept(f, labeled[i]) && !taken[i] {
 			out = append(out, i)
 		}
 	}
