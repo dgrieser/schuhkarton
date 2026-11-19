@@ -348,7 +348,6 @@ func (l *Library) promoteExtras(force bool) bool {
 						}
 					}
 					found[k] = append(found[k], move{t.it, i, refs[best].name, f})
-					here[refs[best].name] = true
 				}
 			}
 		}()
@@ -361,11 +360,11 @@ func (l *Library) promoteExtras(force bool) bool {
 	if len(moves) == 0 {
 		return false
 	}
-	l.mu.Lock()
 	byItem := map[*Item][]move{}
 	for _, m := range moves {
 		byItem[m.it] = append(byItem[m.it], m)
 	}
+	l.mu.Lock()
 	n := 0
 	for it, ms := range byItem {
 		if l.byID[it.ID] != it || it.FacesOK {
@@ -373,11 +372,16 @@ func (l *Library) promoteExtras(force bool) bool {
 		}
 		faces := append([]Face(nil), it.Faces...)
 		gone := map[int]bool{}
+		used := map[string]bool{} // a person once per picture: the first taken in
 		for _, m := range ms {
 			if m.i >= len(it.Extra) || !sameBox(it.Extra[m.i], m.f) || len(it.Extra[m.i].Emb2) == 0 {
 				continue // scanned anew meanwhile
 			}
 			f := it.Extra[m.i]
+			if used[m.name] { // a person once per picture: left waiting
+				continue
+			}
+			used[m.name] = true
 			f.Hint = m.name
 			if b, err := os.ReadFile(l.ExtraPath(it, m.i)); err == nil {
 				os.WriteFile(l.FacePath(it, len(faces)), b, 0o644)

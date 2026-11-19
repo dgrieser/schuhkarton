@@ -326,7 +326,19 @@ func (l *Library) Restore(ids []string) (EditResult, error) {
 	l.saveEdits()
 	l.RenameKeys(favs)
 	l.renamePins(favs)
-	l.people.renameLabelItems(idMap)
+	// the faces put aside automatically of a photo at an old id now (its file
+	// came at that place meanwhile) are that photo's: their no face stays
+	stay := map[string]bool{}
+	for from := range idMap {
+		if it := l.Get(from); it != nil {
+			for i, f := range l.ItemFaces(it) {
+				if f.Twin {
+					stay[FaceRef{from, i}.key()] = true
+				}
+			}
+		}
+	}
+	l.people.renameLabelItemsExcept(idMap, stay)
 	l.hist.rename(refs) // the changes kept come back with the files
 	if len(restored) > 0 {
 		l.mu.Lock()

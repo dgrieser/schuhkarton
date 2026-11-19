@@ -1181,7 +1181,7 @@
       // the faces of the photo (also none) approved as a whole: none comes or goes when
       // faces are looked for again (also offered when every face is approved on its own:
       // a face may still be missing)
-      const approveBtn = !Account.can('user') || it.k !== 1 ? ''
+      const approveBtn = !Account.can('user') || (it.k !== 1 && it.k !== 2) ? '' // photos and videos
         : d.facesMine ? `<span class="faces-ok" title="${t('Die Gesichter in diesem Bild sind vollständig bestätigt und bleiben so, wenn neu gesucht wird')}">${icon('check')}<span>${t('Bestätigt')}</span></span><button class="link ai-redo mark-face" data-unapprove title="${t('Bestätigung aufheben')}">${icon('x')}</button>`
           : `<button class="link ai-redo mark-face" data-approve title="${t('Die Gesichter in diesem Bild sind vollständig (auch wenn keins da ist): keins kommt dazu oder fällt weg, wenn neu gesucht wird')}">${icon('check')}<span>${t('Bestätigen')}</span></button>`;
       const faces = (d.faces || []).map((f) => {
@@ -1295,7 +1295,7 @@
     // all faces of the photo approved at once (as "Bestätigen" in the details, also a photo without
     // faces); ticked on this visit it stays to untick
     drawApproveAll(d) {
-      if (!Account.can('user') || this.it.k !== 1 || (d.facesMine && !this.ticks?.has('all'))) return;
+      if (!Account.can('user') || (this.it.k !== 1 && this.it.k !== 2) || (d.facesMine && !this.ticks?.has('all'))) return;
       const all = document.createElement('button');
       all.type = 'button';
       all.id = 'vApproveAll';
@@ -3728,7 +3728,7 @@
       $('.qz-acts', this.el).innerHTML = `<div class="qz-yesno">
           <button type="button" class="qz-no" data-q="no" title="${t('Nein')} (N, ←)">${icon('x')}<span>${t('Nein')}</span></button>
           <button type="button" class="qz-yes" data-q="yes" title="${t('Ja')} (J, Enter, →)">${icon('check')}<span>${t('Ja')}</span></button></div>
-        <div class="row qz-more">${this.done.length ? `<button type="button" data-q="back">${icon('left')}<span>${t('Zurück')}</span></button>` : ''}<button type="button" data-q="skip">${t('Überspringen')}</button></div>`;
+        <div class="qz-more">${this.done.length ? `<button type="button" class="qz-back" data-q="back" title="${t('Zurück')} (Z)">${icon('left')}</button>` : ''}<button type="button" data-q="skip" title="S">${icon('right')}<span>${t('Überspringen')}</span></button></div>`;
     },
 
     // names to choose from: the people the face looks like first, then the recent ones; a name
@@ -3741,11 +3741,22 @@
       const chip = (n) => { const p = cover.get(n); return `<button type="button" class="qz-chip" data-name="${esc(n)}">${p ? `<img src="${faceURL(p.cover.item, p.cover.idx)}" alt="">` : ''}<span>${esc(n)}</span></button>`; };
       const draw = (sugg) => {
         const top = [...new Set([...sugg, ...store.get('recent-names', [])])].filter((n) => cover.has(n) && n !== not).slice(0, 8);
+        // the names in one row that scrolls sideways, the typed name below, the other answers as
+        // a row of equal buttons (the back arrow only as a symbol)
         acts.innerHTML = `${top.length ? `<div class="qz-chips">${top.map(chip).join('')}</div>` : ''}
           <form class="qz-form"><input class="qz-name" list="qzNames" placeholder="${t('Name eingeben …')}" autocomplete="off" enterkeyhint="done"><datalist id="qzNames">${names.map((n) => `<option value="${esc(n)}">`).join('')}</datalist><button class="btn primary" title="Enter">${icon('check')}</button></form>
-          <div class="row qz-more">${this.done.length ? `<button type="button" data-q="back">${icon('left')}<span>${t('Zurück')}</span></button>` : ''}${this.mode === 'name'
-            ? `<button type="button" data-q="noface">${icon('face-x')}<span>${t('Kein Gesicht')}</span></button><button type="button" data-q="hide">${icon('eye-off')}<span>${t('Ausblenden')}</span></button>` : ''}<button type="button" data-q="skip">${this.mode === 'name' ? t('Überspringen') : t('Weiter')}</button></div>`;
-        const form = $('.qz-form', acts), inp = $('.qz-name', acts);
+          <div class="qz-more">${this.done.length ? `<button type="button" class="qz-back" data-q="back" title="${t('Zurück')} (Z)">${icon('left')}</button>` : ''}${this.mode === 'name'
+            ? `<button type="button" data-q="noface" title="${t('Kein Gesicht')}">${icon('face-x')}<span>${t('Kein Gesicht')}</span></button><button type="button" data-q="hide" title="${t('Ausblenden')}">${icon('eye-off')}<span>${t('Ausblenden')}</span></button>` : ''}<button type="button" data-q="skip">${icon('right')}<span>${this.mode === 'name' ? t('Überspringen') : t('Weiter')}</span></button></div>`;
+        const form = $('.qz-form', acts), inp = $('.qz-name', acts), row = $('.qz-chips', acts);
+        // a mouse wheel scrolls the names sideways
+        if (row) {
+          row.onwheel = (e) => {
+            if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
+            const end = row.scrollWidth - row.clientWidth;
+            const px = e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? row.clientWidth : 1); // lines, pages
+            if ((px > 0 && row.scrollLeft < end - 1) || (px < 0 && row.scrollLeft > 0)) { e.preventDefault(); row.scrollLeft += px; } // at an end: the page scrolls
+          };
+        }
         form.onsubmit = (e) => { e.preventDefault(); const n = inp.value.trim(); if (n) this.answerName(f, n, group); };
         if (!isTouch) inp.focus();
       };
@@ -3893,9 +3904,9 @@
         <h2>${none ? (this.mode === 'name' ? t('Keine Gruppen ohne Namen') : t('Nichts zu bestätigen')) : t('Runde fertig')}</h2>
         ${parts.length ? `<p>${parts.join(' · ')}</p>` : ''}
         ${!none && admin ? `<p class="qz-sub">${t('Mit „Neu zuordnen“ lernen die übrigen Gesichter aus den Antworten.')}</p>` : ''}
-        <div class="row">${this.done.length ? `<button type="button" data-q="back">${icon('left')}<span>${t('Zurück')}</span></button>` : ''}${none ? '' : `<button type="button" class="primary" data-q="again">${t('Weitere Runde')}</button>`}
+        <div class="qz-endacts">${none ? '' : `<button type="button" class="primary" data-q="again">${icon('refresh')}<span>${t('Weitere Runde')}</span></button>`}
           ${admin && (s.named || s.approved || s.rejected) ? `<button type="button" data-q="rematch">${icon('people')}<span>${t('Neu zuordnen')}</span></button>` : ''}
-          <button type="button" data-q="close">${t('Fertig')}</button></div></div>`;
+          <div class="qz-endrow">${this.done.length ? `<button type="button" data-q="back">${icon('left')}<span>${t('Zurück')}</span></button>` : ''}<button type="button" data-q="close">${icon('check')}<span>${t('Fertig')}</span></button></div></div></div>`;
       scheduleReload(); // the answers stay undoable (Zurück) until the next round
     },
 

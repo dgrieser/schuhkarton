@@ -753,6 +753,7 @@
           case 'add': return i.to ? t('Gesicht markiert: {name}', { name: i.to }) : t('Gesicht markiert');
           case 'not': return t('nicht {name}', { name: i.from || t('diese Person') }) + count;
           case 'noface': return t('kein Gesicht') + count;
+          case 'dupes': return t('doppelt gefundene Gesichter entfernt') + count;
           case 'hide': return t('Gesicht ausgeblendet') + count;
           case 'restore': return t('Gesichter zurückgesetzt') + count;
           default: return (i.from && i.from !== i.to ? t('{from} heißt jetzt {to}', { from: i.from, to: i.to }) : t('benannt: {to}', { to: i.to })) + count;

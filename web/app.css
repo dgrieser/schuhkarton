@@ -1575,20 +1575,38 @@ body.side-mini #sideToggle { position: static; margin: -6px auto 10px; }
 .qz-yesno .i { width: 22px; height: 22px; stroke-width: 2.6; }
 .qz-yesno .qz-yes { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
 .qz-yesno .qz-no:hover { background: #2a2b2f; }
-.qz-chips { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
-.qz-chip { display: inline-flex; align-items: center; gap: 8px; height: 44px; padding: 0 14px 0 5px; border-radius: 999px; border: 1px solid #333; background: #1c1d20; color: #fff; font-size: 14px; font-weight: 600; cursor: pointer; }
+.qz-chips { display: flex; gap: 8px; overflow-x: auto; padding: 2px 2px 6px; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+.qz-chips::-webkit-scrollbar { display: none; }
+@media (hover: hover) { /* a mouse: a thin bar shows there is more */
+  .qz-chips { scrollbar-width: thin; scrollbar-color: #444 transparent; }
+  .qz-chips::-webkit-scrollbar { display: block; height: 6px; }
+  .qz-chips::-webkit-scrollbar-thumb { background: #444; border-radius: 3px; }
+}
+.qz-chip { flex: none; display: inline-flex; align-items: center; gap: 8px; height: 42px; padding: 0 14px 0 4px; border-radius: 999px; border: 1px solid #333; background: #1c1d20; color: #fff; font-size: 14px; font-weight: 600; cursor: pointer; white-space: nowrap; }
 .qz-chip img { width: 34px; height: 34px; border-radius: 50%; object-fit: cover; background: #333; }
 .qz-chip:hover { background: #2a2b2f; }
 .qz-form { display: flex; gap: 8px; }
 .qz-form input { flex: 1; min-width: 0; height: 44px; padding: 0 14px; border-radius: 12px; border: 1px solid #3a3b3f; background: #16171a; color: #fff; font-size: 16px; }
 .qz-form input:focus { outline: 2px solid var(--accent); outline-offset: 0; }
 .qz-form .btn { height: 44px; width: 52px; justify-content: center; }
-.qz-more { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
-.qz-more button, .qz-end .row button { display: inline-flex; align-items: center; gap: 6px; height: 38px; padding: 0 14px; border-radius: 10px; border: 1px solid #333; background: #16171a; color: #ddd; font-size: 13.5px; cursor: pointer; }
-.qz-more .i, .qz-end .row .i { width: 16px; height: 16px; }
-.qz-end { margin: auto; display: grid; justify-items: center; gap: 12px; text-align: center; max-width: 440px; }
+.qz-more { display: flex; gap: 8px; }
+.qz-more button, .qz-endacts button { flex: 1 1 0; min-width: 0; display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 42px; padding: 0 10px; border-radius: 10px;
+  border: 1px solid #333; background: #16171a; color: #ddd; font-size: 13.5px; cursor: pointer; white-space: nowrap; }
+.qz-more button span { overflow: hidden; text-overflow: ellipsis; }
+.qz-more .qz-back { flex: 0 0 48px; padding: 0; }
+.qz-more .i, .qz-endacts .i { width: 16px; height: 16px; flex: none; }
+.qz-end { margin: auto; display: grid; justify-items: center; gap: 12px; text-align: center; width: min(100%, 400px); }
+.qz-end p { text-wrap: balance; }
+.qz-endacts { display: grid; gap: 8px; width: 100%; margin-top: 8px; }
+.qz-endacts button { flex: none; width: 100%; height: 48px; font-size: 15px; }
+.qz-endacts button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 650; }
+.qz-endrow { display: flex; gap: 8px; }
+.qz-endrow button { flex: 1 1 0; }
 .qz-end > .i { width: 44px; height: 44px; color: var(--accent); }
 .qz-end h2 { margin: 0; }
 .qz-end p { margin: 0; color: rgba(255, 255, 255, .75); }
-.qz-end .row { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
-.qz-end .row button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 650; }
+/* a phone: "no face" and "hide" as symbols, skipping takes the room */
+@media (max-width: 480px) {
+  .qz-more :is([data-q="noface"], [data-q="hide"]) { flex: 0 0 52px; padding: 0; }
+  .qz-more :is([data-q="noface"], [data-q="hide"]) span { display: none; }
+}

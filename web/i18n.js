@@ -312,6 +312,7 @@ window.I18N.en = {
   "Namen aller nicht bestätigten Gesichter neu zuordnen, nach den bestätigten Gesichtern jeder Person; es wird nicht neu gesucht": "Match the names of all faces not approved anew, against the approved faces of each person; no faces are looked for",
   "Neu zuordnen": "Rematch",
   "Schnell benennen": "Quick naming",
+  "doppelt gefundene Gesichter entfernt": "faces found twice removed",
   "Schnell bestätigen": "Quick approval",
   "Ein paar Gesichter schnell benennen, die das meiste bringen: je eins der größten Gruppen ohne Namen": "Quickly name a few faces that help most: one of each of the largest groups without a name",
   "Ein paar zugeordnete Namen schnell bestätigen, bei denen die Erkennung am unsichersten ist": "Quickly approve a few assigned names the recognition is least sure about",

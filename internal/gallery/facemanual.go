@@ -540,20 +540,84 @@ func encodeJPEG(img image.Image, q int) ([]byte, error) {
 // place[i] is the index found face i got, -1 when it was dropped (for
 // moving its crop).
 func mergeFaces(old, found []Face, labeled map[int]bool, same float32) (out []Face, place []int) {
+	out, place, _ = mergeFacesOpt(old, found, labeled, same, false)
+	return out, place
+}
+
+// mergeFacesPhoto is mergeFaces for a photo: each face found goes to the old
+// box it fits best, one to one, so a kept face takes only its own (a video's
+// faces found are matched to faces of other moments too, and fill in their
+// embeddings: they keep the first fit).
+func mergeFacesPhoto(old, found []Face, labeled map[int]bool, same float32) (out []Face, place []int) {
+	out, place, _ = mergeFacesOpt(old, found, labeled, same, true)
+	return out, place
+}
+
+// mergeFacesOpt is mergeFaces (oneToOne: mergeFacesPhoto); cover tells for
+// each face found the old face that took it in (-1: none).
+func mergeFacesOpt(old, found []Face, labeled map[int]bool, same float32, oneToOne bool) (out []Face, place, cover []int) {
+	cover = make([]int, len(found))
+	for i := range cover {
+		cover[i] = -1
+	}
 	place = make([]int, len(found))
 	keep := make([]bool, len(old))
 	kept := false
 	for i, f := range old {
-		keep[i] = faceKept(f, labeled[i])
+		keep[i] = rescanKept(f, labeled[i])
 		kept = kept || keep[i]
 	}
 	if !kept {
 		for i := range place {
 			place[i] = i
 		}
-		return found, place
+		// said not to be found twice: still so where it is found again
+		for i := range found {
+			for _, o := range old {
+				if o.NotDup && sameSpot(found[i], o) {
+					found[i].NotDup = true
+				}
+			}
+		}
+		return found, place, cover
 	}
 	out = append([]Face(nil), old...)
+	// a face kept as not found twice (NotDup) takes back one face found, the
+	// most like its box: its twin found too is another face
+	// faces found and old boxes in pairs, one to one, those fitting best first
+	// (as good: a kept face first, the name or the hand-drawn box stays): a
+	// kept face takes only its own, not that of another old face next to it
+	type fit struct {
+		i, j int
+		iou  float32
+	}
+	var fits []fit
+	for i, f := range found {
+		for j, o := range old {
+			if v := boxIoU(f, o); sameFrame(f, o) && v > 0.4 && !twoPeople(f, o, same) {
+				fits = append(fits, fit{i, j, v})
+			}
+		}
+	}
+	sort.SliceStable(fits, func(a, b int) bool {
+		if ta, tb := old[fits[a].j].Twin, old[fits[b].j].Twin; ta != tb {
+			return tb // faces in sight first, twins put aside after
+		}
+		if fits[a].iou != fits[b].iou {
+			return fits[a].iou > fits[b].iou
+		}
+		return keep[fits[a].j] && !keep[fits[b].j]
+	})
+	bestOld := make([]int, len(found))
+	for i := range bestOld {
+		bestOld[i] = -1
+	}
+	oldTaken := make([]bool, len(old))
+	for _, x := range fits {
+		if bestOld[x.i] < 0 && !oldTaken[x.j] {
+			bestOld[x.i], oldTaken[x.j] = x.j, true
+		}
+	}
 	var fresh []int // found faces that are none of the kept ones
 	for i, f := range found {
 		place[i] = -1
@@ -563,9 +627,15 @@ func mergeFaces(old, found []Face, labeled map[int]bool, same float32) (out []Fa
 			if !keep[j] {
 				continue
 			}
+			if oneToOne && (bestOld[i] >= 0 || oldTaken[j]) && bestOld[i] != j && sameFrame(f, *m) {
+				continue // the face found fits another old box better, or this one has its own
+			}
 			switch {
 			case sameSpot(f, *m) && !twoPeople(f, *m, same):
 				covered = true
+				if cover[i] < 0 {
+					cover[i] = j
+				}
 				if m.Emb == nil && f.Emb != nil {
 					m.Emb = f.Emb // now it counts for recognition too
 				}
@@ -599,6 +669,7 @@ func mergeFaces(old, found []Face, labeled map[int]bool, same float32) (out []Fa
 			continue
 		}
 		out[best], place[j], taken[best] = found[j], best, true
+		out[best].NotDup = old[best].NotDup // said not to be found twice: still so
 	}
 	for i := range out {
 		if !keep[i] && !taken[i] && len(rest) > 0 {
@@ -610,7 +681,7 @@ func mergeFaces(old, found []Face, labeled map[int]bool, same float32) (out []Fa
 		place[j] = len(out)
 		out = append(out, found[j])
 	}
-	return out, place
+	return out, place, cover
 }
 
 // sameFrame tells whether two faces were seen in the same picture (always
@@ -687,7 +758,7 @@ func hasManualFace(faces []Face) bool {
 func needsEmbedding(faces []Face) bool {
 	auto := false
 	for _, f := range faces {
-		if !f.Manual {
+		if !f.Manual && !f.Twin { // a twin put aside counts no more
 			if f.Emb != nil {
 				return false
 			}

@@ -66,6 +66,11 @@ or another one.
   as they are, the others are replaced by what is found now, faces found anew
   are added and named by grouping, and a face not found again is put aside
   as no face. Videos are left out.
+  A face found twice in one picture (both searches, or a search and a box
+  drawn by hand) is put aside as no face when the faces are grouped: boxes
+  mostly inside each other at a similar size, or partly overlapping and
+  clearly alike (faces close to each other stay). The one named, approved
+  or drawn by hand stays; the change shows in the history and can be undone.
   A person's page filters their photos by approval (*Alle*, *Bestätigt*,
   *Offen*: a face of theirs in the photo is not approved).
   *Schnell benennen* and *Schnell bestätigen* on the people page are quick

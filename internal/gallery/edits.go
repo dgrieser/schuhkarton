@@ -597,7 +597,11 @@ func (l *Library) removeDerivatives(key string, faces int) {
 // --- people labels ------------------------------------------------------------------
 
 // renameLabelItems moves face names to new item ids ("" drops them).
-func (s *peopleStore) renameLabelItems(ids map[string]string) {
+func (s *peopleStore) renameLabelItems(ids map[string]string) { s.renameLabelItemsExcept(ids, nil) }
+
+// renameLabelItemsExcept is renameLabelItems, leaving the labels of the
+// keys in stay where they are.
+func (s *peopleStore) renameLabelItemsExcept(ids map[string]string, stay map[string]bool) {
 	if len(ids) == 0 {
 		return
 	}
@@ -614,7 +618,7 @@ func (s *peopleStore) renameLabelItems(ids map[string]string) {
 			continue
 		}
 		to, ok := ids[k[:i]]
-		if !ok {
+		if !ok || stay[k] {
 			continue
 		}
 		v := s.labels[k]
