@@ -69,6 +69,8 @@
     const acts = !action ? [] : Array.isArray(action) ? action : [[action, onAction]];
     el.innerHTML = `<span>${esc(msg)}</span>${acts.map(([l]) => `<button type="button">${esc(l)}</button>`).join('')}`;
     el.classList.toggle('act', acts.length > 0);
+    // over the viewer or a quick round at the top: the buttons, names and faces are below
+    el.classList.toggle('top', !!document.querySelector('#viewer:not([hidden]), .quiz'));
     el.classList.add('on');
     clearTimeout(toastT);
     toastT = setTimeout(() => el.classList.remove('on'), ms || (acts.length ? 10000 : 2400));
@@ -83,7 +85,7 @@
     const at = (dx, dy) => `translateX(calc(-50% + ${dx}px)) translateY(${dy}px)`;
     el.addEventListener('pointerdown', (e) => {
       if (!el.classList.contains('on') || e.target.closest('button')) return;
-      st = { x: e.clientX, y: e.clientY, t: performance.now(), dx: 0, dy: 0, id: e.pointerId };
+      st = { x: e.clientX, y: e.clientY, t: performance.now(), dx: 0, dy: 0, id: e.pointerId, s: el.classList.contains('top') ? -1 : 1 };
       el.setPointerCapture(e.pointerId);
       el.style.transition = 'none';
       clearTimeout(toastT); // held: it does not go on its own meanwhile
@@ -91,21 +93,21 @@
     el.addEventListener('pointermove', (e) => {
       if (!st || e.pointerId !== st.id) return;
       st.dx = e.clientX - st.x;
-      st.dy = e.clientY - st.y;
-      // sideways freely, down freely, up only a little (resisting)
+      st.dy = (e.clientY - st.y) * st.s; // away from the edge it is at: positive
+      // sideways freely, towards its edge freely, away only a little (resisting)
       const dy = st.dy < 0 ? st.dy / 4 : st.dy, far = Math.max(Math.abs(st.dx) / el.offsetWidth, dy / el.offsetHeight / 1.5);
-      el.style.transform = at(st.dx, dy);
+      el.style.transform = at(st.dx, dy * st.s);
       el.style.opacity = String(clamp(1 - far * 0.8, 0.2, 1));
     });
     const end = (e) => {
       if (!st || e.pointerId !== st.id) return;
-      const { dx, dy } = st, dt = Math.max(1, performance.now() - st.t);
+      const { dx, dy, s } = st, dt = Math.max(1, performance.now() - st.t);
       st = null;
       const side = Math.abs(dx) > Math.max(60, el.offsetWidth * 0.3) || (Math.abs(dx) > 20 && Math.abs(dx) / dt > 0.5);
       const down = !side && (dy > Math.max(30, el.offsetHeight * 0.6) || (dy > 12 && dy / dt > 0.4));
       el.style.transition = 'transform .2s ease, opacity .2s ease';
       if (side || down) {
-        el.style.transform = side ? at(Math.sign(dx) * (innerWidth / 2 + el.offsetWidth), dy > 0 ? dy : 0) : at(0, el.offsetHeight + 60);
+        el.style.transform = side ? at(Math.sign(dx) * (innerWidth / 2 + el.offsetWidth), dy > 0 ? dy * s : 0) : at(0, (el.offsetHeight + 60) * s);
         el.style.opacity = '0';
         el.goneT = setTimeout(() => { el.classList.remove('on'); el.style.transform = el.style.opacity = el.style.transition = ''; }, 200);
       } else {
@@ -181,6 +183,48 @@
   const isTouch = matchMedia('(hover: none)').matches;
   // keys go to a field that takes text; a slider, a checkbox or a button leaves them to the page
   const isTyping = (el) => !!el.matches?.('textarea, select, [contenteditable], input:not([type=range], [type=checkbox], [type=radio], [type=button], [type=submit], [type=color])');
+  // touch: a long press on a button showing only a symbol shows what it does (its title, without
+  // the keys); the finger lifting off does not press it
+  if (isTouch) {
+    let hintT = 0, hold = null, swallow = null, hintEl = null, goneT = 0;
+    const keys = /\s*\((?:(?:Esc|Enter|Entf|Shift|[A-Z]|[←→↑↓]|\+)[,\s]*)+\)\s*$/;
+    const show = (b) => {
+      const text = (b.getAttribute('title') || '').replace(keys, '').trim();
+      if (!text) return false;
+      if (!hintEl) { hintEl = document.createElement('div'); hintEl.className = 'hold-hint'; hintEl.setAttribute('role', 'tooltip'); document.body.appendChild(hintEl); }
+      hintEl.textContent = text;
+      hintEl.classList.add('on');
+      const r = b.getBoundingClientRect(), w = hintEl.offsetWidth, h = hintEl.offsetHeight;
+      const above = r.top - h - 10 >= 8;
+      hintEl.style.left = `${clamp(r.left + r.width / 2 - w / 2, 8, innerWidth - w - 8)}px`;
+      hintEl.style.top = `${above ? r.top - h - 10 : Math.min(r.bottom + 10, innerHeight - h - 8)}px`;
+      navigator.vibrate?.(10);
+      return true;
+    };
+    const hide = () => hintEl?.classList.remove('on');
+    addEventListener('pointerdown', (e) => {
+      clearTimeout(hintT);
+      swallow = hold = null;
+      if (e.pointerType === 'mouse') return;
+      const b = e.target.closest?.('button[title], a[title], [role="button"][title]');
+      // a button with its own long press (a face, a photo) keeps it; one with a text says it already
+      if (!b || b.disabled || b.closest('[data-face], .tile') || b.innerText.trim()) return;
+      hold = { b, x: e.clientX, y: e.clientY };
+      hintT = setTimeout(() => { if (hold?.b === b && show(b)) { swallow = b; clearTimeout(goneT); } }, 480);
+    }, true);
+    addEventListener('pointermove', (e) => {
+      if (hold && Math.abs(e.clientX - hold.x) + Math.abs(e.clientY - hold.y) > 10) { clearTimeout(hintT); hold = null; }
+    }, true);
+    const up = () => { clearTimeout(hintT); hold = null; if (swallow) { clearTimeout(goneT); goneT = setTimeout(hide, 1600); } };
+    addEventListener('pointerup', up, true);
+    addEventListener('pointercancel', up, true);
+    addEventListener('click', (e) => {
+      if (swallow && swallow.contains(e.target)) { e.preventDefault(); e.stopImmediatePropagation(); }
+      swallow = null;
+    }, true);
+    addEventListener('contextmenu', (e) => { if (swallow || hold) e.preventDefault(); }, true);
+    addEventListener('scroll', hide, true);
+  }
   // a popup that knows how to place itself moves when the keyboard comes or goes
   window.visualViewport?.addEventListener('resize', () => $('#pop')?.position?.());
   // the grip of a bottom sheet: dragging sets the height (set), end(height, start height, speed)
@@ -1429,7 +1473,7 @@
         [video ? 'play' : 'face', video ? t('Im Video zeigen') : t('Im Bild zeigen'), () => this.showFace(f)],
         user && ['user', f.name ? t('Name ändern …') : t('Benennen …'), () => this.namePop(a, f)],
         user && ['eye-off', f.person ? t('Nicht diese Person') : t('Ausblenden'), () => this.saveFace(f, '')],
-        user && S.people.some((p) => p.name) && ['user', t('Keiner der Benannten'), () => this.noneNamed(f)],
+        user && S.people.some((p) => p.name) && ['user', t('Unbekannt'), () => this.noneNamed(f)],
         user && ['face-x', t('Kein Gesicht'), () => this.saveFace(f, '-')],
         user && !f.ok && ['check', t('Bestätigen'), () => this.approveFaces({ faces: [f.idx], ok: true })],
         user && f.mine && !f.manual && ['x', t('Bestätigung aufheben'), () => this.approveFaces({ faces: [f.idx], ok: false })],
@@ -1441,7 +1485,7 @@
       const it = this.it;
       const res = await post(`/api/face/${it.id}/${f.idx}`, { noneNamed: true }).catch((e) => ({ error: e.message }));
       if (res.error) { toast(t('Fehler: {e}', { e: String(res.error).replace(/^\d{3} /, '') })); return; }
-      toast(t('Keiner der Benannten'), t('Rückgängig'), async () => { await post('/api/faces/labels', { labels: res.undo }); await this.refreshItem(it); });
+      toast(t('Unbekannt'), t('Rückgängig'), async () => { await post('/api/faces/labels', { labels: res.undo }); await this.refreshItem(it); });
       await this.refreshItem(it);
     },
 
@@ -1881,7 +1925,7 @@
         ${face.add ? `<div class="row np-acts"><button type="button" data-a="noname">${t('Ohne Namen speichern')}</button><button type="button" data-a="cancel">${t('Abbrechen')}</button></div>`
           : `<div class="row np-acts">${m || face.idx === undefined ? '' : face.mine ? `<button type="button" data-a="unok" title="${t('Bestätigung aufheben')}">${icon('x')}<span>${t('Bestätigung aufheben')}</span></button>`
               : !face.ok ? `<button type="button" data-a="ok" title="${t('Das Gesicht stimmt: es bleibt so, wenn neu gesucht wird')}">${icon('check')}<span>${t('Bestätigen')}</span></button>` : ''}<button type="button" data-a="not">${face.person ? t('Nicht diese Person') : t('Ausblenden')}</button>
-            ${S.people.some((p) => p.name) && !m ? `<button type="button" data-a="nonenamed" title="${t('Keine der Personen mit Namen: wird keiner von ihnen zugeordnet')}">${icon('user')}<span>${t('Keiner der Benannten')}</span></button>` : ''}
+            ${S.people.some((p) => p.name) && !m ? `<button type="button" data-a="nonenamed" title="${t('Keine der Personen mit Namen: wird keiner von ihnen zugeordnet')}">${icon('user')}<span>${t('Unbekannt')}</span></button>` : ''}
             <button type="button" data-a="noface" title="${t('Falsch erkannt: kein Gesicht. Wird nicht mehr gezeigt, andere Gesichter bleiben.')}">${icon('face-x')}<span>${t('Kein Gesicht')}</span></button></div>`}`;
       // a sheet in the viewer shares it with the picture; one for a selection lies over the page
       (sheet && !m ? this.el : document.body).appendChild(pop);
@@ -3053,7 +3097,7 @@
       const show = new Set(store.get('people-show', ['named', 'unnamed']).filter((k) => kinds.some(([x]) => x === k)));
       if (!show.size) show.add('named');
       view.innerHTML = `<div class="head"><div><h1>${t('Personen')}</h1><div class="sub">${t('{a} mit Namen · {b} ohne Namen', { a: pl(named.length, '{n} Person', '{n} Personen'), b: pl(unnamed.length, '{n} Gruppe', '{n} Gruppen') })}</div></div>
-        <div class="tools">${cardTools('people', [['count', 'Meiste Fotos'], ['name', 'Name']])}${(Account.can('user') && info.recognition) || (Account.can('admin') && info.detection) ? `<button class="btn ghost icon-sm" data-facejobs aria-haspopup="menu" title="${t('Gesichter: schnell benennen, schnell bestätigen, neu zuordnen, neu suchen')}">${icon('face')}<span>${t('Gesichter')}</span>${icon('down')}</button>` : ''}<div class="kindset" role="group" aria-label="${t('Anzeigen')}">${kinds.map(([k, l, ic]) =>
+        <div class="tools">${cardTools('people', [['count', 'Meiste Fotos'], ['name', 'Name']])}${(Account.can('user') && info.recognition) || (Account.can('admin') && info.detection) ? `<button class="btn sort-btn" data-facejobs aria-haspopup="menu" title="${t('Gesichter: schnell benennen, schnell bestätigen, neu zuordnen, neu suchen')}">${icon('face')}${icon('down')}</button>` : ''}<div class="kindset" role="group" aria-label="${t('Anzeigen')}">${kinds.map(([k, l, ic]) =>
           `<button data-pshow="${k}" class="${show.has(k) ? 'on' : ''}" aria-pressed="${show.has(k)}" title="${t('{x} zeigen oder ausblenden', { x: t(l) })}">${icon(ic)}<span>${t(l)}</span></button>`).join('')}</div></div></div>
         ${banner}<div data-psec></div>
         ${!S.people.length && info.recognition ? `<div class="empty">${icon('people')}<h2>${t('Noch keine Personen')}</h2><p>${t('Die Gesichtssuche läuft im Hintergrund.')}</p></div>` : ''}`;
@@ -3731,7 +3775,9 @@
       const info = this.mode === 'name'
         ? `<div class="qz-q">${t('Wer ist das?')}</div><div class="qz-sub">${f.photos > 1 ? t('Gilt für die ganze Gruppe ({n}), noch nicht bestätigt', { n: pl(f.photos, '{n} Foto', '{n} Fotos') }) : ''}</div>`
         : `<div class="qz-q">${t('Ist das {name}?', { name: `<b>${esc(f.name)}</b>` })}</div>`;
-      body.innerHTML = `<div class="qz-crop"><img alt="" draggable="false"><div class="qz-box"></div></div>${info}<div class="qz-acts"></div>`;
+      const it = S.byId.get(f.item), when = it ? [fmtLong(it.t), it.ap ? '' : fmtTime(it.t), it.p].filter(Boolean).map(esc).join(' · ') : '';
+      body.innerHTML = `<div class="qz-crop"><img alt="" draggable="false"><div class="qz-box"></div>${when ? `<div class="qz-when">${when}</div>` : ''}
+        <button type="button" class="qz-zoom" data-q="zoom" title="${this.whole ? t('Gesicht vergrößern') : t('Ganzes Foto')} (V)">${icon(this.whole ? 'zoom-in' : 'zoom-out')}</button></div>${info}<div class="qz-acts"></div>`;
       const img = $('.qz-crop img', body);
       img.src = largeURL({ id: f.item, v: f.v });
       this.place();
@@ -3740,15 +3786,23 @@
       else this.approveActs(f);
     },
 
-    // the photo zoomed so the face is about 40 % of the frame's height, in its middle
+    // the photo zoomed so the face is about 40 % of the frame's height, in its middle; or the whole
+    // photo (this.whole, kept for the round)
     place() {
       const f = this.list[this.i], crop = $('.qz-crop', this.el);
       if (!f || !crop) return;
       const cw = crop.clientWidth, ch = crop.clientHeight, a = f.aspect || 1;
-      let iw = Math.min((0.4 * ch) / (f.h / a), (0.4 * cw) / f.w);
-      iw = clamp(iw, cw * 0.5, cw * 14);
+      let iw, left, top;
+      if (this.whole) {
+        iw = Math.min(cw, ch * a);
+        left = (cw - iw) / 2;
+        top = (ch - iw / a) / 2;
+      } else {
+        iw = clamp(Math.min((0.4 * ch) / (f.h / a), (0.4 * cw) / f.w), cw * 0.5, cw * 14);
+        left = cw / 2 - (f.x + f.w / 2) * iw;
+        top = ch / 2 - (f.y + f.h / 2) * (iw / a);
+      }
       const ih = iw / a;
-      const left = cw / 2 - (f.x + f.w / 2) * iw, top = ch / 2 - (f.y + f.h / 2) * ih;
       const img = $('img', crop), box = $('.qz-box', crop);
       Object.assign(img.style, { width: `${iw}px`, height: `${ih}px`, left: `${left}px`, top: `${top}px` });
       Object.assign(box.style, { width: `${f.w * iw}px`, height: `${f.h * ih}px`, left: `${left + f.x * iw}px`, top: `${top + f.y * ih}px` });
@@ -3798,7 +3852,16 @@
       if (sid === this.sid && this.list[this.i] === f && acts.isConnected && !$('.qz-name', acts)?.value) draw(Array.isArray(sugg) ? sugg : []);
     },
 
+    // the whole photo or the face zoomed, for the rest of the round
+    zoom() {
+      this.whole = !this.whole;
+      const b = $('.qz-zoom', this.el);
+      if (b) { b.title = `${this.whole ? t('Gesicht vergrößern') : t('Ganzes Foto')} (V)`; b.innerHTML = icon(this.whole ? 'zoom-in' : 'zoom-out'); }
+      this.place();
+    },
+
     onClick(e) {
+      if (e.target.closest('[data-q="zoom"]')) { this.zoom(); return; }
       if (this.busy && !e.target.closest('[data-q="close"]')) return; // an answer is being saved
       const n = e.target.closest('[data-name]')?.dataset.name;
       const f = this.list[this.i];
@@ -3824,6 +3887,7 @@
       const f = this.list[this.i];
       const k = e.key.toLowerCase();
       e.stopPropagation(); // the viewer and the gallery below get no keys
+      if (k === 'v' && f) { e.preventDefault(); this.zoom(); return; }
       if (this.busy) return;
       if (!f) { if (k === 'backspace' || k === 'z') { e.preventDefault(); this.back(); } return; } // the end: back to the last answer
       if (this.mode === 'approve' && $('.qz-yesno', this.el)) {

@@ -75,10 +75,10 @@ or another one.
   *Offen*: a face of theirs in the photo is not approved).
   Its menu matches the names of the open ones anew (*Offene neu zuordnen*,
   right away, for everybody with an account).
-  *Keiner der Benannten* (a face's menu and name sheet) says a face is none
-  of the people named now: it is matched to none of them, and names given
-  later are not meant. In *Schnell benennen* this is *Unbekannt*, for the
-  whole group like a name, which is then not asked about again.
+  *Unbekannt* (a face's menu and name sheet) says a face is none of the
+  people named now: it is matched to none of them, and names given later
+  are not meant. In *Schnell benennen* it goes to the whole group like a
+  name, which is then not asked about again.
   *Schnell benennen* and *Schnell bestätigen* in the same menu are quick
   rounds of a handful of faces, each zoomed to the face, chosen for the most
   gain per answer. Naming shows one typical, clear face of each of the
@@ -88,7 +88,8 @@ or another one.
   `named_threshold`, or another person about as alike), weighed by how many
   similar faces each stands for, people with few approved faces first,
   spread over people and photos. Yes, no (then the right name) or skip; keys
-  J/N/S, a swipe on a phone, Z to go back. Afterwards *Neu zuordnen* matches
+  J/N/S, a swipe on a phone, Z to go back. The date and place are on the
+  picture; the magnifier (key V) shows the whole photo instead of the face. Afterwards *Neu zuordnen* matches
   the other faces against the answers.
 - **Backup:** copies photos, cache and settings to a folder (a USB disk or a
   share) in the background. It only adds and updates; nothing in the backup is
@@ -107,6 +108,8 @@ or another one.
   bring them back.
 - German and English (the browser's language, switchable in the sidebar); the
   search syntax works in both (`ort:`/`place:`, `monat:juni`/`month:june`).
+- On a touch screen a long press on a button that shows only a symbol says
+  what it does.
 - Light, dark or system theme. Pinch the grid to resize it, long press to
   select, download a selection as a ZIP.
 

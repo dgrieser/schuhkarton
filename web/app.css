@@ -635,7 +635,9 @@ body.has-scrubber .view { padding-right: 64px; }
 .name-pop .np-add:hover { background: var(--p-btn); }
 .name-pop .np-add .i { width: 18px; height: 18px; }
 .name-pop .np-form { display: grid; gap: 8px; }
-.name-pop .np-acts button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+.name-pop .np-acts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.name-pop .np-acts button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-width: 0; margin: 0; white-space: normal; text-align: center; line-height: 1.2; }
+.name-pop .np-acts button:only-child, .name-pop .np-acts button:last-child:nth-child(odd) { grid-column: 1 / -1; }
 .name-pop .np-acts .i { width: 16px; height: 16px; }
 /* touch: a column as tall as the room allows (max-height from the script), the list scrolls in it */
 .pop.name-pop.touch { display: flex; flex-direction: column; width: min(420px, calc(100vw - 16px)); }
@@ -692,6 +694,17 @@ body > .pop.name-pop.sheet { z-index: 130; } /* a person of a selection: over th
   opacity: 0; pointer-events: none; transition: opacity .2s, transform .25s var(--ease);
 }
 .toast.on { opacity: 1; transform: translateX(-50%) translateY(0); }
+/* over the viewer or a quick round: at the top, below its bar (the buttons and names are below) */
+.toast.top { top: calc(env(safe-area-inset-top) + 64px); bottom: auto !important; transform: translateX(-50%) translateY(-30px); }
+.toast.top.on { transform: translateX(-50%) translateY(0); }
+/* a long press on a button with only a symbol: what it does */
+.hold-hint {
+  position: fixed; z-index: 300; max-width: min(320px, calc(100vw - 16px)); padding: 7px 12px; border-radius: 10px;
+  background: var(--text); color: var(--bg); font-size: 14px; font-weight: 600; line-height: 1.35; box-shadow: var(--shadow);
+  opacity: 0; pointer-events: none; transition: opacity .15s;
+}
+.hold-hint.on { opacity: 1; }
+@media (pointer: coarse) { button, [role="button"] { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; } }
 .toast.act { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px 10px; padding: 6px 6px 6px 18px; }
 .toast.act.on { pointer-events: auto; }
 /* a touch screen: every toast can be swiped away (the script moves it) */
@@ -1565,6 +1578,10 @@ body.side-mini #sideToggle { position: static; margin: -6px auto 10px; }
 .qz-body { flex: 1; min-height: 0; display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 0 16px 16px; overflow: auto; }
 .qz-crop { position: relative; flex: none; width: min(100%, 560px); height: min(48dvh, 460px); border-radius: 14px; overflow: hidden; background: #000; touch-action: pan-y; user-select: none; }
 .qz-crop img { position: absolute; max-width: none; pointer-events: none; }
+.qz-when { position: absolute; left: 10px; top: 10px; max-width: calc(100% - 20px); padding: 4px 10px; border-radius: 8px; background: rgba(0, 0, 0, .55); color: #fff; font-size: 13px; line-height: 1.35; pointer-events: none; }
+.qz-zoom { position: absolute; right: 10px; bottom: 10px; width: 40px; height: 40px; display: grid; place-items: center; border-radius: 50%; border: 0; background: rgba(0, 0, 0, .55); color: #fff; cursor: pointer; }
+.qz-zoom:hover { background: rgba(0, 0, 0, .75); }
+.qz-zoom .i { width: 20px; height: 20px; }
 .qz-box { position: absolute; border: 2px solid rgba(255, 255, 255, .9); border-radius: 8px; box-shadow: 0 0 0 1px rgba(0, 0, 0, .35), 0 0 0 9999px rgba(0, 0, 0, .28); pointer-events: none; }
 .qz-q { font-size: 20px; text-align: center; }
 .qz-q b { color: var(--accent); }
