@@ -3041,7 +3041,7 @@
       const show = new Set(store.get('people-show', ['named', 'unnamed']).filter((k) => kinds.some(([x]) => x === k)));
       if (!show.size) show.add('named');
       view.innerHTML = `<div class="head"><div><h1>${t('Personen')}</h1><div class="sub">${t('{a} mit Namen · {b} ohne Namen', { a: pl(named.length, '{n} Person', '{n} Personen'), b: pl(unnamed.length, '{n} Gruppe', '{n} Gruppen') })}</div></div>
-        <div class="tools">${cardTools('people', [['count', 'Meiste Fotos'], ['name', 'Name']])}${Account.can('user') && info.recognition ? `<button class="btn ghost icon-sm" data-quiz="name" title="${t('Ein paar Gesichter schnell benennen, die das meiste bringen: je eins der größten Gruppen ohne Namen')}">${icon('tag')}<span>${t('Schnell benennen')}</span></button><button class="btn ghost icon-sm" data-quiz="approve" title="${t('Ein paar zugeordnete Namen schnell bestätigen, bei denen die Erkennung am unsichersten ist')}">${icon('check')}<span>${t('Schnell bestätigen')}</span></button>` : ''}${Account.can('admin') && info.recognition ? `<button class="btn ghost icon-sm" data-rematch title="${t('Namen aller nicht bestätigten Gesichter neu zuordnen, nach den bestätigten Gesichtern jeder Person; es wird nicht neu gesucht')}">${icon('people')}<span>${t('Neu zuordnen')}</span></button>` : ''}${Account.can('admin') && info.detection ? `<button class="btn ghost icon-sm" data-rethink title="${t('Gesichter in allen Fotos neu suchen, die nicht bestätigt sind, auch zusätzliche; auf Wunsch auch in Fotos, deren Gesichter alle einzeln bestätigt sind; bestätigte Gesichter, Namen und von Hand markierte bleiben')}">${icon('refresh')}<span>${t('Neu suchen')}</span></button>` : ''}<div class="kindset" role="group" aria-label="${t('Anzeigen')}">${kinds.map(([k, l, ic]) =>
+        <div class="tools">${cardTools('people', [['count', 'Meiste Fotos'], ['name', 'Name']])}${(Account.can('user') && info.recognition) || (Account.can('admin') && info.detection) ? `<button class="btn ghost icon-sm" data-facejobs aria-haspopup="menu" title="${t('Gesichter: schnell benennen, schnell bestätigen, neu zuordnen, neu suchen')}">${icon('face')}<span>${t('Gesichter')}</span>${icon('down')}</button>` : ''}<div class="kindset" role="group" aria-label="${t('Anzeigen')}">${kinds.map(([k, l, ic]) =>
           `<button data-pshow="${k}" class="${show.has(k) ? 'on' : ''}" aria-pressed="${show.has(k)}" title="${t('{x} zeigen oder ausblenden', { x: t(l) })}">${icon(ic)}<span>${t(l)}</span></button>`).join('')}</div></div></div>
         ${banner}<div data-psec></div>
         ${!S.people.length && info.recognition ? `<div class="empty">${icon('people')}<h2>${t('Noch keine Personen')}</h2><p>${t('Die Gesichtssuche läuft im Hintergrund.')}</p></div>` : ''}`;
@@ -3066,7 +3066,7 @@
       bindCardTools($('.head', view), sec, 'people', () => draw());
       // background jobs over the faces not approved: asked how many first, then started
       // (complete: also the photos whose faces are all approved one by one, offered as a second button)
-      const bgJob = (sel, path, none, ask, started, unit) => $(sel, view)?.addEventListener('click', async () => {
+      const bgJob = async (path, none, ask, started, unit) => {
         const fail = (e) => toast(t('Fehler: {e}', { e: String(e).replace(/^\d{3} /, '') }));
         const c = await api(path).catch((e) => ({ error: e.message }));
         if (c.error) { fail(c.error); return; }
@@ -3081,14 +3081,20 @@
         const acts = [...(c.n ? [[t('Starten'), start(false)]] : []),
           ...(more > 0 ? [[t('Auch vollständig bestätigte (+{n})', { n: num(more) }), start(true)]] : [])];
         toast(t(ask, { x: unit(c.n) }), acts);
-      });
-      for (const b of $$('[data-quiz]', view)) b.onclick = () => Quiz.open(b.dataset.quiz);
-      // names of the faces not approved, matched anew against the approved faces (no search)
-      bgJob('[data-rematch]', '/api/faces/rematch', 'Keine Gesichter ohne Bestätigung',
-        '{x} nicht bestätigt: Namen neu zuordnen?', 'Namen werden im Hintergrund neu zugeordnet ({x})', (n) => pl(n, '{n} Gesicht', '{n} Gesichter'));
-      // the faces of all photos not approved as a whole are looked for again
-      bgJob('[data-rethink]', '/api/faces/rethink', 'Alle Fotos sind bestätigt oder warten schon',
-        '{x} nicht bestätigt: Gesichter neu suchen?', '{x} werden im Hintergrund neu durchsucht', (n) => pl(n, '{n} Foto', '{n} Fotos'));
+      };
+      // the face jobs in one menu: the quick rounds (users), matching names anew and looking
+      // for faces again (admins)
+      $('[data-facejobs]', view)?.addEventListener('click', (e) => menu(e.currentTarget, [
+        ...(Account.can('user') && info.recognition ? [
+          { icon: 'tag', label: t('Schnell benennen'), run: () => Quiz.open('name') },
+          { icon: 'check', label: t('Schnell bestätigen'), run: () => Quiz.open('approve') }] : []),
+        // names of the faces not approved, matched anew against the approved faces (no search)
+        ...(Account.can('admin') && info.recognition ? [{ icon: 'people', label: t('Neu zuordnen'), run: () => bgJob('/api/faces/rematch', 'Keine Gesichter ohne Bestätigung',
+          '{x} nicht bestätigt: Namen neu zuordnen?', 'Namen werden im Hintergrund neu zugeordnet ({x})', (n) => pl(n, '{n} Gesicht', '{n} Gesichter')) }] : []),
+        // the faces of all photos not approved as a whole are looked for again
+        ...(Account.can('admin') && info.detection ? [{ icon: 'refresh', label: t('Neu suchen'), run: () => bgJob('/api/faces/rethink', 'Alle Fotos sind bestätigt oder warten schon',
+          '{x} nicht bestätigt: Gesichter neu suchen?', '{x} werden im Hintergrund neu durchsucht', (n) => pl(n, '{n} Foto', '{n} Fotos')) }] : []),
+      ]));
       for (const b of $$('[data-pshow]', view)) {
         b.onclick = () => {
           const k = b.dataset.pshow;
@@ -3149,7 +3155,7 @@
       $('.head .tools', view).insertAdjacentHTML('afterbegin', `<div class="kindset seg" role="group" aria-label="${t('Bestätigung')}">${apprSet.map(([k, l, ic]) =>
         `<button data-pappr="${k}" class="${appr === k ? 'on' : ''}" aria-pressed="${appr === k}" title="${t({ all: 'Alle Fotos der Person', ok: 'Fotos, in denen ihre Gesichter bestätigt sind', open: 'Fotos, in denen ein Gesicht von ihr nicht bestätigt ist' }[k])}">${icon(ic)}<span>${t(l)}</span></button>`).join('')}</div>`);
       for (const b of $$('[data-pappr]', view)) b.onclick = () => { store.set('person-approved', b.dataset.pappr); rerender(); };
-      $('.head .tools', view).insertAdjacentHTML('afterbegin', `<button class="btn view-btn pact" id="pact" data-need="user" title="${t('Person')}: ${t('Ausblenden')}, ${t('Kein Gesicht')}" aria-haspopup="menu">${icon('face')}${icon('down')}</button>`);
+      $('.head .tools', view).insertAdjacentHTML('afterbegin', `<button class="btn view-btn pact" id="pact" data-need="user" title="${t('Person')}: ${t('Neu zuordnen')}, ${t('Ausblenden')}, ${t('Kein Gesicht')}" aria-haspopup="menu">${icon('face')}${icon('down')}</button>`);
       const inp = $('#pname', view);
       const save = async () => {
         const name = inp.value.trim();
@@ -3183,8 +3189,20 @@
         if (res.hidden) toast(t('Ausgeblendet'), t('Rückgängig'), () => showHidden(res.hidden, id));
         else toast(t('Ausgeblendet'));
       };
+      // the names of the person's faces not approved (the photos "Offen") matched anew
+      const open = all.filter((it) => it.po?.includes(id)).length;
+      const rematch = async () => {
+        const res = await post(`/api/people/${encodeURIComponent(id)}/rematch`, {}).catch((e) => ({ error: e.message }));
+        if (res.error) { toast(t('Fehler: {e}', { e: String(res.error).replace(/^\d{3} /, '') })); return; }
+        toast(t('{x} geprüft, {c} neu zugeordnet', { x: pl(res.n, '{n} Gesicht', '{n} Gesichter'), c: num(res.changed) }));
+        if (!res.changed) return;
+        await loadPeople().catch(() => {}); // grouped anew already
+        await loadItems().catch(() => {});
+        if (route.view === 'person') rerender();
+      };
       $('#pact', view).onclick = (e) => menu(e.currentTarget, [
         { head: p.name || t('Unbenannt'), sub: pl(all.length, '{n} Foto', '{n} Fotos') },
+        ...(open ? [{ icon: 'people', label: t('Offene neu zuordnen ({n})', { n: num(open) }), run: rematch }] : []),
         { icon: 'eye-off', label: t('Ausblenden'), run: hide },
         { icon: 'face-x', label: t('Kein Gesicht'), run: noFace },
       ]);

@@ -87,6 +87,7 @@ func New(ctx context.Context, o Options) http.Handler {
 	mux.HandleFunc("POST /api/faces/rethink", s.requireAdmin(s.rethinkFaces))
 	mux.HandleFunc("GET /api/faces/rematch", s.requireAdmin(s.rematchCount))
 	mux.HandleFunc("POST /api/faces/rematch", s.requireAdmin(s.rematchNames))
+	mux.HandleFunc("POST /api/people/{id}/rematch", s.requireUser(s.rematchPerson))
 	mux.HandleFunc("POST /api/face/{id}/suggest", s.requireUser(s.suggestForBox))
 	mux.HandleFunc("GET /api/face/{id}/{idx}/suggest", s.requireUser(s.suggestForFace))
 	mux.HandleFunc("POST /api/fav", s.requireUser(s.fav))
@@ -672,6 +673,17 @@ func (s *Server) rematchNames(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, r, map[string]any{"ok": true, "n": n})
+}
+
+// rematchPerson matches the names of a person's faces not approved anew
+// (the photos "Offen" on the person's page), right away.
+func (s *Server) rematchPerson(w http.ResponseWriter, r *http.Request) {
+	looked, changed, err := s.lib.RematchPerson(r.PathValue("id"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	writeJSON(w, r, map[string]any{"ok": true, "n": looked, "changed": changed})
 }
 
 // addFace adds a face drawn by hand (on a video at second t).
