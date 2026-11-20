@@ -96,6 +96,35 @@ func TestQuizRounds(t *testing.T) {
 	if _, err := l.RejectFace(first.Item, first.Idx, "Yvonne"); err == nil {
 		t.Error("a face named otherwise said not to be somebody else")
 	}
+	// the other group is none of the named: all its faces, not approved, matched to nobody,
+	// and no more asked about in a naming round
+	if q, _ := l.QuizFaces("name", 5); len(q) == 1 {
+		y := q[0]
+		prev, err := l.RejectNamed(y.Item, y.Idx, true)
+		if err != nil || len(prev) != 3 {
+			t.Fatalf("none of the named: %v %v", prev, err)
+		}
+		for k := range prev {
+			var id string
+			var i int
+			fmt.Sscanf(k, "%12s:%d", &id, &i)
+			if _, name := l.FacePerson(id, i); name != "" {
+				t.Errorf("%s matched to %q", k, name)
+			}
+			if f, _ := l.FaceApproval(l.Get(id)); f[i] {
+				t.Errorf("%s approved", k)
+			}
+		}
+		if q, _ := l.QuizFaces("name", 5); len(q) != 0 {
+			t.Errorf("asked again: %+v", q)
+		}
+		if err := l.RestoreFaceLabels(prev); err != nil {
+			t.Fatal(err)
+		}
+		if q, _ := l.QuizFaces("name", 5); len(q) != 1 {
+			t.Errorf("after undo: %+v", q)
+		}
+	}
 	// undo of the group's hints
 	l.RestoreHints(hints)
 	for k := range hints {

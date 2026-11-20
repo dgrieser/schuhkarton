@@ -478,6 +478,84 @@ func (l *Library) RejectFace(item string, idx int, name string) (string, error) 
 	return prev, nil
 }
 
+// RejectNamed says faces are none of the people named now (each name goes
+// to those they are not): a face of the item, or with group the faces of its
+// group (as grouped now) not settled by a label nor approved. Names given
+// later are not meant. It returns the labels before (keys "item:idx").
+func (l *Library) RejectNamed(item string, idx int, group bool) (map[string]string, error) {
+	s := l.people
+	self := FaceRef{item, idx}
+	refs := []FaceRef{self}
+	s.mu.RLock()
+	if group {
+		if p := s.byID[s.byFace[self.key()]]; p != nil && p.Name == "" {
+			refs = append([]FaceRef(nil), p.refs...)
+		}
+	}
+	var names []string
+	seen := map[string]bool{}
+	for _, p := range s.people {
+		if p.Name != "" && !seen[p.Name] {
+			seen[p.Name] = true
+			names = append(names, p.Name)
+		}
+	}
+	// names given just now are in the labels before grouping caught up
+	for _, v := range s.labels {
+		if approvedLabel(v) && v != labelHidden && v != labelNoFace && !seen[v] {
+			seen[v] = true
+			names = append(names, v)
+		}
+	}
+	s.mu.RUnlock()
+	if len(names) == 0 {
+		return nil, errors.New("nobody is named yet")
+	}
+	sort.Strings(names)
+	// the faces there are, not approved (the one asked about always)
+	l.mu.RLock()
+	var faces []FaceRef
+	for _, r := range refs {
+		it := l.byID[r.Item]
+		if it == nil || r.Idx < 0 || r.Idx >= len(it.Faces) {
+			continue
+		}
+		if f := it.Faces[r.Idx]; r != self && (f.OK || f.Manual || it.FacesOK) {
+			continue
+		}
+		faces = append(faces, r)
+	}
+	l.mu.RUnlock()
+	if len(faces) == 0 {
+		return nil, errors.New("unknown face")
+	}
+	l.promoteNow.Store(true)
+	prev := map[string]string{}
+	s.mu.Lock()
+	for _, r := range faces {
+		k := r.key()
+		cur := s.labels[k]
+		if r != self && cur != "" && !strings.HasPrefix(cur, "!") {
+			continue // named, hidden or no face by somebody: stays
+		}
+		if r == self && approvedLabel(cur) && cur != labelHidden && cur != labelNoFace {
+			cur = "" // named before: now none of them
+		}
+		next := cur
+		for _, n := range names {
+			next = withReject(next, n)
+		}
+		prev[k] = s.labels[k]
+		s.labels[k] = next
+	}
+	s.mu.Unlock()
+	if err := s.save(); err != nil {
+		return prev, err
+	}
+	l.regroup()
+	return prev, nil
+}
+
 // HintUndoPrefix marks the hints before in the undo of a face name (history).
 const HintUndoPrefix = "hint:"
 

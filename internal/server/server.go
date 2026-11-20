@@ -526,6 +526,9 @@ func (s *Server) labelFace(w http.ResponseWriter, r *http.Request) {
 		Group bool `json:"group"`
 		// Not: the face is not this person (whoever it is grouped with now)
 		Not string `json:"not"`
+		// NoneNamed: the face is none of the people named now (with Group: its
+		// group's faces too)
+		NoneNamed bool `json:"noneNamed"`
 	}
 	idx, err := strconv.Atoi(r.PathValue("idx"))
 	if err != nil || readJSON(r, &req) != nil {
@@ -538,6 +541,16 @@ func (s *Server) labelFace(w http.ResponseWriter, r *http.Request) {
 	}
 	person := s.lib.PersonOf(r.PathValue("id"), idx)
 	old, _ := s.personBefore(person)
+	if req.NoneNamed {
+		prev, err := s.lib.RejectNamed(r.PathValue("id"), idx, req.Group)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		s.recordFaces(r, nil, map[string]any{"op": "nonenamed", "from": old, "n": len(prev)}, prev)
+		writeJSON(w, r, map[string]any{"ok": true, "undo": prev, "n": len(prev)})
+		return
+	}
 	if req.Not != "" {
 		prev, err := s.lib.RejectFace(r.PathValue("id"), idx, req.Not)
 		if err != nil {
