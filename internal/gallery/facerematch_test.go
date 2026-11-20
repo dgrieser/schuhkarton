@@ -65,7 +65,7 @@ func TestRematchNames(t *testing.T) {
 	if n := l.RematchCount(); n != 6 {
 		t.Fatalf("%d faces to match, want 6", n)
 	}
-	looked, changed := l.rematch()
+	looked, changed := l.rematch("")
 	if looked != 6 {
 		t.Errorf("looked at %d", looked)
 	}
@@ -97,8 +97,16 @@ func TestRematchNames(t *testing.T) {
 	if _, ok := l.FaceApproval(byRel(l, "b.jpg")); ok {
 		t.Error("matching approved a face")
 	}
+	// one person only: their faces not approved
+	pid, _ := l.FacePerson(byRel(l, "b.jpg").ID, 0)
+	if n, _, err := l.RematchPerson(pid); err != nil || n == 0 || n >= l.RematchCount() {
+		t.Errorf("rematch of one person looked at %d of %d (%v)", n, l.RematchCount(), err)
+	}
+	if _, _, err := l.RematchPerson("nobody"); err == nil {
+		t.Error("unknown person matched")
+	}
 	// nothing changes the second time
-	if _, changed := l.rematch(); changed != 0 {
+	if _, changed := l.rematch(""); changed != 0 {
 		t.Errorf("second run changed %d", changed)
 	}
 }

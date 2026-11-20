@@ -46,8 +46,33 @@ type rematchRef struct {
 
 // RematchCount returns how many faces RematchNames would look at.
 func (l *Library) RematchCount() int {
-	_, faces, _ := l.rematchSnapshot()
+	_, faces, _ := l.rematchSnapshot("")
 	return len(faces)
+}
+
+// RematchPerson matches the names of the faces of one person (as grouped
+// now) nobody approved anew, right here (they are few): the photos "Offen"
+// on the person's page. It returns the faces looked at and the faces whose
+// name changed.
+func (l *Library) RematchPerson(id string) (looked, changed int, err error) {
+	if !l.FaceStatus().Recognition {
+		return 0, 0, ErrNoRecognition
+	}
+	if l.Person(id) == nil {
+		return 0, 0, errors.New("unknown person")
+	}
+	if !l.rematching.CompareAndSwap(false, true) {
+		return 0, 0, errors.New("names are already being matched")
+	}
+	defer l.rematching.Store(false)
+	looked, changed = l.rematch(id)
+	if changed > 0 { // grouped anew before the answer: the page shows it at once
+		l.reclusterRun.Lock()
+		l.recluster()
+		l.reclusterRun.Unlock()
+		l.bump()
+	}
+	return looked, changed, nil
 }
 
 // RematchNames matches the names of the faces nobody approved anew, in the
@@ -59,22 +84,22 @@ func (l *Library) RematchNames() (int, error) {
 	if !l.rematching.CompareAndSwap(false, true) {
 		return 0, errors.New("names are already being matched")
 	}
-	_, faces, _ := l.rematchSnapshot()
+	_, faces, _ := l.rematchSnapshot("")
 	if len(faces) == 0 {
 		l.rematching.Store(false)
 		return 0, nil
 	}
 	l.Go(func() {
 		defer l.rematching.Store(false)
-		l.rematch()
+		l.rematch("")
 	})
 	return len(faces), nil
 }
 
-// rematch is RematchNames, right here; it returns the faces looked at and
-// the faces whose name changed.
-func (l *Library) rematch() (looked, changed int) {
-	refs, faces, here := l.rematchSnapshot()
+// rematch is RematchNames (person: RematchPerson), right here; it returns
+// the faces looked at and the faces whose name changed.
+func (l *Library) rematch(person string) (looked, changed int) {
+	refs, faces, here := l.rematchSnapshot(person)
 	if len(faces) == 0 {
 		return 0, 0
 	}
@@ -163,7 +188,9 @@ func (l *Library) rematch() (looked, changed int) {
 	l.logf("faces: names of %d faces not approved matched anew, %d changed", len(faces), changed)
 	if changed > 0 {
 		l.markDirty()
-		l.regroup()
+		if person == "" { // one person: RematchPerson groups anew itself, at once
+			l.regroup()
+		}
 	}
 	return len(faces), changed
 }
@@ -171,7 +198,7 @@ func (l *Library) rematch() (looked, changed int) {
 // rematchSnapshot lists the named people with their approved faces, the
 // faces not approved (with an embedding, in items not approved as a
 // whole), and per picture the names approved faces have there.
-func (l *Library) rematchSnapshot() ([]*rematchRef, []rematchFace, map[frame]map[string]bool) {
+func (l *Library) rematchSnapshot(person string) ([]*rematchRef, []rematchFace, map[frame]map[string]bool) {
 	s := l.people
 	s.mu.RLock()
 	labels := make(map[string]string, len(s.labels))
@@ -179,7 +206,11 @@ func (l *Library) rematchSnapshot() ([]*rematchRef, []rematchFace, map[frame]map
 		labels[k] = v
 	}
 	personOf := make(map[string]string, len(s.byFace)) // face key -> name of its person
+	inPerson := map[string]bool{}                      // the faces of the person asked about (person)
 	for k, id := range s.byFace {
+		if person != "" && id == person {
+			inPerson[k] = true
+		}
 		if p := s.byID[id]; p != nil && p.Name != "" {
 			personOf[k] = p.Name
 		}
@@ -195,6 +226,18 @@ func (l *Library) rematchSnapshot() ([]*rematchRef, []rematchFace, map[frame]map
 			key := FaceRef{it.ID, i}.key()
 			label := labels[key]
 			if !faceKept(f, approvedLabel(label)) {
+				if person != "" && !inPerson[key] {
+					// not asked about: the name it has now (as grouped, its hint counted)
+					// stays, and is taken in its picture
+					if n := personOf[key]; n != "" {
+						fr := frame{it.ID, f.T}
+						if here[fr] == nil {
+							here[fr] = map[string]bool{}
+						}
+						here[fr][n] = true
+					}
+					continue
+				}
 				if it.FacesOK || (f.Emb == nil && f.Emb2 == nil) {
 					continue
 				}

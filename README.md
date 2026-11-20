@@ -55,7 +55,7 @@ or another one.
   *Personen*, also for a photo without faces, or *Alle bestätigen* on the
   picture while its faces are shown). Faces framed by hand and faces
   with a name, hidden or "no face" count as approved already ("not this
-  person" does not: who it is stays open). Two jobs on the people page (admins) run in the background over
+  person" does not: who it is stays open). Two jobs in the *Gesichter* menu of the people page (admins) run in the background over
   what is not approved:
   *Neu zuordnen* matches the name of every face not approved anew,
   against the approved faces of each person only, without looking for faces:
@@ -73,7 +73,9 @@ or another one.
   or drawn by hand stays; the change shows in the history and can be undone.
   A person's page filters their photos by approval (*Alle*, *Bestätigt*,
   *Offen*: a face of theirs in the photo is not approved).
-  *Schnell benennen* and *Schnell bestätigen* on the people page are quick
+  Its menu matches the names of the open ones anew (*Offene neu zuordnen*,
+  right away, for everybody with an account).
+  *Schnell benennen* and *Schnell bestätigen* in the same menu are quick
   rounds of a handful of faces, each zoomed to the face, chosen for the most
   gain per answer. Naming shows one typical, clear face of each of the
   largest groups without a name; the name goes to that face and, not
