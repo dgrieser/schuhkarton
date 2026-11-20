@@ -164,6 +164,7 @@
   const S = {
     items: [], byId: new Map(), version: -1, loadedAt: 0,
     people: [], peopleById: new Map(), peopleInfo: {},
+    pending: new Map(), // names given that no person has yet (grouping catches up behind): name -> face {item, idx} or null
     status: null,
     config: {},
     layout: store.get('layout', 'rows'),
@@ -415,14 +416,47 @@
     }
   }
 
+  // peopleReq: the newest request (an older answer arriving later is dropped); pendingGen: names
+  // given here since (kept, the answer may be from before them)
+  let peopleReq = 0, pendingGen = 0;
   async function loadPeople() {
+    const req = ++peopleReq, gen = pendingGen;
     const res = await api('/api/people');
+    if (req !== peopleReq) return S.people; // a newer one is on its way
     S.people = res.people || [];
+    // names given that grouping has not made a person of yet, as the server sees them now (one
+    // undone or given another name meanwhile is gone); one given here since stays until asked again
+    const pending = new Map((res.pending || []).map((p) => [p.name, p.cover]));
+    if (gen !== pendingGen) for (const [n, c] of S.pending) if (!pending.has(n) && !S.people.some((p) => p.name === n)) pending.set(n, c);
+    S.pending = pending;
     S.faceMode = S.config.faces;
     S.peopleById = new Map(S.people.map((p) => [p.id, p]));
     S.peopleInfo = res;
     updateCounts();
     return S.people;
+  }
+
+  // a name just saved: offered to choose at once, before grouping made a person of it (on a
+  // small machine grouping runs behind); item and idx: its face, for the picture. The server's
+  // list is asked for right after, which also drops names undone or replaced
+  let pendingT = 0;
+  function pendingName(name, item, idx) {
+    if (!name || name === '-' || name === '~' || name.startsWith('!') || S.people.some((p) => p.name === name)) return;
+    S.pending.set(name, item ? { item, idx } : S.pending.get(name) || null);
+    pendingGen++;
+    syncPending();
+  }
+  // the names waiting for grouping as the server sees them (soon, once for several answers)
+  function syncPending() {
+    clearTimeout(pendingT);
+    pendingT = setTimeout(() => loadPeople().catch(() => {}), 800);
+  }
+
+  // the people with a name, and the names just given that are not a person yet
+  function namedPeople() {
+    const out = S.people.filter((p) => p.name), has = new Set(out.map((p) => p.name));
+    for (const [name, cover] of S.pending) if (!has.has(name)) out.push({ name, cover, count: 1, pending: true });
+    return out;
   }
 
   function updateCounts() {
@@ -1473,7 +1507,7 @@
         [video ? 'play' : 'face', video ? t('Im Video zeigen') : t('Im Bild zeigen'), () => this.showFace(f)],
         user && ['user', f.name ? t('Name ändern …') : t('Benennen …'), () => this.namePop(a, f)],
         user && ['eye-off', f.person ? t('Nicht diese Person') : t('Ausblenden'), () => this.saveFace(f, '')],
-        user && S.people.some((p) => p.name) && ['user', t('Unbekannt'), () => this.noneNamed(f)],
+        user && namedPeople().length && ['user', t('Unbekannt'), () => this.noneNamed(f)],
         user && ['face-x', t('Kein Gesicht'), () => this.saveFace(f, '-')],
         user && !f.ok && ['check', t('Bestätigen'), () => this.approveFaces({ faces: [f.idx], ok: true })],
         user && f.mine && !f.manual && ['x', t('Bestätigung aufheben'), () => this.approveFaces({ faces: [f.idx], ok: false })],
@@ -1558,6 +1592,7 @@
       if (face.multi) { // a person in all photos of a selection
         const m = face.multi;
         const res = await post(`/api/items/people/${encodeURIComponent(m.person)}`, { ids: m.ids, name }).catch((e) => ({ error: e.message }));
+        if (!res.error) pendingName(name);
         if (res.error) { toast(t('Fehler: {e}', { e: String(res.error).replace(/^\d{3} /, '') })); return; }
         const faces = pl(res.n, '{n} Gesicht', '{n} Gesichter');
         const msg = name === '-' ? pl(res.n, '{n} Gesicht entfernt', '{n} Gesichter entfernt')
@@ -1573,11 +1608,13 @@
         toast(t('Wird gespeichert …'));
         const res = await post(`/api/face/${it.id}/add`, { X: b.x, Y: b.y, W: b.w, H: b.h, t: face.t || 0, name }).catch((e) => ({ error: e.message }));
         if (res.error) { toast(t('Fehler: {e}', { e: String(res.error).replace(/^\d{3} /, '') })); return; }
+        pendingName(name, it.id, res.idx);
         toast(name ? t('Als {name} gespeichert', { name }) : t('Gesicht markiert'));
         await this.refreshItem(it);
         return;
       }
       const res = await post(`/api/face/${it.id}/${face.idx}`, { name });
+      pendingName(name, it.id, face.idx);
       if (name === '-') {
         toast(t('Kein Gesicht'), t('Rückgängig'), async () => { await post('/api/faces/labels', { labels: res.undo }); await this.refreshItem(it); });
       } else toast(name ? t('Als {name} gespeichert', { name }) : t('Entfernt'));
@@ -1858,8 +1895,7 @@
       $('#pop')?.remove();
       // one entry per name; the group with the most photos gives the picture, all of them the count
       const people = new Map(), total = new Map();
-      for (const p of S.people) {
-        if (!p.name) continue;
+      for (const p of namedPeople()) {
         total.set(p.name, (total.get(p.name) || 0) + (p.count || 0));
         if (!(people.get(p.name)?.count >= p.count)) people.set(p.name, p);
       }
@@ -1925,7 +1961,7 @@
         ${face.add ? `<div class="row np-acts"><button type="button" data-a="noname">${t('Ohne Namen speichern')}</button><button type="button" data-a="cancel">${t('Abbrechen')}</button></div>`
           : `<div class="row np-acts">${m || face.idx === undefined ? '' : face.mine ? `<button type="button" data-a="unok" title="${t('Bestätigung aufheben')}">${icon('x')}<span>${t('Bestätigung aufheben')}</span></button>`
               : !face.ok ? `<button type="button" data-a="ok" title="${t('Das Gesicht stimmt: es bleibt so, wenn neu gesucht wird')}">${icon('check')}<span>${t('Bestätigen')}</span></button>` : ''}<button type="button" data-a="not">${face.person ? t('Nicht diese Person') : t('Ausblenden')}</button>
-            ${S.people.some((p) => p.name) && !m ? `<button type="button" data-a="nonenamed" title="${t('Keine der Personen mit Namen: wird keiner von ihnen zugeordnet')}">${icon('user')}<span>${t('Unbekannt')}</span></button>` : ''}
+            ${namedPeople().length && !m ? `<button type="button" data-a="nonenamed" title="${t('Keine der Personen mit Namen: wird keiner von ihnen zugeordnet')}">${icon('user')}<span>${t('Unbekannt')}</span></button>` : ''}
             <button type="button" data-a="noface" title="${t('Falsch erkannt: kein Gesicht. Wird nicht mehr gezeigt, andere Gesichter bleiben.')}">${icon('face-x')}<span>${t('Kein Gesicht')}</span></button></div>`}`;
       // a sheet in the viewer shares it with the picture; one for a selection lies over the page
       (sheet && !m ? this.el : document.body).appendChild(pop);
@@ -3819,10 +3855,11 @@
     // can be typed too
     async namePicker(f, group, not = '') {
       const acts = $('.qz-acts', this.el);
-      const names = [...new Set(S.people.filter((p) => p.name).map((p) => p.name))].sort((a, b) => a.localeCompare(b));
+      const named = namedPeople();
+      const names = [...new Set(named.map((p) => p.name))].sort((a, b) => a.localeCompare(b));
       const cover = new Map();
-      for (const p of S.people) if (p.name && !(cover.get(p.name)?.count >= p.count)) cover.set(p.name, p);
-      const chip = (n) => { const p = cover.get(n); return `<button type="button" class="qz-chip" data-name="${esc(n)}">${p ? `<img src="${faceURL(p.cover.item, p.cover.idx)}" alt="">` : ''}<span>${esc(n)}</span></button>`; };
+      for (const p of named) if (!(cover.get(p.name)?.count >= p.count)) cover.set(p.name, p);
+      const chip = (n) => { const p = cover.get(n); return `<button type="button" class="qz-chip" data-name="${esc(n)}">${p?.cover ? `<img src="${faceURL(p.cover.item, p.cover.idx)}" alt="">` : ''}<span>${esc(n)}</span></button>`; };
       const draw = (sugg) => {
         const top = [...new Set([...sugg, ...store.get('recent-names', [])])].filter((n) => cover.has(n) && n !== not).slice(0, 8);
         // the names in one row that scrolls sideways, the typed name below, the other answers as
@@ -3830,7 +3867,7 @@
         acts.innerHTML = `${top.length ? `<div class="qz-chips">${top.map(chip).join('')}</div>` : ''}
           <form class="qz-form"><input class="qz-name" list="qzNames" placeholder="${t('Name eingeben …')}" autocomplete="off" enterkeyhint="done"><datalist id="qzNames">${names.map((n) => `<option value="${esc(n)}">`).join('')}</datalist><button class="btn primary" title="Enter">${icon('check')}</button></form>
           <div class="qz-more">${this.done.length ? `<button type="button" class="qz-back" data-q="back" title="${t('Zurück')} (Z)">${icon('left')}</button>` : ''}${this.mode === 'name'
-            ? `<button type="button" data-q="noface" title="${t('Kein Gesicht')}">${icon('face-x')}<span>${t('Kein Gesicht')}</span></button><button type="button" data-q="hide" title="${t('Ausblenden')}">${icon('eye-off')}<span>${t('Ausblenden')}</span></button>` : ''}${S.people.some((p) => p.name)
+            ? `<button type="button" data-q="noface" title="${t('Kein Gesicht')}">${icon('face-x')}<span>${t('Kein Gesicht')}</span></button><button type="button" data-q="hide" title="${t('Ausblenden')}">${icon('eye-off')}<span>${t('Ausblenden')}</span></button>` : ''}${named.length
             ? `<button type="button" data-q="nonenamed" title="${this.mode === 'name' ? t('Unbekannt: keine der Personen mit Namen (die ganze Gruppe)') : t('Keine der Personen mit Namen')}">${icon('user')}<span>${t('Unbekannt')}</span></button>` : ''}<button type="button" data-q="skip">${icon('right')}<span>${this.mode === 'name' ? t('Überspringen') : t('Weiter')}</span></button></div>`;
         const form = $('.qz-form', acts), inp = $('.qz-name', acts), row = $('.qz-chips', acts);
         // a mouse wheel scrolls the names sideways
@@ -3963,6 +4000,7 @@
     async label(f, name, group, stat) {
       const res = await this.send(() => post(`/api/face/${f.item}/${f.idx}`, { name, group }));
       if (!res) return;
+      pendingName(name, f.item, f.idx);
       // after "no" in approving: one step together with it (back undoes both)
       const prev = this.done[this.done.length - 1];
       if (this.mode === 'approve' && prev?.f === f && prev.stat === 'rejected') {
@@ -3991,6 +4029,10 @@
         if (d.labels) await post('/api/faces/labels', { labels: d.labels });
         if (d.hints) await post('/api/faces/hints', { hints: d.hints });
         if (d.approve) await post(`/api/faces/${d.f.item}/approve`, { undo: d.approve });
+        if (d.labels || d.labels2) { // a name given just now may be gone again: not offered for this face
+          clearTimeout(pendingT);
+          await loadPeople().catch(() => {});
+        }
         return true;
       });
       if (sid !== this.sid) return; // the round was closed meanwhile
