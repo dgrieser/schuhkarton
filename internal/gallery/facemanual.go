@@ -133,14 +133,19 @@ func (l *Library) manualEmbLoop(ctx context.Context) {
 	}
 }
 
-// manualCropsMark marks that the crops of the hand-marked faces were made
-// again once: before, small faces were enlarged with a scaler that only
-// shrinks, which garbled their crops.
-const manualCropsMark = ".manual-crops-v2"
+// manualCropsMark marks that the crops of the hand-marked faces and of the
+// faces of videos were made again once: before, small faces were enlarged
+// with a scaler that only shrinks, which garbled their crops (v2: the
+// hand-marked ones only; the faces found in videos were cut out the same way).
+const manualCropsMark = ".manual-crops-v3"
 
-// redoManualCrops makes the crops of all hand-marked faces again, once,
-// inside the background window of media work. It returns whether that is
-// done, else when to try again.
+// cutHere tells whether a face's crop is cut out here from the picture (a
+// face marked by hand, any face of a video), not made by the face service.
+func cutHere(it *Item, f Face) bool { return f.Manual || it.Kind == Video }
+
+// redoManualCrops makes the crops of all faces cut out here (cutHere) again,
+// once, inside the background window of media work. It returns whether that
+// is done, else when to try again.
 func (l *Library) redoManualCrops(ctx context.Context) (bool, time.Duration) {
 	mark := filepath.Join(l.opt.CacheDir, "faces", manualCropsMark)
 	if _, err := os.Stat(mark); err == nil {
@@ -160,7 +165,7 @@ func (l *Library) redoManualCrops(ctx context.Context) (bool, time.Duration) {
 	l.mu.RLock()
 	for _, it := range l.items {
 		for i, f := range it.Faces {
-			if f.Manual {
+			if cutHere(it, f) {
 				jobs = append(jobs, job{it, i, f, it.key})
 			}
 		}
@@ -181,6 +186,9 @@ func (l *Library) redoManualCrops(ctx context.Context) (bool, time.Duration) {
 		}
 		defer cancel()
 		redone, failed, replaced := 0, 0, 0
+		// the frames of the item at hand: a video's faces share a few
+		var frameOf *Item
+		frames := map[float32]image.Image{}
 		for _, j := range jobs {
 			key := FaceRef{j.it.ID, j.idx}.key()
 			if _, ok := l.cropsRedone.Load(key); ok {
@@ -189,14 +197,21 @@ func (l *Library) redoManualCrops(ctx context.Context) (bool, time.Duration) {
 			if wctx.Err() != nil {
 				break // window closed or shutdown: the checks below, then on later
 			}
-			frame, err := l.frameImage(wctx, j.it, float64(j.f.T))
-			if err != nil {
-				if wctx.Err() != nil {
-					break // stopped (window closed, shutdown): not done
+			if frameOf != j.it {
+				frameOf, frames = j.it, map[float32]image.Image{}
+			}
+			frame := frames[j.f.T]
+			if frame == nil {
+				var err error
+				if frame, err = l.frameImage(wctx, j.it, float64(j.f.T)); err != nil {
+					if wctx.Err() != nil {
+						break // stopped (window closed, shutdown): not done
+					}
+					l.logf("faces %s: crop not made again: %v", j.it.Rel, err)
+					failed++ // e.g. the share is away: again later
+					continue
 				}
-				l.logf("faces %s (marked by hand): crop not made again: %v", j.it.Rel, err)
-				failed++ // e.g. the share is away: again later
-				continue
+				frames[j.f.T] = frame
 			}
 			px := boxPixels(frame.Bounds(), j.f.X, j.f.Y, j.f.W, j.f.H)
 			cropImg, _ := cropSquare(frame, px, 1.5, 200)
@@ -209,7 +224,7 @@ func (l *Library) redoManualCrops(ctx context.Context) (bool, time.Duration) {
 			l.opMu.Lock()
 			l.mu.RLock()
 			cur := l.byID[j.it.ID]
-			still := cur != nil && j.idx < len(cur.Faces) && cur.Faces[j.idx].Manual // the face is there
+			still := cur != nil && j.idx < len(cur.Faces) && cutHere(cur, cur.Faces[j.idx]) // the face is there
 			same := cur == j.it && still && sameBox(cur.Faces[j.idx], j.f) && cur.key == j.key
 			l.mu.RUnlock()
 			var werr error
@@ -232,7 +247,7 @@ func (l *Library) redoManualCrops(ctx context.Context) (bool, time.Duration) {
 			l.cropsRedone.Store(key, true) // done, or the face is gone (nothing to make)
 		}
 		if redone > 0 {
-			l.logf("faces: %d crops of faces marked by hand made again", redone)
+			l.logf("faces: %d crops of faces marked by hand or in videos made again", redone)
 			l.bump()
 		}
 		// a scan ran meanwhile: it may have copied crops not made again yet to

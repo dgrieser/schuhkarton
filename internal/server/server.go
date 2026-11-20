@@ -343,7 +343,11 @@ func (s *Server) item(w http.ResponseWriter, r *http.Request) {
 		}
 		fc := face{X: f.X, Y: f.Y, W: f.W, H: f.H, Idx: i, Manual: f.Manual, T: f.T, Mine: f.OK}
 		fc.OK = i < len(approved) && approved[i]
-		fc.V = strconv.FormatUint(uint64(crc32.ChecksumIEEE([]byte(fmt.Sprint(f.X, f.Y, f.W, f.H, f.T)))), 36)
+		var made int64 // a crop made again in the same box: another version
+		if st, err := os.Stat(s.lib.FacePath(it, i)); err == nil {
+			made = st.ModTime().UnixNano()
+		}
+		fc.V = strconv.FormatUint(uint64(crc32.ChecksumIEEE([]byte(fmt.Sprint(f.X, f.Y, f.W, f.H, f.T, made)))), 36)
 		fc.Person, fc.Name = s.lib.FacePerson(it.ID, i) // a name just given shows before grouping caught up
 		faces = append(faces, fc)
 	}

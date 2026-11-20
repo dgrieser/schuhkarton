@@ -1,9 +1,12 @@
 package gallery
 
 import (
+	"bytes"
 	"context"
 	"image"
 	"image/color"
+	"image/jpeg"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"sync/atomic"
@@ -154,5 +157,51 @@ func TestVideoFaces(t *testing.T) {
 	}
 	if p := l.Person(l.PersonOf(v.ID, 0)); p == nil || p.Name != "Anna" {
 		t.Errorf("name lost: %+v", p)
+	}
+}
+
+// TestRedoVideoCrops: the crops of faces found in a video are cut out here
+// and were garbled like those marked by hand; they are made again once too.
+func TestRedoVideoCrops(t *testing.T) {
+	ff, err := exec.LookPath("ffmpeg")
+	et := FindExifTool("")
+	if err != nil || et == "" {
+		t.Skip("ffmpeg or exiftool not installed")
+	}
+	root := t.TempDir()
+	out, err := exec.Command(ff, "-v", "error", "-f", "lavfi", "-i", "testsrc=s=640x360:r=25:d=6", "-c:v", "mpeg4",
+		filepath.Join(root, "clip.mp4")).CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v %s", err, out)
+	}
+	l, err := Open(Options{Roots: []Root{{Name: "B", Path: root}}, CacheDir: t.TempDir(), Workers: 1, FFmpeg: ff, ExifTool: et})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(l.Close)
+	l.faces = &fakeFaces{}
+	ctx := context.Background()
+	if err := l.Scan(ctx); err != nil {
+		t.Fatal(err)
+	}
+	v := byRel(l, "clip.mp4")
+	if !l.scanFaces(ctx, v) {
+		t.Fatal("scan stopped")
+	}
+	faces := l.ItemFaces(v)
+	if len(faces) == 0 || faces[0].Manual {
+		t.Fatalf("faces %+v", faces)
+	}
+	for i := range faces {
+		os.WriteFile(l.FacePath(v, i), []byte("garbled"), 0o644)
+	}
+	if done, _ := l.redoManualCrops(ctx); !done {
+		t.Fatal("not done")
+	}
+	for i := range faces {
+		b, _ := os.ReadFile(l.FacePath(v, i))
+		if img, err := jpeg.Decode(bytes.NewReader(b)); err != nil || img.Bounds().Dx() != 200 {
+			t.Errorf("crop %d not made again: %v", i, err)
+		}
 	}
 }
