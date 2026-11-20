@@ -75,6 +75,10 @@ or another one.
   *Offen*: a face of theirs in the photo is not approved).
   Its menu matches the names of the open ones anew (*Offene neu zuordnen*,
   right away, for everybody with an account).
+  *Keiner der Benannten* (a face's menu and name sheet) says a face is none
+  of the people named now: it is matched to none of them, and names given
+  later are not meant. In *Schnell benennen* this is *Unbekannt*, for the
+  whole group like a name, which is then not asked about again.
   *Schnell benennen* and *Schnell bestätigen* in the same menu are quick
   rounds of a handful of faces, each zoomed to the face, chosen for the most
   gain per answer. Naming shows one typical, clear face of each of the

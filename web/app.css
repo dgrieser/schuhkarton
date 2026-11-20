@@ -1607,6 +1607,6 @@ body.side-mini #sideToggle { position: static; margin: -6px auto 10px; }
 .qz-end p { margin: 0; color: rgba(255, 255, 255, .75); }
 /* a phone: "no face" and "hide" as symbols, skipping takes the room */
 @media (max-width: 480px) {
-  .qz-more :is([data-q="noface"], [data-q="hide"]) { flex: 0 0 52px; padding: 0; }
-  .qz-more :is([data-q="noface"], [data-q="hide"]) span { display: none; }
+  .qz-more :is([data-q="noface"], [data-q="hide"], [data-q="nonenamed"]) { flex: 0 0 52px; padding: 0; }
+  .qz-more :is([data-q="noface"], [data-q="hide"], [data-q="nonenamed"]) span { display: none; }
 }

@@ -1429,10 +1429,20 @@
         [video ? 'play' : 'face', video ? t('Im Video zeigen') : t('Im Bild zeigen'), () => this.showFace(f)],
         user && ['user', f.name ? t('Name ändern …') : t('Benennen …'), () => this.namePop(a, f)],
         user && ['eye-off', f.person ? t('Nicht diese Person') : t('Ausblenden'), () => this.saveFace(f, '')],
+        user && S.people.some((p) => p.name) && ['user', t('Keiner der Benannten'), () => this.noneNamed(f)],
         user && ['face-x', t('Kein Gesicht'), () => this.saveFace(f, '-')],
         user && !f.ok && ['check', t('Bestätigen'), () => this.approveFaces({ faces: [f.idx], ok: true })],
         user && f.mine && !f.manual && ['x', t('Bestätigung aufheben'), () => this.approveFaces({ faces: [f.idx], ok: false })],
       ].filter(Boolean));
+    },
+
+    // a face is none of the people named now (it is matched to none of them)
+    async noneNamed(f) {
+      const it = this.it;
+      const res = await post(`/api/face/${it.id}/${f.idx}`, { noneNamed: true }).catch((e) => ({ error: e.message }));
+      if (res.error) { toast(t('Fehler: {e}', { e: String(res.error).replace(/^\d{3} /, '') })); return; }
+      toast(t('Keiner der Benannten'), t('Rückgängig'), async () => { await post('/api/faces/labels', { labels: res.undo }); await this.refreshItem(it); });
+      await this.refreshItem(it);
     },
 
     // approves faces of the photo (ok false: takes it back); all: every face and the photo as a whole
@@ -1871,6 +1881,7 @@
         ${face.add ? `<div class="row np-acts"><button type="button" data-a="noname">${t('Ohne Namen speichern')}</button><button type="button" data-a="cancel">${t('Abbrechen')}</button></div>`
           : `<div class="row np-acts">${m || face.idx === undefined ? '' : face.mine ? `<button type="button" data-a="unok" title="${t('Bestätigung aufheben')}">${icon('x')}<span>${t('Bestätigung aufheben')}</span></button>`
               : !face.ok ? `<button type="button" data-a="ok" title="${t('Das Gesicht stimmt: es bleibt so, wenn neu gesucht wird')}">${icon('check')}<span>${t('Bestätigen')}</span></button>` : ''}<button type="button" data-a="not">${face.person ? t('Nicht diese Person') : t('Ausblenden')}</button>
+            ${S.people.some((p) => p.name) && !m ? `<button type="button" data-a="nonenamed" title="${t('Keine der Personen mit Namen: wird keiner von ihnen zugeordnet')}">${icon('user')}<span>${t('Keiner der Benannten')}</span></button>` : ''}
             <button type="button" data-a="noface" title="${t('Falsch erkannt: kein Gesicht. Wird nicht mehr gezeigt, andere Gesichter bleiben.')}">${icon('face-x')}<span>${t('Kein Gesicht')}</span></button></div>`}`;
       // a sheet in the viewer shares it with the picture; one for a selection lies over the page
       (sheet && !m ? this.el : document.body).appendChild(pop);
@@ -2020,6 +2031,7 @@
         if (a === 'noname' || a === 'not') save('');
         if (a === 'cancel') close();
         if (a === 'noface') save('-');
+        if (a === 'nonenamed') { close(); this.noneNamed(face); }
         if (a === 'ok' || a === 'unok') { close(); this.approveFaces({ faces: [face.idx], ok: a === 'ok' }); }
         if (a === 'sort') {
           const btn = e.target.closest('[data-a]');
@@ -3764,7 +3776,8 @@
         acts.innerHTML = `${top.length ? `<div class="qz-chips">${top.map(chip).join('')}</div>` : ''}
           <form class="qz-form"><input class="qz-name" list="qzNames" placeholder="${t('Name eingeben …')}" autocomplete="off" enterkeyhint="done"><datalist id="qzNames">${names.map((n) => `<option value="${esc(n)}">`).join('')}</datalist><button class="btn primary" title="Enter">${icon('check')}</button></form>
           <div class="qz-more">${this.done.length ? `<button type="button" class="qz-back" data-q="back" title="${t('Zurück')} (Z)">${icon('left')}</button>` : ''}${this.mode === 'name'
-            ? `<button type="button" data-q="noface" title="${t('Kein Gesicht')}">${icon('face-x')}<span>${t('Kein Gesicht')}</span></button><button type="button" data-q="hide" title="${t('Ausblenden')}">${icon('eye-off')}<span>${t('Ausblenden')}</span></button>` : ''}<button type="button" data-q="skip">${icon('right')}<span>${this.mode === 'name' ? t('Überspringen') : t('Weiter')}</span></button></div>`;
+            ? `<button type="button" data-q="noface" title="${t('Kein Gesicht')}">${icon('face-x')}<span>${t('Kein Gesicht')}</span></button><button type="button" data-q="hide" title="${t('Ausblenden')}">${icon('eye-off')}<span>${t('Ausblenden')}</span></button>` : ''}${S.people.some((p) => p.name)
+            ? `<button type="button" data-q="nonenamed" title="${this.mode === 'name' ? t('Unbekannt: keine der Personen mit Namen (die ganze Gruppe)') : t('Keine der Personen mit Namen')}">${icon('user')}<span>${t('Unbekannt')}</span></button>` : ''}<button type="button" data-q="skip">${icon('right')}<span>${this.mode === 'name' ? t('Überspringen') : t('Weiter')}</span></button></div>`;
         const form = $('.qz-form', acts), inp = $('.qz-name', acts), row = $('.qz-chips', acts);
         // a mouse wheel scrolls the names sideways
         if (row) {
@@ -3799,6 +3812,7 @@
       else if (q === 'back') this.back();
       else if (q === 'noface') this.label(f, '-', false, 'named');
       else if (q === 'hide') this.label(f, '~', false, 'named');
+      else if (q === 'nonenamed') this.noneNamed(f);
       else if (q === 'again') this.round();
       else if (q === 'rematch') this.rematch(e.target.closest('button'));
     },
@@ -3867,6 +3881,16 @@
       this.namePicker(f, false, f.name); // not the name it was said not to be
     },
 
+    // none of the people named now (naming: the whole group, as a name would)
+    async noneNamed(f) {
+      const res = await this.send(() => post(`/api/face/${f.item}/${f.idx}`, { noneNamed: true, group: this.mode === 'name' }));
+      if (!res) return;
+      const prev = this.done[this.done.length - 1];
+      if (this.mode === 'approve' && prev?.f === f && prev.stat === 'rejected') prev.labels2 = res.undo; // with its "no"
+      else this.done.push({ f, i: this.i, labels: res.undo, stat: 'skipped' });
+      this.next();
+    },
+
     answerName(f, name, group) {
       store.set('recent-names', [name, ...store.get('recent-names', []).filter((n) => n !== name)].slice(0, 12));
       this.label(f, name, group, 'named');
@@ -3879,6 +3903,7 @@
       const prev = this.done[this.done.length - 1];
       if (this.mode === 'approve' && prev?.f === f && prev.stat === 'rejected') {
         prev.labels2 = res.undo;
+        prev.named2 = true; // counted as named: back takes it off again
         this.stats.named++;
       } else {
         this.done.push({ f, i: this.i, labels: res.undo, hints: res.hints, stat });
@@ -3907,7 +3932,7 @@
       if (sid !== this.sid) return; // the round was closed meanwhile
       if (!ok) { this.done.push(d); return; }
       this.stats[d.stat] = Math.max(0, this.stats[d.stat] - 1);
-      if (d.labels2) this.stats.named = Math.max(0, this.stats.named - 1);
+      if (d.named2) this.stats.named = Math.max(0, this.stats.named - 1);
       this.i = d.i;
       this.show();
     },
