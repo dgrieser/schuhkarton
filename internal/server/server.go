@@ -425,7 +425,7 @@ func (s *Server) people(w http.ResponseWriter, r *http.Request) {
 	if st.FaceErr != "" && !isAdmin(r) {
 		st.FaceErr = "Fehler" // the text names the address of the face service
 	}
-	writeJSON(w, r, map[string]any{"people": s.lib.People(), "mode": st.FaceMode, "detection": st.FaceOK,
+	writeJSON(w, r, map[string]any{"people": s.lib.People(), "pending": s.lib.PendingNames(), "mode": st.FaceMode, "detection": st.FaceOK,
 		"recognition": st.FaceRec, "error": st.FaceErr, "faces": st.Faces, "faceTodo": st.FaceTodo})
 }
 

@@ -89,7 +89,9 @@ or another one.
   similar faces each stands for, people with few approved faces first,
   spread over people and photos. Yes, no (then the right name) or skip; keys
   J/N/S, a swipe on a phone, Z to go back. The date and place are on the
-  picture; the magnifier (key V) shows the whole photo instead of the face. Afterwards *Neu zuordnen* matches
+  picture; the magnifier (key V) shows the whole photo instead of the face.
+  A name just given is offered to choose at once, here and in the name
+  sheet, also while the grouping that makes a person of it is still behind. Afterwards *Neu zuordnen* matches
   the other faces against the answers.
 - **Backup:** copies photos, cache and settings to a folder (a USB disk or a
   share) in the background. It only adds and updates; nothing in the backup is

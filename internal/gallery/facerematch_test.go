@@ -110,3 +110,46 @@ func TestRematchNames(t *testing.T) {
 		t.Errorf("second run changed %d", changed)
 	}
 }
+
+// TestPendingNames: a name given that grouping has not caught up with is
+// offered with one of its faces; once grouped, or undone, it is not.
+func TestPendingNames(t *testing.T) {
+	l, _ := testLib(t, "a.jpg", "b.jpg")
+	l.faces = &listFaces{}
+	a := byRel(l, "a.jpg")
+	l.mu.Lock()
+	a.Faces, a.FacesDone = []Face{{X: .1, Y: .1, W: .3, H: .3, Score: .99, Emb: normalize([]float32{1, 0, 0, 0})}}, true
+	l.mu.Unlock()
+	l.recluster()
+	if p := l.PendingNames(); len(p) != 0 {
+		t.Fatalf("pending before naming: %+v", p)
+	}
+	key := FaceRef{a.ID, 0}.key()
+	set := func(v string) {
+		l.people.mu.Lock()
+		if v == "" {
+			delete(l.people.labels, key)
+		} else {
+			l.people.labels[key] = v
+		}
+		l.people.mu.Unlock()
+	}
+	set("Neu") // grouping behind
+	if p := l.PendingNames(); len(p) != 1 || p[0].Name != "Neu" || p[0].Cover != (FaceRef{a.ID, 0}) {
+		t.Fatalf("pending %+v", p)
+	}
+	set("!Neu")
+	if p := l.PendingNames(); len(p) != 0 {
+		t.Errorf("not this person pending: %+v", p)
+	}
+	set("Neu")
+	l.recluster()
+	if p := l.PendingNames(); len(p) != 0 {
+		t.Errorf("grouped, still pending: %+v", p)
+	}
+	set("Anders") // given another name, then undone before grouping
+	set("")
+	if p := l.PendingNames(); len(p) != 0 {
+		t.Errorf("undone, still pending: %+v", p)
+	}
+}

@@ -130,6 +130,63 @@ func (l *Library) People() []*Person {
 	return l.people.people
 }
 
+// PendingName is a name given to a face that no person has yet.
+type PendingName struct {
+	Name  string  `json:"name"`
+	Cover FaceRef `json:"cover"` // one of its faces
+}
+
+// PendingNames lists the names given to faces of items there that no person
+// has yet: grouping runs behind (on a small machine for a while), and a name
+// just given is offered meanwhile. A name undone or given another name is
+// not in it any more.
+func (l *Library) PendingNames() []PendingName {
+	s := l.people
+	s.mu.RLock()
+	have := make(map[string]bool, len(s.people))
+	for _, p := range s.people {
+		if p.Name != "" {
+			have[p.Name] = true
+		}
+	}
+	cands := map[string]string{} // face key -> name
+	for k, v := range s.labels {
+		if !have[v] && approvedLabel(v) && v != labelHidden && v != labelNoFace {
+			cands[k] = v
+		}
+	}
+	s.mu.RUnlock()
+	if len(cands) == 0 {
+		return nil
+	}
+	byName := map[string]FaceRef{}
+	l.mu.RLock()
+	for k, v := range cands {
+		i := strings.LastIndexByte(k, ':')
+		if i < 0 {
+			continue
+		}
+		idx, err := strconv.Atoi(k[i+1:])
+		if err != nil {
+			continue
+		}
+		ref := FaceRef{k[:i], idx}
+		if it := l.byID[ref.Item]; it == nil || idx >= len(it.Faces) {
+			continue // a label left of an item gone
+		}
+		if old, ok := byName[v]; !ok || ref.key() < old.key() { // the same face each time
+			byName[v] = ref
+		}
+	}
+	l.mu.RUnlock()
+	out := make([]PendingName, 0, len(byName))
+	for name, ref := range byName {
+		out = append(out, PendingName{name, ref})
+	}
+	sort.Slice(out, func(a, b int) bool { return out[a].Name < out[b].Name })
+	return out
+}
+
 // Person returns one person.
 func (l *Library) Person(id string) *Person {
 	l.people.mu.RLock()
