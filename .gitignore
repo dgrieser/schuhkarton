@@ -2,3 +2,5 @@
 /dist/
 *.test
 /coverage.out
+# Blender keeps the previous save next to the file
+*.blend1
