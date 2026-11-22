@@ -505,34 +505,33 @@ def svg(name):
 # --- loading animation -----------------------------------------------------------
 
 # The logo as a loading animation (web/logo/NAME-loading.svg): the box is
-# closed, opens quickly, the photos rise, star and rays appear; then it closes
-# slowly and stays closed for a second. CSS inside the SVG, so it also runs in
-# an <img>. The open state is the plain drawing; without motion (reduced
-# motion) it stays like that.
+# closed, the lid swings up quickly while the photos rise and star and rays
+# appear, then it swings down slowly and the box stays closed for a second
+# (3.2 s a loop). The lid is not turned as a whole: its outline morphs (SMIL
+# <animate> of d, runs in an <img> too) from the closed lid, a top face and a
+# front lip on the box, to a thin band at the back edge (the lid on edge at its
+# hinge) and on to the open lid of the drawing. Every pose has the same curves,
+# point for point. The lid is drawn twice: in front of the box while it is
+# closed or closing, behind the photos while it is open; they swap at the band,
+# where both look the same and touch nothing else. Without motion (reduced
+# motion) the plain open drawing stands still.
 LOADING_CSS = """
   <style>
-    .lid, .p1, .p2, .star, .rays { transform-box: fill-box; transform-origin: center; animation: 3.2s infinite both; }
-    .lid { animation-name: sk-lid; }
-    .lid-front { animation-name: sk-lid, sk-front; }
+    .p1, .p2, .star, .rays { transform-box: fill-box; transform-origin: center; animation: 3.2s infinite both; }
     .p1 { animation-name: sk-p1; }
     .p2 { animation-name: sk-p2; }
     .star { animation-name: sk-star; }
     .rays { animation-name: sk-rays; }
-    @keyframes sk-lid {
-      0%, 4% { transform: translate(LIDXpx, LIDYpx) rotate(LIDAdeg) scale(LIDS, 1); animation-timing-function: cubic-bezier(.2, .8, .3, 1.15); }
-      16%, 30% { transform: none; animation-timing-function: cubic-bezier(.5, 0, .4, 1); }
-      68%, 100% { transform: translate(LIDXpx, LIDYpx) rotate(LIDAdeg) scale(LIDS, 1); }
-    }
-    @keyframes sk-front { 0%, 6% { opacity: 1; } 7%, 62% { opacity: 0; } 63%, 100% { opacity: 1; } }
+    .lid-still { display: none; }
     @keyframes sk-p1 {
-      0%, 7% { transform: translateY(260px); animation-timing-function: cubic-bezier(.2, .8, .3, 1.2); }
-      20%, 36% { transform: none; animation-timing-function: ease-in; }
-      60%, 100% { transform: translateY(260px); }
+      0%, 9% { transform: translateY(260px); animation-timing-function: cubic-bezier(.2, .8, .3, 1.2); }
+      21%, 36% { transform: none; animation-timing-function: ease-in; }
+      56%, 100% { transform: translateY(260px); }
     }
     @keyframes sk-p2 {
-      0%, 10% { transform: translateY(240px); animation-timing-function: cubic-bezier(.2, .8, .3, 1.25); }
-      23%, 33% { transform: none; animation-timing-function: ease-in; }
-      57%, 100% { transform: translateY(240px); }
+      0%, 11% { transform: translateY(240px); animation-timing-function: cubic-bezier(.2, .8, .3, 1.25); }
+      24%, 33% { transform: none; animation-timing-function: ease-in; }
+      53%, 100% { transform: translateY(240px); }
     }
     @keyframes sk-star {
       0%, 17% { transform: scale(0) rotate(-90deg); opacity: 0; animation-timing-function: cubic-bezier(.2, .8, .3, 1.4); }
@@ -544,22 +543,124 @@ LOADING_CSS = """
       29%, 34% { transform: none; opacity: 1; }
       42%, 100% { transform: scale(.2); opacity: 0; }
     }
-    @media (prefers-reduced-motion: reduce) { .lid, .p1, .p2, .star, .rays { animation: none; } .lid-front { display: none; } }
+    @media (prefers-reduced-motion: reduce) {
+      .p1, .p2, .star, .rays { animation: none; }
+      .lid-move { display: none; }
+      .lid-still { display: inline; }
+    }
   </style>
 """
-# the closed lid: turned flat and moved onto the box, a little wider
-LID = {"LIDX": 82, "LIDY": 172, "LIDA": 17.5, "LIDS": 1.13}
+
+
+def _cubics(start, segs):
+    """A closed outline as cubic segments; a segment of one point is a line."""
+    out, p = [], start
+    for s in segs:
+        if len(s) == 1:
+            (bx, by), (ax, ay) = s[0], p
+            s = [(ax + (bx - ax) / 3, ay + (by - ay) / 3), (ax + 2 * (bx - ax) / 3, ay + 2 * (by - ay) / 3), s[0]]
+        out.append(s)
+        p = s[-1]
+    return start, out
+
+
+def _d(shape):
+    f = lambda v: f"{v:.1f}".rstrip("0").rstrip(".")
+    start, segs = shape
+    return f"M{f(start[0])} {f(start[1])}" + "".join("C" + " ".join(f"{f(x)} {f(y)}" for x, y in s) for s in segs) + "Z"
+
+
+def _squash(shape, y0, k):
+    """The outline pressed flat towards the line y0: the lid on edge at its hinge."""
+    g = lambda p: (p[0], y0 + (p[1] - y0) * k)
+    start, segs = shape
+    return g(start), [[g(p) for p in s] for s in segs]
+
+
+# The outer outline of the lid: left side, corner, far edge, two corners, right
+# side, hinge edge, corner. Open: the drawing. Closed: top face and front lip on
+# the box, a little wider than it; its far edge is the front, its hinge the back.
+LID_OPEN = _cubics((306, 479), [
+    [(286, 451), (298, 401), (322, 367)], [(339, 341), (363, 321), (401, 307)], [(672, 222)],
+    [(719, 207), (740, 207), (760, 220)], [(781, 236), (795, 265), (784, 294)], [(773, 326), (745, 359), (694, 392)],
+    [(408, 493)], [(357, 510), (326, 515), (306, 479)]])
+LID_CLOSED = _cubics((331, 545), [
+    [(331, 560), (331, 574), (331, 588)], [(331, 620), (368, 648), (417, 648)], [(829, 648)],
+    [(872, 648), (906, 628), (913, 604)], [(916, 594), (915, 566), (915, 548)], [(915, 520), (880, 501), (837, 501)],
+    [(409, 501)], [(366, 501), (331, 517), (331, 545)]])
+# the inside of the lid (open) or its top face (closed): corner, far edge, two
+# corners, hinge edge, corner, side
+FACE_OPEN = _cubics((324, 459), [
+    [(339, 420), (393, 400), (463, 381)], [(722, 307)], [(755, 297), (773, 289), (783, 299)],
+    [(776, 331), (740, 361), (694, 392)], [(406, 493)], [(361, 511), (338, 507), (324, 484)],
+    [(320, 476), (320, 468), (324, 459)]])
+FACE_CLOSED = _cubics((331, 556), [
+    [(331, 584), (368, 606), (417, 606)], [(829, 606)], [(866, 606), (898, 592), (909, 574)],
+    [(921, 552), (912, 501), (837, 501)], [(409, 501)], [(372, 501), (343, 512), (334, 530)],
+    [(331, 537), (331, 547), (331, 556)]])
+HINGE = 498  # the back edge of the box, where the lid stands on edge
+# when (a fraction of the 3.2 s): closed, swinging up to on edge, open, open,
+# back to on edge, closed, closed
+LID_TIMES = [0, .04, .10, .19, .31, .52, .66, 1]
+LID_SPLINES = ["0 0 1 1", ".4 0 1 .8", "0 .3 .3 1", "0 0 1 1", ".45 0 .8 .55", ".2 .45 .4 1", "0 0 1 1"]
+
+
+def _lid_anim(closed, edge, opened):
+    poses = [closed, closed, edge, opened, opened, edge, closed, closed]
+    return (f'<animate attributeName="d" dur="3.2s" repeatCount="indefinite" calcMode="spline" '
+            f'keyTimes="{";".join(map(str, LID_TIMES))}" keySplines="{";".join(LID_SPLINES)}" '
+            f'values="{";".join(_d(p) for p in poses)}"/>')
+
+
+def _show(when, attr="visibility"):
+    """Shown in the stretches of the loop in when (pairs of fractions). display
+    hides a whole group; visibility would give way to a child shown by its own."""
+    on, off = ("inline", "none") if attr == "display" else ("visible", "hidden")
+    times, vals = [0], [off]
+    for a, b in when:
+        times += [a, b]
+        vals += [on, off]
+    if times[1] == 0:
+        times, vals = times[1:], vals[1:]
+    if times[-1] == 1:
+        times, vals = times[:-1], vals[:-1]
+    return (f'<animate attributeName="{attr}" dur="3.2s" repeatCount="indefinite" calcMode="discrete" '
+            f'keyTimes="{";".join(map(str, times))}" values="{";".join(vals)}"/>')
+
+
+def _lid_shape():
+    edge_lid, edge_face = _squash(LID_CLOSED, HINGE, .12), _squash(FACE_CLOSED, HINGE, .03)
+    lid = _lid_anim(LID_CLOSED, edge_lid, LID_OPEN)
+    face = _lid_anim(FACE_CLOSED, edge_face, FACE_OPEN)
+    # the top face while closed and on its way, the inside once past the edge
+    shut = [(0, LID_TIMES[2]), (LID_TIMES[5], 1)]
+    opened = [(LID_TIMES[2], LID_TIMES[5])]
+    return (f'  <g id="sk-lidMove">\n'
+            f'  <path fill="url(#sk-lidTop)" d="{_d(LID_CLOSED)}">{lid}</path>\n'
+            # the front lip a shade darker: the outline in black, faded out while open
+            f'  <path fill="#000" opacity=".16" d="{_d(LID_CLOSED)}">{lid}'
+            f'<animate attributeName="opacity" dur="3.2s" repeatCount="indefinite" keyTimes="0;{LID_TIMES[2]};{LID_TIMES[3]};{LID_TIMES[4]};{LID_TIMES[5]};1" values=".16;.16;0;0;.16;.16"/></path>\n'
+            f'  <path fill="url(#sk-lidTop)" d="{_d(FACE_CLOSED)}">{face}{_show(shut)}</path>\n'
+            f'  <path fill="url(#sk-lidInside)" d="{_d(FACE_CLOSED)}" visibility="hidden">{face}{_show(opened)}</path>\n'
+            f'  </g>\n')
+
+
+def _lid(when, shape):
+    # the class on a wrapper without animations: reduced motion hides it, a
+    # SMIL display animation would win over that on the group itself
+    return f'  <g class="lid-move"><g>{_show(when, "display")}\n{shape}  </g></g>\n'
 
 
 def loading_svg(name):
     s = svg(name)
-    css = LOADING_CSS
-    for k, v in LID.items():
-        css = css.replace(k, str(v))
-    s = s.replace("  </defs>\n", "  </defs>" + css, 1)
-    # the lid twice: behind the photos while open, in front of the box when closed
-    lid = s[s.index('  <g class="lid">'):s.index("  </g>\n", s.index('  <g class="lid">')) + len("  </g>\n")]
-    s = s.replace("</svg>", lid.replace('class="lid"', 'class="lid lid-front"') + "</svg>")
+    s = s.replace("  </defs>\n", "  </defs>" + LOADING_CSS, 1)
+    start = s.index('  <g class="lid">')
+    end = s.index("  </g>\n", start) + len("  </g>\n")
+    still = s[start:end].replace('class="lid"', 'class="lid-still"')
+    # behind the photos while open, in front of the box while closed or closing
+    s = s[:start] + still + _lid([(LID_TIMES[2], LID_TIMES[5])], _lid_shape()) + s[end:]
+    # the second one a copy: <use> follows the animated outline
+    s = s.replace("</svg>", _lid([(0, LID_TIMES[2]), (LID_TIMES[5], 1)], '  <use href="#sk-lidMove"/>\n') + "</svg>")
     return s.replace('aria-label="Schuhkarton logo"', 'aria-label="Schuhkarton lädt"')
 
 
