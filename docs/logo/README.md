@@ -24,9 +24,11 @@ The box, the photos, the star and the rays stay the drawing; the logo shows
 the lid of an open frame.
 
 `NAME-loading.svg` in `web/logo/` is the loading animation the UI shows
-instead of a spinner, the loop of the scene (3.2 s): the box is closed, the
-lid swings up and over to the side (a little past and back), the photos
-rise and star and rays appear, the photos sink back and only then the lid
+instead of a spinner, the loop of the scene (3.6 s): the box is closed, the
+lid swings up and over to the side (a little past and back) and the photos
+rise at once, standing straighter; while they stay out they slowly lean out
+to their angle in the drawing and the star and the rays drift outwards; then
+the photos sink back and only then the lid
 swings shut, hopping a little as it lands. The lid's outlines morph from
 frame to frame (SMIL inside the SVG, so it also runs in an `<img>`; with
 reduced motion it shows the logo standing still). Every variant gets its

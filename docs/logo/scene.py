@@ -53,13 +53,15 @@ LID_N = 8          # points of a quarter circle
 CLOSED = ((0.0, 0.0, -30.0), (0.0, 0.0, 0.0))
 OPEN = ((-75.48, -12.4, 225.39), (-62.924, 0.218, 37.912))
 
-# --- time (30 frames a second, the loop 3.2 s) ----------------------------------------
-FPS, FRAMES = 30, 96
-OPEN_AT, OPENED = 5, 20        # the lid swings open, a little past and back
-PHOTOS_UP = (16, 28)           # the photos rise once the lid is up ...
-PHOTOS_DOWN = (39, 49)         # ... and are back in the box ...
-CLOSE_AT, CLOSED_AT = 51, 65   # ... before the lid swings shut,
-HOP, HOP_DONE = 68, 71         # hops a little as it lands and settles
+# --- time (30 frames a second, the loop 3.6 s) ----------------------------------------
+FPS, FRAMES = 30, 108
+OPEN_AT, OPENED = 4, 18        # the lid swings open, a little past and back
+PHOTOS_UP = (9, 21)            # the photos rise as soon as the box is open, standing straighter,
+PHOTOS_OUT = 58                # stay out, slowly leaning out to their angle in the drawing,
+PHOTOS_DOWN = (60, 70)         # and are back in the box
+CLOSE_AT, CLOSED_AT = 71, 85   # before the lid swings shut,
+HOP, HOP_DONE = 88, 91         # hops a little as it lands and settles
+PHOTO_LEAN = 8                 # degrees the photos stand straighter when they come out
 HOP_POSE = ((0.0, 4.0, -22.0), (-5.0, 0.0, 0.0))  # its front a hand's breadth up
 PHOTO_RISE = 287               # how far the photos rise (in the drawing: 260 px on the page)
 
@@ -154,6 +156,7 @@ def make_box(mat_box, mat_rim, mat_inside):
 
 
 def make_photo(name, w, h, x, z, tilt, mat):
+    """A photo standing in the box, tilt degrees to the side as drawn."""
     bpy.ops.mesh.primitive_plane_add(size=1, location=(x, 20, z))
     p = bpy.context.object
     p.name = name
@@ -236,10 +239,13 @@ def animate(lid, photos):
     set_interp(lid, HOP, "SINE", "EASE_IN")          # ... and down
     set_interp(lid, HOP_DONE, "CONSTANT", "AUTO")
     for ob in photos:
-        z = ob.location.z
-        for f, dz in ((0, -PHOTO_RISE), (PHOTOS_UP[0], -PHOTO_RISE), (PHOTOS_UP[1], 0), (PHOTOS_DOWN[0], 0), (PHOTOS_DOWN[1], -PHOTO_RISE), (FRAMES, -PHOTO_RISE)):
-            ob.location.z = z + dz
+        z, tilt = ob.location.z, ob.rotation_euler.y
+        straighter = tilt - math.copysign(math.radians(PHOTO_LEAN), tilt)
+        for f, dz, t in ((0, -PHOTO_RISE, straighter), (PHOTOS_UP[0], -PHOTO_RISE, straighter), (PHOTOS_UP[1], 0, straighter),
+                         (PHOTOS_OUT, 0, tilt), (PHOTOS_DOWN[0], 0, tilt), (PHOTOS_DOWN[1], -PHOTO_RISE, tilt), (FRAMES, -PHOTO_RISE, tilt)):
+            ob.location.z, ob.rotation_euler.y = z + dz, t
             ob.keyframe_insert("location", index=2, frame=f)
+            ob.keyframe_insert("rotation_euler", index=1, frame=f)
 
 
 def lid_frame(scene, cam, lid):
@@ -297,7 +303,7 @@ def main():
         frames.append({"frame": f, **lid_frame(scene, cam, lid)})
     out = {
         "fps": FPS, "frames": FRAMES, "open": OPENED + 5,
-        "photos": {"up": PHOTOS_UP, "down": PHOTOS_DOWN},
+        "photos": {"up": PHOTOS_UP, "out": PHOTOS_OUT, "down": PHOTOS_DOWN, "lean": PHOTO_LEAN},
         "lid": frames,
     }
     (HERE / "lid.json").write_text(json.dumps(out, separators=(",", ":")) + "\n")

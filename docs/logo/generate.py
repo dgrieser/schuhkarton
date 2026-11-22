@@ -571,9 +571,11 @@ def _colours(name):
 # --- loading animation -----------------------------------------------------------
 
 # The logo as a loading animation (web/logo/NAME-loading.svg), the loop of the
-# 3D scene (3.2 s): the box is closed; the lid swings up and over to the side
-# (a little past and back), the photos rise and star and rays appear; the
-# photos sink back into the box and only then the lid swings shut, hopping a
+# 3D scene (3.6 s): the box is closed; the lid swings up and over to the side
+# (a little past and back) and the photos rise at once, standing straighter;
+# while they stay out they slowly lean out to their angle in the drawing and
+# the star and the rays drift outwards; then the photos sink back into the
+# box and only then the lid swings shut, hopping a
 # little as it lands. The lid's outlines morph from frame to frame (SMIL
 # <animate> of d, runs in an <img> too; frames a straight line between their
 # neighbours would draw are left out). It is drawn twice: behind the photos
@@ -588,7 +590,12 @@ def _pct(frame):
 
 
 def loading_css():
-    up, down = LID["photos"]["up"], LID["photos"]["down"]
+    """The photos, the star and the rays in the scene's time: the photos rise standing
+    straighter and slowly lean out to their angle in the drawing while they are out, the
+    star and the rays come and slowly drift outwards to where the drawing has them; then all
+    go before the lid shuts. Where they end up while out is the drawing."""
+    ph = LID["photos"]
+    up, out, down, lean = ph["up"], ph["out"], ph["down"], ph["lean"]
     n = LID["frames"]
     p = lambda f: _pct(min(max(f, 0), n))
     return f"""
@@ -600,24 +607,28 @@ def loading_css():
     .rays {{ animation-name: sk-rays; }}
     .lid-still {{ display: none; }}
     @keyframes sk-p1 {{
-      0%, {p(up[0])} {{ transform: translateY(260px); animation-timing-function: cubic-bezier(.2, .8, .3, 1.2); }}
-      {p(up[1])}, {p(down[0] + 1)} {{ transform: none; animation-timing-function: ease-in; }}
+      0%, {p(up[0])} {{ transform: translateY(260px) rotate({lean}deg); animation-timing-function: cubic-bezier(.2, .8, .3, 1.15); }}
+      {p(up[1])} {{ transform: rotate({lean}deg); animation-timing-function: ease-in-out; }}
+      {p(out)}, {p(down[0])} {{ transform: none; animation-timing-function: ease-in; }}
       {p(down[1])}, 100% {{ transform: translateY(260px); }}
     }}
     @keyframes sk-p2 {{
-      0%, {p(up[0] + 2)} {{ transform: translateY(240px); animation-timing-function: cubic-bezier(.2, .8, .3, 1.25); }}
-      {p(up[1] + 2)}, {p(down[0] - 1)} {{ transform: none; animation-timing-function: ease-in; }}
+      0%, {p(up[0] + 2)} {{ transform: translateY(240px) rotate(-{lean}deg); animation-timing-function: cubic-bezier(.2, .8, .3, 1.2); }}
+      {p(up[1] + 2)} {{ transform: rotate(-{lean}deg); animation-timing-function: ease-in-out; }}
+      {p(out)}, {p(down[0] - 1)} {{ transform: none; animation-timing-function: ease-in; }}
       {p(down[1] - 1)}, 100% {{ transform: translateY(240px); }}
     }}
     @keyframes sk-star {{
-      0%, {p(up[1] - 3)} {{ transform: scale(0) rotate(-90deg); opacity: 0; animation-timing-function: cubic-bezier(.2, .8, .3, 1.4); }}
-      {p(up[1] + 4)}, {p(down[0] - 2)} {{ transform: none; opacity: 1; }}
+      0%, {p(up[1] - 4)} {{ transform: translate(-34px, 34px) scale(0) rotate(-90deg); opacity: 0; animation-timing-function: cubic-bezier(.2, .8, .3, 1.4); }}
+      {p(up[1] + 3)} {{ transform: translate(-30px, 30px); opacity: 1; animation-timing-function: ease-in-out; }}
+      {p(out)}, {p(down[0])} {{ transform: none; opacity: 1; animation-timing-function: ease-in; }}
       {p(down[0] + 6)}, 100% {{ transform: scale(0) rotate(45deg); opacity: 0; }}
     }}
     @keyframes sk-rays {{
-      0%, {p(up[1])} {{ transform: scale(.2); opacity: 0; animation-timing-function: ease-out; }}
-      {p(up[1] + 5)}, {p(down[0] - 2)} {{ transform: none; opacity: 1; }}
-      {p(down[0] + 4)}, 100% {{ transform: scale(.2); opacity: 0; }}
+      0%, {p(up[1] - 1)} {{ transform: translateX(-34px) scale(.2); opacity: 0; animation-timing-function: ease-out; }}
+      {p(up[1] + 5)} {{ transform: translateX(-30px); opacity: 1; animation-timing-function: ease-in-out; }}
+      {p(out)}, {p(down[0])} {{ transform: none; opacity: 1; animation-timing-function: ease-in; }}
+      {p(down[0] + 5)}, 100% {{ transform: translateX(12px) scale(.2); opacity: 0; }}
     }}
     @media (prefers-reduced-motion: reduce) {{
       .p1, .p2, .star, .rays {{ animation: none; }}
@@ -628,7 +639,7 @@ def loading_css():
 """
 
 
-LOOP = 3.2
+LOOP = LID["frames"] / LID["fps"]  # seconds
 
 
 def _num(v):
