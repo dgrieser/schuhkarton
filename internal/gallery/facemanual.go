@@ -506,11 +506,34 @@ func (l *Library) videoFrame(ctx context.Context, it *Item, t float64, long int)
 	}
 	tmp.Close()
 	defer os.Remove(tmp.Name())
-	if err := l.runFFmpeg(ctx, "-ss", fmt.Sprintf("%.3f", max(t, 0)), "-i", l.Path(it), "-map", "0:v:0", "-frames:v", "1",
-		"-vf", scaleLong(long), "-q:v", "3", tmp.Name()); err != nil {
+	err1 := l.runFFmpeg(ctx, "-ss", fmt.Sprintf("%.3f", max(t, 0)), "-i", l.Path(it), "-map", "0:v:0", "-frames:v", "1",
+		"-vf", scaleLong(long), "-q:v", "3", tmp.Name())
+	if err1 == nil {
+		if data, err := os.ReadFile(tmp.Name()); err != nil || len(data) > 0 {
+			return data, err
+		}
+	}
+	// at (or past) the very end, where a stopped video stands: ffmpeg finds
+	// no frame there and writes nothing (or fails, depending on the codec);
+	// the last frame is what was shown
+	if t <= 0 || (it.Duration > 0 && t < it.Duration-2) {
+		if err1 == nil {
+			err1 = errors.New("no frame at this time of the video")
+		}
+		return nil, err1
+	}
+	if err := l.runFFmpeg(ctx, "-sseof", "-1", "-i", l.Path(it), "-map", "0:v:0", "-update", "1",
+		"-vf", scaleLong(long), "-pix_fmt", "yuvj420p", "-q:v", "3", tmp.Name()); err != nil {
+		if err1 != nil {
+			return nil, err1
+		}
 		return nil, err
 	}
-	return os.ReadFile(tmp.Name())
+	data, err := os.ReadFile(tmp.Name())
+	if err == nil && len(data) == 0 {
+		err = errors.New("no frame at this time of the video")
+	}
+	return data, err
 }
 
 // cropSquare cuts a square around r, k times its longer side, clamped to

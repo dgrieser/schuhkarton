@@ -512,3 +512,37 @@ func TestDupesGroupAgainAfterReadFailure(t *testing.T) {
 		t.Errorf("readable again: incomplete %v, fingerprint %q", l.dupe.incomplete, l.dupe.fp)
 	}
 }
+
+// TestDupesKeepTurnedMember: turning a copy (from the viewer, while
+// comparing) keeps it in its group; it is the same picture.
+func TestDupesKeepTurnedMember(t *testing.T) {
+	l, _ := dupeLib(t)
+	groups, _ := l.Dupes()
+	var g DupeGroup
+	for _, x := range groups {
+		if x.Class == DupSame {
+			g = x
+		}
+	}
+	if len(g.Items) != 3 {
+		t.Fatalf("same: %+v", groups)
+	}
+	id := g.Items[1]
+	old := l.Get(id).key
+	if _, err := l.Rotate([]string{id}, 90, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if l.Get(id).key == old {
+		t.Fatal("key did not change")
+	}
+	groups, _ = l.Dupes()
+	for _, x := range groups {
+		if x.ID == g.ID {
+			if len(x.Items) != 3 {
+				t.Errorf("turned copy left its group: %v", relsOfIDs(l, x.Items))
+			}
+			return
+		}
+	}
+	t.Errorf("group gone after turning a copy: %v", groups)
+}

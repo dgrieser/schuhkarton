@@ -574,6 +574,7 @@ func (l *Library) rekey(it *Item, oldKey string, rot int) {
 	if rot == 0 {
 		l.carryDupeSig(it, oldKey, newKey)
 	}
+	l.carryDupeMember(it, oldKey, newKey)
 }
 
 // removeDerivatives deletes everything cached for a key.

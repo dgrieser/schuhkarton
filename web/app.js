@@ -70,7 +70,7 @@
     el.innerHTML = `<span>${esc(msg)}</span>${acts.map(([l]) => `<button type="button">${esc(l)}</button>`).join('')}`;
     el.classList.toggle('act', acts.length > 0);
     // over the viewer or a quick round at the top: the buttons, names and faces are below
-    el.classList.toggle('top', !!document.querySelector('#viewer:not([hidden]), .quiz'));
+    el.classList.toggle('top', !!document.querySelector('#viewer:not([hidden]), .quiz, .dp-cmp'));
     el.classList.add('on');
     clearTimeout(toastT);
     toastT = setTimeout(() => el.classList.remove('on'), ms || (acts.length ? 10000 : 2400));
@@ -1507,7 +1507,7 @@
         [video ? 'play' : 'face', video ? t('Im Video zeigen') : t('Im Bild zeigen'), () => this.showFace(f)],
         user && ['user', f.name ? t('Name ändern …') : t('Benennen …'), () => this.namePop(a, f)],
         user && ['eye-off', f.person ? t('Nicht diese Person') : t('Ausblenden'), () => this.saveFace(f, '')],
-        user && namedPeople().length && ['user', t('Unbekannt'), () => this.noneNamed(f)],
+        user && namedPeople().length && ['user-q', t('Unbekannt'), () => this.noneNamed(f)],
         user && ['face-x', t('Kein Gesicht'), () => this.saveFace(f, '-')],
         user && !f.ok && ['check', t('Bestätigen'), () => this.approveFaces({ faces: [f.idx], ok: true })],
         user && f.mine && !f.manual && ['x', t('Bestätigung aufheben'), () => this.approveFaces({ faces: [f.idx], ok: false })],
@@ -1589,11 +1589,14 @@
         const used = Object.entries({ ...store.get('names-used', {}), [name]: Date.now() }).sort((a, b) => b[1] - a[1]).slice(0, 300);
         store.set('names-used', Object.fromEntries(used));
       }
+      // failed (the server busy or away): once more with a tap, as long as the photo is still shown
+      const failed = (e) => toast(t('Fehler: {e}', { e: String(e).replace(/^\d{3} /, '') }), t('Erneut versuchen'),
+        () => { if (face.multi || this.it === it) this.saveFace(face, name); }, 10000);
       if (face.multi) { // a person in all photos of a selection
         const m = face.multi;
         const res = await post(`/api/items/people/${encodeURIComponent(m.person)}`, { ids: m.ids, name }).catch((e) => ({ error: e.message }));
-        if (!res.error) pendingName(name);
-        if (res.error) { toast(t('Fehler: {e}', { e: String(res.error).replace(/^\d{3} /, '') })); return; }
+        if (res.error) { failed(res.error); return; }
+        pendingName(name);
         const faces = pl(res.n, '{n} Gesicht', '{n} Gesichter');
         const msg = name === '-' ? pl(res.n, '{n} Gesicht entfernt', '{n} Gesichter entfernt')
           : name ? t('{faces} als {name} gespeichert', { faces, name })
@@ -1607,13 +1610,14 @@
         const b = face.box;
         toast(t('Wird gespeichert …'));
         const res = await post(`/api/face/${it.id}/add`, { X: b.x, Y: b.y, W: b.w, H: b.h, t: face.t || 0, name }).catch((e) => ({ error: e.message }));
-        if (res.error) { toast(t('Fehler: {e}', { e: String(res.error).replace(/^\d{3} /, '') })); return; }
+        if (res.error) { failed(res.error); return; }
         pendingName(name, it.id, res.idx);
         toast(name ? t('Als {name} gespeichert', { name }) : t('Gesicht markiert'));
         await this.refreshItem(it);
         return;
       }
-      const res = await post(`/api/face/${it.id}/${face.idx}`, { name });
+      const res = await post(`/api/face/${it.id}/${face.idx}`, { name }).catch((e) => ({ error: e.message }));
+      if (res.error) { failed(res.error); return; }
       pendingName(name, it.id, face.idx);
       if (name === '-') {
         toast(t('Kein Gesicht'), t('Rückgängig'), async () => { await post('/api/faces/labels', { labels: res.undo }); await this.refreshItem(it); });
@@ -1961,7 +1965,7 @@
         ${face.add ? `<div class="row np-acts"><button type="button" data-a="noname">${t('Ohne Namen speichern')}</button><button type="button" data-a="cancel">${t('Abbrechen')}</button></div>`
           : `<div class="row np-acts">${m || face.idx === undefined ? '' : face.mine ? `<button type="button" data-a="unok" title="${t('Bestätigung aufheben')}">${icon('x')}<span>${t('Bestätigung aufheben')}</span></button>`
               : !face.ok ? `<button type="button" data-a="ok" title="${t('Das Gesicht stimmt: es bleibt so, wenn neu gesucht wird')}">${icon('check')}<span>${t('Bestätigen')}</span></button>` : ''}<button type="button" data-a="not">${face.person ? t('Nicht diese Person') : t('Ausblenden')}</button>
-            ${namedPeople().length && !m ? `<button type="button" data-a="nonenamed" title="${t('Keine der Personen mit Namen: wird keiner von ihnen zugeordnet')}">${icon('user')}<span>${t('Unbekannt')}</span></button>` : ''}
+            ${namedPeople().length && !m ? `<button type="button" data-a="nonenamed" title="${t('Keine der Personen mit Namen: wird keiner von ihnen zugeordnet')}">${icon('user-q')}<span>${t('Unbekannt')}</span></button>` : ''}
             <button type="button" data-a="noface" title="${t('Falsch erkannt: kein Gesicht. Wird nicht mehr gezeigt, andere Gesichter bleiben.')}">${icon('face-x')}<span>${t('Kein Gesicht')}</span></button></div>`}`;
       // a sheet in the viewer shares it with the picture; one for a selection lies over the page
       (sheet && !m ? this.el : document.body).appendChild(pop);
@@ -2101,6 +2105,7 @@
         if (i === 0 && e.key === 'ArrowUp' && search) search.focus();
         else bs[clamp(i + (e.key === 'ArrowDown' ? 1 : -1), 0, bs.length - 1)].focus();
       };
+      let suggest = null; // asks for the suggestions (again)
       pop.onclick = (e) => {
         const n = e.target.closest('[data-name]')?.dataset.name;
         if (n) { save(n); return; }
@@ -2110,6 +2115,7 @@
         if (a === 'typed') save(search.value.trim());
         if (a === 'noname' || a === 'not') save('');
         if (a === 'cancel') close();
+        if (a === 'retry') suggest?.();
         if (a === 'noface') save('-');
         if (a === 'nonenamed') { close(); this.noneNamed(face); }
         if (a === 'ok' || a === 'unok') { close(); this.approveFaces({ faces: [face.idx], ok: a === 'ok' }); }
@@ -2136,29 +2142,38 @@
       // the suggestions: a face marked by hand is looked at by the face service first (a moment),
       // a found face has its features already. Meanwhile the list is there as always.
       const it = this.it, state = $('.np-sugstate', pop);
-      const ask = m || !list || !it ? null
+      const ask = () => (m || !list || !it ? null
         : face.add ? post(`/api/face/${it.id}/suggest`, { X: face.box.x, Y: face.box.y, W: face.box.w, H: face.box.h, t: face.t || 0 })
-          : face.idx != null ? api(`/api/face/${it.id}/${face.idx}/suggest`) : null;
-      if (!ask) return;
-      const showState = (text) => { state.textContent = text; state.hidden = !text; };
-      const slow = setTimeout(() => pop.isConnected && showState(t('Suche ähnliche Personen …')), 300);
-      ask.then((res) => {
-        clearTimeout(slow);
-        if (!pop.isConnected) return;
-        sugg = (res.suggestions || []).filter((x) => people.has(x.name));
-        showState(res.recognition === false ? '' : sugg.length ? pl(sugg.length, '{n} Vorschlag', '{n} Vorschläge') : res.error ? t('Gesichtserkennung gerade nicht erreichbar') : face.add ? t('Keine ähnliche Person gefunden') : '');
-        if (!sugg.length) return;
-        const had = document.activeElement;
-        list.innerHTML = `${sorted().map(person).join('')}`;
-        list.appendChild(typed);
-        list.scrollTop = 0;
-        filter(adding() ? nameIn.value.trim() : search?.value.trim() || '');
-        if (had && !had.isConnected) { // a person had the focus: the same one, drawn anew, gets it back
-          const again = had.dataset?.name && $$('[data-name]', list).find((b) => b.dataset.name === had.dataset.name);
-          (again || pop).focus({ preventScroll: true });
-        }
-        position();
-      }).catch(() => { clearTimeout(slow); if (pop.isConnected) showState(''); });
+          : face.idx != null ? api(`/api/face/${it.id}/${face.idx}/suggest`) : null);
+      // the face service away: saving works all the same (the features come later in the
+      // background), only the suggestions are missing; asked again with a tap
+      const showState = (text, retry = false) => {
+        state.innerHTML = `${esc(text)}${retry ? ` <button type="button" class="link np-retry" data-a="retry">${icon('refresh')}<span>${t('Erneut versuchen')}</span></button>` : ''}`;
+        state.hidden = !text;
+      };
+      suggest = () => {
+        const req = ask();
+        if (!req) return;
+        const slow = setTimeout(() => pop.isConnected && showState(t('Suche ähnliche Personen …')), 300);
+        req.then((res) => {
+          clearTimeout(slow);
+          if (!pop.isConnected) return;
+          sugg = (res.suggestions || []).filter((x) => people.has(x.name));
+          showState(res.recognition === false ? '' : sugg.length ? pl(sugg.length, '{n} Vorschlag', '{n} Vorschläge') : res.error ? t('Gesichtserkennung gerade nicht erreichbar') : face.add ? t('Keine ähnliche Person gefunden') : '', !sugg.length && !!res.error);
+          if (!sugg.length) return;
+          const had = document.activeElement;
+          list.innerHTML = `${sorted().map(person).join('')}`;
+          list.appendChild(typed);
+          list.scrollTop = 0;
+          filter(adding() ? nameIn.value.trim() : search?.value.trim() || '');
+          if (had && !had.isConnected) { // a person had the focus: the same one, drawn anew, gets it back
+            const again = had.dataset?.name && $$('[data-name]', list).find((b) => b.dataset.name === had.dataset.name);
+            (again || pop).focus({ preventScroll: true });
+          }
+          position();
+        }).catch(() => { clearTimeout(slow); if (pop.isConnected) showState(t('Gesichtserkennung gerade nicht erreichbar'), true); });
+      };
+      suggest();
     },
 
     // --- zoom & gestures (transform-origin 0 0: screen = layout box + translate + scale)
@@ -3868,7 +3883,7 @@
           <form class="qz-form"><input class="qz-name" list="qzNames" placeholder="${t('Name eingeben …')}" autocomplete="off" enterkeyhint="done"><datalist id="qzNames">${names.map((n) => `<option value="${esc(n)}">`).join('')}</datalist><button class="btn primary" title="Enter">${icon('check')}</button></form>
           <div class="qz-more">${this.done.length ? `<button type="button" class="qz-back" data-q="back" title="${t('Zurück')} (Z)">${icon('left')}</button>` : ''}${this.mode === 'name'
             ? `<button type="button" data-q="noface" title="${t('Kein Gesicht')}">${icon('face-x')}<span>${t('Kein Gesicht')}</span></button><button type="button" data-q="hide" title="${t('Ausblenden')}">${icon('eye-off')}<span>${t('Ausblenden')}</span></button>` : ''}${named.length
-            ? `<button type="button" data-q="nonenamed" title="${this.mode === 'name' ? t('Unbekannt: keine der Personen mit Namen (die ganze Gruppe)') : t('Keine der Personen mit Namen')}">${icon('user')}<span>${t('Unbekannt')}</span></button>` : ''}<button type="button" data-q="skip">${icon('right')}<span>${this.mode === 'name' ? t('Überspringen') : t('Weiter')}</span></button></div>`;
+            ? `<button type="button" data-q="nonenamed" title="${this.mode === 'name' ? t('Unbekannt: keine der Personen mit Namen (die ganze Gruppe)') : t('Keine der Personen mit Namen')}">${icon('user-q')}<span>${t('Unbekannt')}</span></button>` : ''}<button type="button" data-q="skip">${icon('right')}<span>${this.mode === 'name' ? t('Überspringen') : t('Weiter')}</span></button></div>`;
         const form = $('.qz-form', acts), inp = $('.qz-name', acts), row = $('.qz-chips', acts);
         // a mouse wheel scrolls the names sideways
         if (row) {

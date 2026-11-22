@@ -79,6 +79,10 @@ or another one.
   people named now: it is matched to none of them, and names given later
   are not meant. In *Schnell benennen* it goes to the whole group like a
   name, which is then not asked about again.
+  With the face service away, naming, marking a face by hand (also on a
+  video stopped at its end) and "no face" still work; the features follow
+  in the background. Only the name suggestions are missing: the name sheet
+  says so and asks again with *Erneut versuchen*, as does a failed save.
   *Schnell benennen* and *Schnell bestätigen* in the same menu are quick
   rounds of a handful of faces, each zoomed to the face, chosen for the most
   gain per answer. Naming shows one typical, clear face of each of the
@@ -325,9 +329,17 @@ shows what it found:
 
 Each group suggests the best copy and says why (resolution, original
 format, camera date, position, Live Photo, favorites, named people …).
-Compare the copies side by side (differences highlighted; tap a picture to
-zoom), pick what stays, apply. On a desktop: ←/→ groups, 1–9 pick, Enter
-apply, I "Keine Duplikate". *Alle Vorschläge übernehmen* cleans up every
+Compare the copies side by side (differences highlighted), pick what stays,
+apply. On a desktop: ←/→ groups, 1–9 pick, Enter apply, I "Keine
+Duplikate". Tap a picture for the full screen view: one copy at a time, as
+big as it goes; a tap (Space) shows the next copy in the same place, so
+differences jump out. The badge at the top right marks the copy to keep or
+delete (K), the bottom line shows resolution, format, size and whether it
+has a location; the corner button opens it in the viewer (to rotate it,
+say; a turned copy stays in its group). *Schnell prüfen* goes through all
+groups that way: "Keine Duplikate", "Später" or delete, and the next group
+is there at once; the files move in the background, a failed group comes
+back. *Alle Vorschläge übernehmen* cleans up every
 identical and same group at once. The copies that go land in the trash
 (undo there); favorites of every account, names of faces, place, category,
 text, position, a camera date, notes and the AI description move to the
