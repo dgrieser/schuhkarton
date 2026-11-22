@@ -13,22 +13,30 @@
   </defs>
   <style>
     .p1, .p2, .star, .rays { transform-box: fill-box; transform-origin: center; animation: 3.6s infinite both; }
-    .p1 { animation-name: sk-p1; }
-    .p2 { animation-name: sk-p2; }
+    .p1 { animation-name: sk-p1, sk-p1-lean; }
+    .p2 { animation-name: sk-p2, sk-p2-lean; }
     .star { animation-name: sk-star; }
     .rays { animation-name: sk-rays; }
     .lid-still { display: none; }
+    /* rising and leaning out are two animations of their own (translate, rotate): the lean
+       starts with the rise and slows down into the drawing's angle, one move */
     @keyframes sk-p1 {
-      0%, 8.3% { transform: translateY(260px) rotate(8deg); animation-timing-function: cubic-bezier(.2, .8, .3, 1.15); }
-      19.4% { transform: rotate(8deg); animation-timing-function: ease-in-out; }
-      53.7%, 55.6% { transform: none; animation-timing-function: ease-in; }
-      64.8%, 100% { transform: translateY(260px); }
+      0%, 8.3% { translate: 0 260px; animation-timing-function: cubic-bezier(.2, .8, .3, 1.15); }
+      19.4%, 55.6% { translate: 0 0; animation-timing-function: ease-in; }
+      64.8%, 100% { translate: 0 260px; }
+    }
+    @keyframes sk-p1-lean {
+      0%, 8.3% { rotate: 8deg; animation-timing-function: cubic-bezier(.35, .45, .4, 1); }
+      53.7%, 100% { rotate: 0deg; }
     }
     @keyframes sk-p2 {
-      0%, 10.2% { transform: translateY(240px) rotate(-8deg); animation-timing-function: cubic-bezier(.2, .8, .3, 1.2); }
-      21.3% { transform: rotate(-8deg); animation-timing-function: ease-in-out; }
-      53.7%, 54.6% { transform: none; animation-timing-function: ease-in; }
-      63.9%, 100% { transform: translateY(240px); }
+      0%, 10.2% { translate: 0 240px; animation-timing-function: cubic-bezier(.2, .8, .3, 1.2); }
+      21.3%, 54.6% { translate: 0 0; animation-timing-function: ease-in; }
+      63.9%, 100% { translate: 0 240px; }
+    }
+    @keyframes sk-p2-lean {
+      0%, 10.2% { rotate: -8deg; animation-timing-function: cubic-bezier(.35, .45, .4, 1); }
+      53.7%, 100% { rotate: 0deg; }
     }
     @keyframes sk-star {
       0%, 15.7% { transform: translate(-34px, 34px) scale(0) rotate(-90deg); opacity: 0; animation-timing-function: cubic-bezier(.2, .8, .3, 1.4); }

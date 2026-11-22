@@ -57,7 +57,7 @@ OPEN = ((-75.48, -12.4, 225.39), (-62.924, 0.218, 37.912))
 FPS, FRAMES = 30, 108
 OPEN_AT, OPENED = 4, 18        # the lid swings open, a little past and back
 PHOTOS_UP = (9, 21)            # the photos rise as soon as the box is open, standing straighter,
-PHOTOS_OUT = 58                # stay out, slowly leaning out to their angle in the drawing,
+PHOTOS_OUT = 58                # and lean out to their angle in the drawing from the start, slowing down,
 PHOTOS_DOWN = (60, 70)         # and are back in the box
 CLOSE_AT, CLOSED_AT = 71, 85   # before the lid swings shut,
 HOP, HOP_DONE = 88, 91         # hops a little as it lands and settles
@@ -241,11 +241,14 @@ def animate(lid, photos):
     for ob in photos:
         z, tilt = ob.location.z, ob.rotation_euler.y
         straighter = tilt - math.copysign(math.radians(PHOTO_LEAN), tilt)
-        for f, dz, t in ((0, -PHOTO_RISE, straighter), (PHOTOS_UP[0], -PHOTO_RISE, straighter), (PHOTOS_UP[1], 0, straighter),
-                         (PHOTOS_OUT, 0, tilt), (PHOTOS_DOWN[0], 0, tilt), (PHOTOS_DOWN[1], -PHOTO_RISE, tilt), (FRAMES, -PHOTO_RISE, tilt)):
-            ob.location.z, ob.rotation_euler.y = z + dz, t
+        for f, dz in ((0, -PHOTO_RISE), (PHOTOS_UP[0], -PHOTO_RISE), (PHOTOS_UP[1], 0), (PHOTOS_DOWN[0], 0), (PHOTOS_DOWN[1], -PHOTO_RISE), (FRAMES, -PHOTO_RISE)):
+            ob.location.z = z + dz
             ob.keyframe_insert("location", index=2, frame=f)
+        # the lean: from the moment they rise, one move slowing down into the drawing's angle
+        for f, t in ((0, straighter), (PHOTOS_UP[0], straighter), (PHOTOS_OUT, tilt), (FRAMES, tilt)):
+            ob.rotation_euler.y = t
             ob.keyframe_insert("rotation_euler", index=1, frame=f)
+        set_interp(ob, PHOTOS_UP[0], "QUAD", "EASE_OUT")
 
 
 def lid_frame(scene, cam, lid):

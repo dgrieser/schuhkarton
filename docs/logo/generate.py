@@ -601,22 +601,30 @@ def loading_css():
     return f"""
   <style>
     .p1, .p2, .star, .rays {{ transform-box: fill-box; transform-origin: center; animation: {LOOP}s infinite both; }}
-    .p1 {{ animation-name: sk-p1; }}
-    .p2 {{ animation-name: sk-p2; }}
+    .p1 {{ animation-name: sk-p1, sk-p1-lean; }}
+    .p2 {{ animation-name: sk-p2, sk-p2-lean; }}
     .star {{ animation-name: sk-star; }}
     .rays {{ animation-name: sk-rays; }}
     .lid-still {{ display: none; }}
+    /* rising and leaning out are two animations of their own (translate, rotate): the lean
+       starts with the rise and slows down into the drawing's angle, one move */
     @keyframes sk-p1 {{
-      0%, {p(up[0])} {{ transform: translateY(260px) rotate({lean}deg); animation-timing-function: cubic-bezier(.2, .8, .3, 1.15); }}
-      {p(up[1])} {{ transform: rotate({lean}deg); animation-timing-function: ease-in-out; }}
-      {p(out)}, {p(down[0])} {{ transform: none; animation-timing-function: ease-in; }}
-      {p(down[1])}, 100% {{ transform: translateY(260px); }}
+      0%, {p(up[0])} {{ translate: 0 260px; animation-timing-function: cubic-bezier(.2, .8, .3, 1.15); }}
+      {p(up[1])}, {p(down[0])} {{ translate: 0 0; animation-timing-function: ease-in; }}
+      {p(down[1])}, 100% {{ translate: 0 260px; }}
+    }}
+    @keyframes sk-p1-lean {{
+      0%, {p(up[0])} {{ rotate: {lean}deg; animation-timing-function: cubic-bezier(.35, .45, .4, 1); }}
+      {p(out)}, 100% {{ rotate: 0deg; }}
     }}
     @keyframes sk-p2 {{
-      0%, {p(up[0] + 2)} {{ transform: translateY(240px) rotate(-{lean}deg); animation-timing-function: cubic-bezier(.2, .8, .3, 1.2); }}
-      {p(up[1] + 2)} {{ transform: rotate(-{lean}deg); animation-timing-function: ease-in-out; }}
-      {p(out)}, {p(down[0] - 1)} {{ transform: none; animation-timing-function: ease-in; }}
-      {p(down[1] - 1)}, 100% {{ transform: translateY(240px); }}
+      0%, {p(up[0] + 2)} {{ translate: 0 240px; animation-timing-function: cubic-bezier(.2, .8, .3, 1.2); }}
+      {p(up[1] + 2)}, {p(down[0] - 1)} {{ translate: 0 0; animation-timing-function: ease-in; }}
+      {p(down[1] - 1)}, 100% {{ translate: 0 240px; }}
+    }}
+    @keyframes sk-p2-lean {{
+      0%, {p(up[0] + 2)} {{ rotate: -{lean}deg; animation-timing-function: cubic-bezier(.35, .45, .4, 1); }}
+      {p(out)}, 100% {{ rotate: 0deg; }}
     }}
     @keyframes sk-star {{
       0%, {p(up[1] - 4)} {{ transform: translate(-34px, 34px) scale(0) rotate(-90deg); opacity: 0; animation-timing-function: cubic-bezier(.2, .8, .3, 1.4); }}
