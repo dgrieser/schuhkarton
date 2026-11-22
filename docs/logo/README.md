@@ -10,13 +10,17 @@ shows is set under *Einstellungen → Aussehen* or with `ui.logo` (default
 hourly, daily or weekly) in a random order that never shows one twice in a
 row.
 
+The lid is a real one: a rounded slab hinged at the back edge of the box,
+turned and projected the way the box is drawn (`lid_pose` in `generate.py`);
+the logo shows it open.
+
 `NAME-loading.svg` in `web/logo/` is the loading animation the UI shows
-instead of a spinner: the box is closed, the lid swings up quickly while the
-photos rise and star and rays appear, swings down slowly and the box stays
-closed for a second (3.2 s a loop). The lid's outline morphs from the closed
-lid on the box over a thin band at its hinge to the open lid of the drawing
-(SMIL inside the SVG, so it also runs in an `<img>`; with reduced motion it
-shows the logo standing still).
+instead of a spinner: the box is closed, the lid swings open (a little past
+and back), the photos rise and star and rays appear, the photos sink back
+and only then the lid swings shut, so it never meets them; the box stays
+closed for a moment (3.2 s a loop). The lid morphs through its poses every
+few degrees (SMIL inside the SVG, so it also runs in an `<img>`; with
+reduced motion it shows the logo standing still).
 
 ## Variants
 
