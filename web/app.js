@@ -136,13 +136,16 @@
   }
 
   // Something that takes a while: after 400 ms the small loading animation
-  // shows in its places (.activity: the top bar, the viewer), never over
-  // the content. Requests count unless quiet (polls, background refreshes).
+  // shows in its places (.activity: the top bar, the viewer, the header of a
+  // full screen view, made with Busy.mark()), never over the content.
+  // Requests count unless quiet (polls, background refreshes).
   const Busy = {
-    n: 0, timer: 0,
+    n: 0, timer: 0, on: false,
     start() { if (this.n++ === 0) this.timer = setTimeout(() => this.show(true), 400); },
     end() { if (this.n > 0 && --this.n === 0) { clearTimeout(this.timer); this.show(false); } },
-    show(on) { for (const el of document.querySelectorAll('.activity')) el.classList.toggle('on', on); },
+    show(on) { this.on = on; for (const el of document.querySelectorAll('.activity')) el.classList.toggle('on', on); },
+    // for a header drawn while something is under way: shown at once then
+    mark() { return `<span class="activity${this.on ? ' on' : ''}" aria-hidden="true">${loader()}</span>`; },
   };
 
   async function api(path, opts) {
@@ -419,6 +422,9 @@
   // peopleReq: the newest request (an older answer arriving later is dropped); pendingGen: names
   // given here since (kept, the answer may be from before them)
   let peopleReq = 0, pendingGen = 0;
+  // names given in a quick round whose saving is still queued: name -> { n: writes, cover }; they
+  // stay offered though the server does not know them yet
+  const unsaved = new Map();
   async function loadPeople() {
     const req = ++peopleReq, gen = pendingGen;
     const res = await api('/api/people');
@@ -428,6 +434,7 @@
     // undone or given another name meanwhile is gone); one given here since stays until asked again
     const pending = new Map((res.pending || []).map((p) => [p.name, p.cover]));
     if (gen !== pendingGen) for (const [n, c] of S.pending) if (!pending.has(n) && !S.people.some((p) => p.name === n)) pending.set(n, c);
+    for (const [n, u] of unsaved) if (!pending.has(n) && !S.people.some((p) => p.name === n)) pending.set(n, u.cover);
     S.pending = pending;
     S.faceMode = S.config.faces;
     S.peopleById = new Map(S.people.map((p) => [p.id, p]));
@@ -3768,6 +3775,8 @@
   // ---------------------------------------------------------------------------
   const Quiz = {
     el: null, mode: 'name', list: [], i: 0, done: [], stats: null, busy: false, sid: 0,
+    queue: Promise.resolve(), // the answers on their way, one after another
+    pending: 0, // how many: leaving the page asks first while there are any
 
     async open(mode) {
       if (!Account.need('user')) return;
@@ -3778,7 +3787,7 @@
       this.stats = { named: 0, approved: 0, rejected: 0, skipped: 0 };
       const el = (this.el = document.createElement('div'));
       el.className = 'quiz';
-      el.innerHTML = `<div class="qz-top"><b>${mode === 'name' ? t('Schnell benennen') : t('Schnell bestätigen')}</b><span class="qz-prog"></span>
+      el.innerHTML = `<div class="qz-top"><b>${mode === 'name' ? t('Schnell benennen') : t('Schnell bestätigen')}</b><span class="qz-prog"></span>${Busy.mark()}
         <button type="button" class="btn ghost icon qz-x" data-q="close" title="${t('Schließen')} (Esc)">${icon('x')}</button></div>
         <div class="qz-body">${loading()}</div>`;
       document.body.appendChild(el);
@@ -3799,7 +3808,7 @@
       this.sid++;
       removeEventListener('keydown', this.keyFn, true);
       removeEventListener('resize', this.resizeFn);
-      if (!quiet && this.done.length) scheduleReload();
+      if (!quiet && this.done.length) this.queue.then(() => scheduleReload()); // once the answers are saved
       this.done = [];
     },
 
@@ -3807,6 +3816,8 @@
     async round() {
       const body = $('.qz-body', this.el), sid = this.sid;
       body.innerHTML = loading();
+      await this.queue; // the answers given first: their faces are not asked again
+      if (!this.el || sid !== this.sid) return;
       const res = await api(`/api/faces/quiz?mode=${this.mode}&n=12`).catch((e) => ({ error: e.message }));
       if (!this.el || sid !== this.sid) return;
       if (res.error) { body.innerHTML = `<div class="empty"><h2>${t('Fehler: {e}', { e: esc(String(res.error).replace(/^\d{3} /, '')) })}</h2></div>`; return; }
@@ -3820,7 +3831,7 @@
 
     show() {
       const f = this.list[this.i];
-      if (!f) { this.end(); return; }
+      if (!f) { this.finish(); return; }
       $('.qz-prog', this.el).textContent = `${this.i + 1} / ${this.list.length}`;
       const body = $('.qz-body', this.el);
       const info = this.mode === 'name'
@@ -3978,53 +3989,120 @@
       } finally { if (sid === this.sid) this.busy = false; }
     },
 
+    // An answer goes to the server in the background, after the ones before it: the next face
+    // is there at once (saving can take seconds on a small machine while it groups faces).
+    // Going back waits for them. An answer that failed says so and is taken back out (undo).
+    later(fn, undo) {
+      const sid = this.sid;
+      if (this.pending++ === 0) addEventListener('beforeunload', this.leaving);
+      const p = this.queue.then(fn).catch((e) => {
+        if (sid === this.sid) undo(); // the round's list; a round closed meanwhile has none
+        toast(t('Nicht gespeichert: {e}', { e: String(e.message || e).replace(/^\d{3} /, '') }));
+      }).finally(() => { if (--this.pending === 0) removeEventListener('beforeunload', this.leaving); });
+      this.queue = p;
+      return p;
+    },
+    leaving(e) { e.preventDefault(); },
+    // the round done: its summary once every answer is saved (a failed one is not counted)
+    async finish() {
+      const sid = this.sid;
+      if (this.pending) {
+        $('.qz-prog', this.el).textContent = '';
+        $('.qz-body', this.el).innerHTML = loading();
+        this.busy = true;
+        await this.queue;
+        if (sid !== this.sid || !this.el) return;
+        this.busy = false;
+        if (this.list[this.i]) { this.show(); return; } // gone back meanwhile
+      }
+      this.end();
+    },
+    // the undo of an answer given right after "no" goes with the "no"; when that one failed and
+    // is out of the list, the answer becomes a step of its own
+    joined(prev, labels, stat, sid) {
+      if (sid !== this.sid) return;
+      if (this.done.includes(prev)) { prev.labels2 = labels; return; }
+      const at = this.done.findIndex((d) => d.i > prev.i); // in its place among the answers
+      this.done.splice(at < 0 ? this.done.length : at, 0, { f: prev.f, i: prev.i, labels, stat });
+    },
+    // an answer taken back out of the round's list
+    drop(d, counted = true) {
+      const k = this.done.indexOf(d);
+      if (k >= 0) this.done.splice(k, 1);
+      if (counted) this.stats[d.stat] = Math.max(0, this.stats[d.stat] - 1);
+    },
+
     // yes: the face gets the name shown (approved by it), whoever it is grouped with meanwhile
-    async approve(f) {
-      const res = await this.send(() => post(`/api/face/${f.item}/${f.idx}`, { name: f.name }));
-      if (!res) return;
-      this.done.push({ f, i: this.i, labels: res.undo, stat: 'approved' });
+    approve(f) {
+      if (this.busy) return; // going back waits for the answers before
+      const d = { f, i: this.i, stat: 'approved' };
+      this.done.push(d);
       this.stats.approved++;
+      this.later(() => post(`/api/face/${f.item}/${f.idx}`, { name: f.name }).then((r) => { d.labels = r.undo; }), () => this.drop(d));
       this.next();
     },
 
     // not this person: said so, then the right name can be given (or not)
-    async reject(f) {
-      const res = await this.send(() => post(`/api/face/${f.item}/${f.idx}`, { not: f.name })); // the name shown
-      if (!res) return;
-      this.done.push({ f, i: this.i, labels: res.undo, stat: 'rejected' });
+    reject(f) {
+      if (this.busy) return;
+      const d = { f, i: this.i, stat: 'rejected' };
+      this.done.push(d);
       this.stats.rejected++;
+      this.later(() => post(`/api/face/${f.item}/${f.idx}`, { not: f.name }).then((r) => { d.labels = r.undo; }), () => this.drop(d)); // the name shown
       $('.qz-q', this.el).innerHTML = t('Wer ist das dann?');
       this.namePicker(f, false, f.name); // not the name it was said not to be
     },
 
     // none of the people named now (naming: the whole group, as a name would)
-    async noneNamed(f) {
-      const res = await this.send(() => post(`/api/face/${f.item}/${f.idx}`, { noneNamed: true, group: this.mode === 'name' }));
-      if (!res) return;
+    noneNamed(f) {
+      if (this.busy) return;
+      const body = { noneNamed: true, group: this.mode === 'name' };
       const prev = this.done[this.done.length - 1];
-      if (this.mode === 'approve' && prev?.f === f && prev.stat === 'rejected') prev.labels2 = res.undo; // with its "no"
-      else this.done.push({ f, i: this.i, labels: res.undo, stat: 'skipped' });
+      if (this.mode === 'approve' && prev?.f === f && prev.stat === 'rejected') { // with its "no"
+        const sid = this.sid;
+        this.later(() => post(`/api/face/${f.item}/${f.idx}`, body).then((r) => this.joined(prev, r.undo, 'skipped', sid)), () => {});
+      } else {
+        const d = { f, i: this.i, stat: 'skipped' };
+        this.done.push(d);
+        this.later(() => post(`/api/face/${f.item}/${f.idx}`, body).then((r) => { d.labels = r.undo; }), () => this.drop(d, false));
+      }
       this.next();
     },
 
     answerName(f, name, group) {
+      if (this.busy) return;
       store.set('recent-names', [name, ...store.get('recent-names', []).filter((n) => n !== name)].slice(0, 12));
       this.label(f, name, group, 'named');
     },
 
-    async label(f, name, group, stat) {
-      const res = await this.send(() => post(`/api/face/${f.item}/${f.idx}`, { name, group }));
-      if (!res) return;
+    label(f, name, group, stat) {
+      if (this.busy) return;
+      // the name offered on the next faces right away; again once saved (the server's list of
+      // names waiting for grouping, read meanwhile, may not have had it yet)
       pendingName(name, f.item, f.idx);
+      const real = !['-', '~'].includes(name) && !name.startsWith('!'); // a name, not "no face" or "hide"
+      const u = unsaved.get(name) || { n: 0, cover: { item: f.item, idx: f.idx } };
+      if (real) { u.n++; unsaved.set(name, u); }
+      // saved or failed: no longer kept by hand; a failed one goes once the server is asked again
+      const saved = (ok) => {
+        if (!real) return;
+        if (--u.n === 0 && unsaved.get(name) === u) unsaved.delete(name);
+        if (!ok) syncPending();
+      };
+      const send = () => post(`/api/face/${f.item}/${f.idx}`, { name, group }).then((r) => { saved(true); return r; }, (e) => { saved(false); throw e; });
       // after "no" in approving: one step together with it (back undoes both)
       const prev = this.done[this.done.length - 1];
       if (this.mode === 'approve' && prev?.f === f && prev.stat === 'rejected') {
-        prev.labels2 = res.undo;
         prev.named2 = true; // counted as named: back takes it off again
         this.stats.named++;
+        const sid = this.sid;
+        this.later(() => send().then((r) => { this.joined(prev, r.undo, 'named', sid); pendingName(name, f.item, f.idx); }),
+          () => { prev.named2 = false; this.stats.named = Math.max(0, this.stats.named - 1); });
       } else {
-        this.done.push({ f, i: this.i, labels: res.undo, hints: res.hints, stat });
+        const d = { f, i: this.i, stat };
+        this.done.push(d);
         this.stats[stat]++;
+        this.later(() => send().then((r) => { d.labels = r.undo; d.hints = r.hints; pendingName(name, f.item, f.idx); }), () => this.drop(d));
       }
       this.next();
     },
@@ -4036,9 +4114,14 @@
 
     // the last answer undone, its face shown again
     async back() {
+      if (this.busy) return;
+      const sid = this.sid;
+      this.busy = true; // the answers on their way first: what they undo is known then
+      await this.queue;
+      if (sid !== this.sid) return;
+      this.busy = false;
       const d = this.done.pop();
       if (!d) return;
-      const sid = this.sid;
       const ok = await this.send(async () => {
         if (d.labels2) await post('/api/faces/labels', { labels: d.labels2 });
         if (d.labels) await post('/api/faces/labels', { labels: d.labels });
@@ -4076,6 +4159,7 @@
 
     async rematch(btn) {
       btn.disabled = true;
+      await this.queue; // with every answer of the round
       const res = await post('/api/faces/rematch', {}).catch((e) => ({ error: e.message }));
       if (res.error) { toast(t('Fehler: {e}', { e: String(res.error).replace(/^\d{3} /, '') })); btn.disabled = false; return; }
       toast(t('Namen werden im Hintergrund neu zugeordnet ({x})', { x: pl(res.n, '{n} Gesicht', '{n} Gesichter') }));

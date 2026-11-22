@@ -75,6 +75,7 @@ svg.i.fill { fill: currentColor; stroke: none; }
 .activity.on { opacity: 1; visibility: visible; transition: opacity .2s; }
 /* a page that shows its own big loader needs no second one up top */
 body:has(#view .loading) .top .activity { opacity: 0; visibility: hidden; }
+.quiz:has(.qz-body .loading) .qz-top .activity { opacity: 0; visibility: hidden; }
 .activity img { width: 28px; height: 28px; }
 @media (prefers-reduced-motion: reduce) { .activity.on img { animation: busy-pulse 1.2s ease-in-out infinite alternate; } }
 @keyframes busy-pulse { to { opacity: .35; } }

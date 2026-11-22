@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Person is a group of faces: named by the user or found by clustering.
@@ -286,16 +287,30 @@ func (l *Library) LabelFace(item string, idx int, name string) (string, error) {
 	l.promoteNow.Store(true)
 	s := l.people
 	k := FaceRef{item, idx}.key()
+	t0 := time.Now()
 	s.mu.Lock()
+	tLock := time.Since(t0)
 	prev := s.labels[k]
 	s.setLabel(k, strings.TrimSpace(name))
 	s.mu.Unlock()
 	l.notTwin(item, idx) // somebody decided: no automatic putting aside to undo any more
+	t1 := time.Now()
 	if err := s.save(); err != nil {
 		return prev, err
 	}
+	t2 := time.Now()
 	l.regroup()
+	l.logSlowLabel("label", tLock, t2.Sub(t1), time.Since(t2))
 	return prev, nil
+}
+
+// logSlowLabel logs where a slow label waited: for the people lock, saving
+// the labels, grouping again (only right here when not in the background).
+func (l *Library) logSlowLabel(what string, lock, save, regroup time.Duration) {
+	if lock+save+regroup >= time.Second {
+		r := func(d time.Duration) time.Duration { return d.Round(10 * time.Millisecond) }
+		l.logf("slow face %s: lock %s, save %s, regroup %s", what, r(lock), r(save), r(regroup))
+	}
 }
 
 // setLabel labels one face (see LabelFace); the caller holds s.mu. "Not

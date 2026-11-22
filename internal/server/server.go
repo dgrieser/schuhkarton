@@ -539,12 +539,17 @@ func (s *Server) labelFace(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
+	// a quick round waits for every answer: where a slow one waited goes to the log
+	sw := newStopwatch()
+	defer sw.logSlow("face label", 2*time.Second)
 	if it := s.lib.Get(r.PathValue("id")); it == nil || idx < 0 || idx >= len(s.lib.ItemFaces(it)) {
 		http.Error(w, "unknown face", http.StatusBadRequest)
 		return
 	}
+	sw.lap("item")
 	person := s.lib.PersonOf(r.PathValue("id"), idx)
 	old, _ := s.personBefore(person)
+	sw.lap("person")
 	if req.NoneNamed {
 		prev, err := s.lib.RejectNamed(r.PathValue("id"), idx, req.Group)
 		if err != nil {
@@ -557,12 +562,14 @@ func (s *Server) labelFace(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Not != "" {
 		prev, err := s.lib.RejectFace(r.PathValue("id"), idx, req.Not)
+		sw.lap("reject")
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
 		}
 		key := r.PathValue("id") + ":" + strconv.Itoa(idx)
 		s.recordFaces(r, []string{r.PathValue("id")}, map[string]any{"op": faceOp(""), "from": old, "to": "", "n": 1}, map[string]string{key: prev})
+		sw.lap("history")
 		writeJSON(w, r, map[string]any{"ok": true, "undo": map[string]string{key: prev}})
 		return
 	}
@@ -573,7 +580,9 @@ func (s *Server) labelFace(w http.ResponseWriter, r *http.Request) {
 			hints = h
 		}
 	}
+	sw.lap("hints")
 	prev, err := s.lib.LabelFace(r.PathValue("id"), idx, req.Name)
+	sw.lap("label")
 	if err != nil {
 		if hints != nil {
 			s.lib.RestoreHints(hints)
@@ -587,6 +596,7 @@ func (s *Server) labelFace(w http.ResponseWriter, r *http.Request) {
 		before[gallery.HintUndoPrefix+k] = h
 	}
 	s.recordFaces(r, []string{r.PathValue("id")}, map[string]any{"op": faceOp(req.Name), "from": old, "to": strings.TrimSpace(req.Name), "n": 1 + len(hints)}, before)
+	sw.lap("history")
 	// what the face had, for undo (and the hints of its group before)
 	res := map[string]any{"ok": true, "undo": map[string]string{r.PathValue("id") + ":" + strconv.Itoa(idx): prev}}
 	if hints != nil {

@@ -13,6 +13,7 @@ OKLCH (hue turned, chroma scaled, lightness shifted), so the shading of the
 original stays and only the mood changes.
 """
 import io
+import json
 import math
 import os
 import pathlib
@@ -37,11 +38,7 @@ TEMPLATE = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="260 155 720 720" 
     <clipPath id="sk-scene"><rect x="429" y="405" width="238" height="260" rx="19"/></clipPath>
     <clipPath id="sk-inbox"><rect x="260" y="155" width="720" height="640"/></clipPath>
   </defs>
-  <!-- open lid -->
-  <g class="lid">
-  <path fill="url(#sk-lidTop)" d="M306 479C286 451 298 401 322 367C339 341 363 321 401 307L672 222C719 207 740 207 760 220C781 236 795 265 784 294C773 326 745 359 694 392L408 493C357 510 326 515 306 479Z"/>
-  <path fill="url(#sk-lidInside)" d="M324 459C339 420 393 400 463 381L722 307C755 297 773 289 783 299C776 331 740 361 694 392L406 493C361 511 338 507 324 484C320 476 320 468 324 459Z"/>
-  </g>
+  <!-- lid -->
   <!-- box interior -->
   <path fill="url(#sk-rim)" d="M341 567C341 540 374 526 415 526H831C872 526 905 542 905 571C905 598 870 626 823 626H423C376 626 341 599 341 567Z"/>
   <path fill="{interior}" d="M368 566C372 548 399 544 432 544H833C858 544 880 555 880 569C880 583 862 592 835 593H406C381 592 368 581 368 566Z"/>
@@ -491,7 +488,76 @@ def tint(hue, chroma, light):
     return out
 
 
+# --- the lid ------------------------------------------------------------------
+
+# The lid comes from the 3D scene (scene.py, run in Blender): lid.json has it
+# frame by frame as outlines on the page, its silhouette, its top face while
+# that is seen and its inside while that is seen, and whether it is behind
+# the photos. Here they become paths: in the logo the open lid, in the
+# loading animation every frame, morphing from one to the next.
+LID = json.loads((HERE / "lid.json").read_text())
+LID_K = 26  # points of an outline in the animation (all frames the same, so they morph)
+
+
+def _resample(poly, anchor, k):
+    """A closed outline as k points evenly along it, starting next to anchor (the same
+    point of the lid in every frame), always running the same way round."""
+    pts = [tuple(p) for p in poly]
+    area = sum(a[0] * b[1] - b[0] * a[1] for a, b in zip(pts, pts[1:] + pts[:1]))
+    if area < 0:
+        pts.reverse()
+    seg = [math.dist(a, b) for a, b in zip(pts, pts[1:] + pts[:1])]
+    total = sum(seg) or 1
+    # where along the outline the anchor is nearest
+    best, at, run = None, 0.0, 0.0
+    for (a, b), s in zip(zip(pts, pts[1:] + pts[:1]), seg):
+        u = 0.0
+        if s:
+            u = max(0.0, min(1.0, ((anchor[0] - a[0]) * (b[0] - a[0]) + (anchor[1] - a[1]) * (b[1] - a[1])) / (s * s)))
+        q = (a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u)
+        dd = math.dist(q, anchor)
+        if best is None or dd < best:
+            best, at = dd, run + u * s
+        run += s
+    edges = list(zip(pts, pts[1:] + pts[:1]))
+    out = []
+    for i in range(k):
+        target = (at + total * i / k) % total
+        run = 0.0
+        for e, ((a, b), s) in enumerate(zip(edges, seg)):
+            if run + s >= target or e == len(edges) - 1:
+                u = min(1.0, (target - run) / s) if s else 0.0
+                out.append((a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u))
+                break
+            run += s
+    return out
+
+
+def _outline(pts):
+    """A smooth closed outline: through the middles of the edges, the points as controls."""
+    f = lambda v: f"{v:.0f}"
+    mid = [((p[0] + q[0]) / 2, (p[1] + q[1]) / 2) for p, q in zip(pts, pts[1:] + pts[:1])]
+    return f"M{f(mid[-1][0])} {f(mid[-1][1])}" + "".join(f"Q{f(p[0])} {f(p[1])} {f(m[0])} {f(m[1])}" for p, m in zip(pts, mid)) + "Z"
+
+
+def lid_static(frame=None):
+    """The lid of the logo: open (a frame of the scene where it stands open)."""
+    f = LID["lid"][LID["open"] if frame is None else frame]
+    sil = _outline(_resample(f["sil"], f["silAnchor"], 96))
+    if f["top"]:
+        face = f'<path fill="url(#sk-lidTop)" d="{_outline(_resample(f["top"], f["topAnchor"], 96))}"/>'
+        shade = f'<path fill="#000" opacity=".14" d="{sil}"/>'
+    else:
+        face = f'<path fill="url(#sk-lidInside)" d="{_outline(_resample(f["inside"], f["insideAnchor"], 96))}"/>'
+        shade = ""
+    return f'  <g class="lid">\n  <path fill="url(#sk-lidTop)" d="{sil}"/>{shade}\n  {face}\n  </g>\n'
+
+
 def svg(name):
+    return _colours(name).replace("  <!-- lid -->\n", lid_static())
+
+
+def _colours(name):
     if name == "negative":  # like a film negative, the photos too
         return TEMPLATE.format(**{k: "#%06x" % (0xffffff - int(h[1:], 16)) for k, h in ORIGINAL.items()})
     if name in TINTS:
@@ -504,62 +570,195 @@ def svg(name):
 
 # --- loading animation -----------------------------------------------------------
 
-# The logo as a loading animation (web/logo/NAME-loading.svg): the box is
-# closed, opens quickly, the photos rise, star and rays appear; then it closes
-# slowly and stays closed for a second. CSS inside the SVG, so it also runs in
-# an <img>. The open state is the plain drawing; without motion (reduced
-# motion) it stays like that.
-LOADING_CSS = """
+# The logo as a loading animation (web/logo/NAME-loading.svg), the loop of the
+# 3D scene (3.6 s): the box is closed; the lid swings up and over to the side
+# (a little past and back) and the photos rise at once, standing straighter;
+# while they stay out they slowly lean out to their angle in the drawing and
+# the star and the rays drift outwards; then the photos sink back into the
+# box and only then the lid swings shut, hopping a
+# little as it lands. The lid's outlines morph from frame to frame (SMIL
+# <animate> of d, runs in an <img> too; frames a straight line between their
+# neighbours would draw are left out). It is drawn twice: behind the photos
+# (where the drawing has it) once it is lifted above the box, in front of the
+# box while closed or nearly; the two look the same where they swap. Without
+# motion (reduced motion) the plain logo stands still.
+LID_TOLERANCE = 2.0  # px: how far a left-out frame may be from where the morph draws it
+
+
+def _pct(frame):
+    return f"{100 * frame / LID['frames']:.1f}".rstrip("0").rstrip(".") + "%"
+
+
+def loading_css():
+    """The photos, the star and the rays in the scene's time: the photos rise standing
+    straighter and slowly lean out to their angle in the drawing while they are out, the
+    star and the rays come and slowly drift outwards to where the drawing has them; then all
+    go before the lid shuts. Where they end up while out is the drawing."""
+    ph = LID["photos"]
+    up, out, down, lean = ph["up"], ph["out"], ph["down"], ph["lean"]
+    n = LID["frames"]
+    p = lambda f: _pct(min(max(f, 0), n))
+    return f"""
   <style>
-    .lid, .p1, .p2, .star, .rays { transform-box: fill-box; transform-origin: center; animation: 3.2s infinite both; }
-    .lid { animation-name: sk-lid; }
-    .lid-front { animation-name: sk-lid, sk-front; }
-    .p1 { animation-name: sk-p1; }
-    .p2 { animation-name: sk-p2; }
-    .star { animation-name: sk-star; }
-    .rays { animation-name: sk-rays; }
-    @keyframes sk-lid {
-      0%, 4% { transform: translate(LIDXpx, LIDYpx) rotate(LIDAdeg) scale(LIDS, 1); animation-timing-function: cubic-bezier(.2, .8, .3, 1.15); }
-      16%, 30% { transform: none; animation-timing-function: cubic-bezier(.5, 0, .4, 1); }
-      68%, 100% { transform: translate(LIDXpx, LIDYpx) rotate(LIDAdeg) scale(LIDS, 1); }
-    }
-    @keyframes sk-front { 0%, 6% { opacity: 1; } 7%, 62% { opacity: 0; } 63%, 100% { opacity: 1; } }
-    @keyframes sk-p1 {
-      0%, 7% { transform: translateY(260px); animation-timing-function: cubic-bezier(.2, .8, .3, 1.2); }
-      20%, 36% { transform: none; animation-timing-function: ease-in; }
-      60%, 100% { transform: translateY(260px); }
-    }
-    @keyframes sk-p2 {
-      0%, 10% { transform: translateY(240px); animation-timing-function: cubic-bezier(.2, .8, .3, 1.25); }
-      23%, 33% { transform: none; animation-timing-function: ease-in; }
-      57%, 100% { transform: translateY(240px); }
-    }
-    @keyframes sk-star {
-      0%, 17% { transform: scale(0) rotate(-90deg); opacity: 0; animation-timing-function: cubic-bezier(.2, .8, .3, 1.4); }
-      26%, 34% { transform: none; opacity: 1; }
-      44%, 100% { transform: scale(0) rotate(45deg); opacity: 0; }
-    }
-    @keyframes sk-rays {
-      0%, 22% { transform: scale(.2); opacity: 0; animation-timing-function: ease-out; }
-      29%, 34% { transform: none; opacity: 1; }
-      42%, 100% { transform: scale(.2); opacity: 0; }
-    }
-    @media (prefers-reduced-motion: reduce) { .lid, .p1, .p2, .star, .rays { animation: none; } .lid-front { display: none; } }
+    .p1, .p2, .star, .rays {{ transform-box: fill-box; transform-origin: center; animation: {LOOP}s infinite both; }}
+    .p1 {{ animation-name: sk-p1, sk-p1-lean; }}
+    .p2 {{ animation-name: sk-p2, sk-p2-lean; }}
+    .star {{ animation-name: sk-star; }}
+    .rays {{ animation-name: sk-rays; }}
+    .lid-still {{ display: none; }}
+    /* rising and leaning out are two animations of their own (translate, rotate): the lean
+       starts with the rise and slows down into the drawing's angle, one move */
+    @keyframes sk-p1 {{
+      0%, {p(up[0])} {{ translate: 0 260px; animation-timing-function: cubic-bezier(.2, .8, .3, 1.15); }}
+      {p(up[1])}, {p(down[0])} {{ translate: 0 0; animation-timing-function: ease-in; }}
+      {p(down[1])}, 100% {{ translate: 0 260px; }}
+    }}
+    @keyframes sk-p1-lean {{
+      0%, {p(up[0])} {{ rotate: {lean}deg; animation-timing-function: cubic-bezier(.35, .45, .4, 1); }}
+      {p(out)}, 100% {{ rotate: 0deg; }}
+    }}
+    @keyframes sk-p2 {{
+      0%, {p(up[0] + 2)} {{ translate: 0 240px; animation-timing-function: cubic-bezier(.2, .8, .3, 1.2); }}
+      {p(up[1] + 2)}, {p(down[0] - 1)} {{ translate: 0 0; animation-timing-function: ease-in; }}
+      {p(down[1] - 1)}, 100% {{ translate: 0 240px; }}
+    }}
+    @keyframes sk-p2-lean {{
+      0%, {p(up[0] + 2)} {{ rotate: -{lean}deg; animation-timing-function: cubic-bezier(.35, .45, .4, 1); }}
+      {p(out)}, 100% {{ rotate: 0deg; }}
+    }}
+    @keyframes sk-star {{
+      0%, {p(up[1] - 4)} {{ transform: translate(-34px, 34px) scale(0) rotate(-90deg); opacity: 0; animation-timing-function: cubic-bezier(.2, .8, .3, 1.4); }}
+      {p(up[1] + 3)} {{ transform: translate(-30px, 30px); opacity: 1; animation-timing-function: ease-in-out; }}
+      {p(out)}, {p(down[0])} {{ transform: none; opacity: 1; animation-timing-function: ease-in; }}
+      {p(down[0] + 6)}, 100% {{ transform: scale(0) rotate(45deg); opacity: 0; }}
+    }}
+    @keyframes sk-rays {{
+      0%, {p(up[1] - 1)} {{ transform: translateX(-34px) scale(.2); opacity: 0; animation-timing-function: ease-out; }}
+      {p(up[1] + 5)} {{ transform: translateX(-30px); opacity: 1; animation-timing-function: ease-in-out; }}
+      {p(out)}, {p(down[0])} {{ transform: none; opacity: 1; animation-timing-function: ease-in; }}
+      {p(down[0] + 5)}, 100% {{ transform: translateX(12px) scale(.2); opacity: 0; }}
+    }}
+    @media (prefers-reduced-motion: reduce) {{
+      .p1, .p2, .star, .rays {{ animation: none; }}
+      .lid-move {{ display: none; }}
+      .lid-still {{ display: inline; }}
+    }}
   </style>
 """
-# the closed lid: turned flat and moved onto the box, a little wider
-LID = {"LIDX": 82, "LIDY": 172, "LIDA": 17.5, "LIDS": 1.13}
+
+
+LOOP = LID["frames"] / LID["fps"]  # seconds
+
+
+def _num(v):
+    return f"{v:.4f}".rstrip("0").rstrip(".") or "0"
+
+
+def _show(when, attr="visibility"):
+    """Shown in the stretches of the loop in when (pairs of fractions). display hides a
+    whole group; visibility would give way to a child shown by its own."""
+    on, off = ("inline", "none") if attr == "display" else ("visible", "hidden")
+    times, vals = [0.0], [off]
+    for a, b in when:
+        times += [a, b]
+        vals += [on, off]
+    if len(times) > 1 and times[1] == 0:
+        times, vals = times[1:], vals[1:]
+    if times[-1] >= 1:
+        times, vals = times[:-1], vals[:-1]
+    return (f'<animate attributeName="{attr}" dur="{LOOP}s" repeatCount="indefinite" calcMode="discrete" '
+            f'keyTimes="{";".join(map(_num, times))}" values="{";".join(vals)}"/>')
+
+
+def _spans(flags):
+    """The stretches of the loop where a frame's flag is set (a frame lasts until the next)."""
+    n, spans, start = LID["frames"], [], None
+    for i, on in enumerate(flags):
+        if on and start is None:
+            start = i / n
+        elif not on and start is not None:
+            spans.append((start, i / n))
+            start = None
+    if start is not None:
+        spans.append((start, 1.0))
+    return spans
+
+
+def _lid_frames():
+    """Every frame's three outlines as LID_K points each; an outline not seen in a frame
+    takes the shape of the nearest frame where it is (hidden there, it only must morph)."""
+    frames = LID["lid"]
+    out = {"sil": [_resample(f["sil"], f["silAnchor"], LID_K) for f in frames]}
+    for part in ("top", "inside"):
+        seen = [i for i, f in enumerate(frames) if f[part]]
+        shapes = []
+        for i, f in enumerate(frames):
+            j = min(seen, key=lambda s: abs(s - i))
+            shapes.append(_resample(frames[j][part], frames[j][part + "Anchor"], LID_K))
+        out[part] = shapes
+    return out
+
+
+def _keep(shapes):
+    """The frames to keep: the morph between two kept ones stays within LID_TOLERANCE of
+    every frame left out between them."""
+    n = len(shapes["sil"])
+    pts = [sum((shapes[k][i] for k in ("sil", "top", "inside")), []) for i in range(n)]
+
+    def err(a, b):
+        worst = 0.0
+        for i in range(a + 1, b):
+            u = (i - a) / (b - a)
+            for p, q, r in zip(pts[a], pts[b], pts[i]):
+                worst = max(worst, math.dist((p[0] + (q[0] - p[0]) * u, p[1] + (q[1] - p[1]) * u), r))
+        return worst
+
+    keep, i = [0], 0
+    while i < n - 1:
+        j = i + 1
+        while j + 1 < n and err(i, j + 1) <= LID_TOLERANCE:
+            j += 1
+        keep.append(j)
+        i = j
+    return keep
+
+
+def _lid_moving():
+    shapes = _lid_frames()
+    keep = _keep(shapes)
+    times = ";".join(_num(i / LID["frames"]) for i in keep)
+
+    def morph(part):
+        vals = ";".join(_outline(shapes[part][i]) for i in keep)
+        return f'<animate attributeName="d" dur="{LOOP}s" repeatCount="indefinite" keyTimes="{times}" values="{vals}"/>'
+
+    frames = LID["lid"]
+    top = _spans([bool(f["top"]) for f in frames])
+    inside = _spans([bool(f["inside"]) for f in frames])
+    first = lambda part: _outline(shapes[part][0])
+    return (f'  <g id="sk-lidMove">\n'
+            f'  <g fill="url(#sk-lidTop)"><path id="sk-lidS" d="{first("sil")}">{morph("sil")}</path></g>\n'
+            # the sides a shade darker while the top face is seen (the open lid as drawn: not)
+            f'  <use href="#sk-lidS" fill="#000" opacity=".14">{_show(top)}</use>\n'
+            f'  <path fill="url(#sk-lidTop)" d="{first("top")}">{morph("top")}{_show(top)}</path>\n'
+            f'  <path fill="url(#sk-lidInside)" d="{first("inside")}" visibility="hidden">{morph("inside")}{_show(inside)}</path>\n'
+            f'  </g>\n')
 
 
 def loading_svg(name):
     s = svg(name)
-    css = LOADING_CSS
-    for k, v in LID.items():
-        css = css.replace(k, str(v))
-    s = s.replace("  </defs>\n", "  </defs>" + css, 1)
-    # the lid twice: behind the photos while open, in front of the box when closed
-    lid = s[s.index('  <g class="lid">'):s.index("  </g>\n", s.index('  <g class="lid">')) + len("  </g>\n")]
-    s = s.replace("</svg>", lid.replace('class="lid"', 'class="lid lid-front"') + "</svg>")
+    s = s.replace("  </defs>\n", "  </defs>" + loading_css(), 1)
+    start = s.index('  <g class="lid">')
+    end = s.index("  </g>\n", start) + len("  </g>\n")
+    still = s[start:end].replace('class="lid"', 'class="lid lid-still"', 1)
+    behind = [f["behind"] for f in LID["lid"]]
+    # the class on a wrapper without animations: reduced motion hides it, a SMIL display
+    # animation would win over that on the group itself
+    back = f'  <g class="lid-move"><g>{_show(_spans(behind), "display")}\n{_lid_moving()}  </g></g>\n'
+    front = (f'  <g class="lid-move"><g>{_show(_spans([not b for b in behind]), "display")}\n'
+             f'  <use href="#sk-lidMove"/>\n  </g></g>\n')
+    s = s[:start] + still + back + s[end:]
+    s = s.replace("</svg>", front + "</svg>")
     return s.replace('aria-label="Schuhkarton logo"', 'aria-label="Schuhkarton lädt"')
 
 
@@ -586,7 +785,6 @@ const fs = require('fs');
 
 
 def render(jobs):
-    import json
     with tempfile.TemporaryDirectory() as tmp:
         js, spec = os.path.join(tmp, "render.js"), os.path.join(tmp, "jobs.json")
         pathlib.Path(js).write_text(RENDER_JS)

@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Quick rounds: a handful of faces, one after the other, for somebody to
@@ -459,7 +460,9 @@ func (l *Library) RejectFace(item string, idx int, name string) (string, error) 
 	l.promoteNow.Store(true)
 	s := l.people
 	k := FaceRef{item, idx}.key()
+	t0 := time.Now()
 	s.mu.Lock()
+	tLock := time.Since(t0)
 	prev := s.labels[k]
 	if approvedLabel(prev) && prev != name {
 		s.mu.Unlock()
@@ -471,10 +474,13 @@ func (l *Library) RejectFace(item string, idx int, name string) (string, error) 
 		s.labels[k] = withReject(prev, name)
 	}
 	s.mu.Unlock()
+	t1 := time.Now()
 	if err := s.save(); err != nil {
 		return prev, err
 	}
+	t2 := time.Now()
 	l.regroup()
+	l.logSlowLabel("reject", tLock, t2.Sub(t1), time.Since(t2))
 	return prev, nil
 }
 

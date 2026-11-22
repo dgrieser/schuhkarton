@@ -352,7 +352,7 @@
           <button class="btn ghost icon" data-close title="${esc(t('Schließen (Esc)'))}">${icon('x')}</button>
           <div class="grow"><b><em class="dp-cls ${g.class}">${esc(t(CLASS[g.class]))}</em> ${esc(t('{n} Kopien', { n: num(g.items.length) }))}</b>
             <small>${esc(t(CLASS_HINT[g.class]))}</small></div>
-          <span class="dp-pos">${num(i + 1)} / ${num(list.length)}</span>
+          ${SK.Busy.mark()}<span class="dp-pos">${num(i + 1)} / ${num(list.length)}</span>
           <button class="btn ghost icon" data-prev ${i === 0 ? 'disabled' : ''} title="${esc(t('Vorige Gruppe (←)'))}">${icon('left')}</button>
           <button class="btn ghost icon" data-next ${i >= list.length - 1 ? 'disabled' : ''} title="${esc(t('Nächste Gruppe (→)'))}">${icon('right')}</button>
         </header>
@@ -422,20 +422,23 @@
     document.body.appendChild(el);
     document.body.classList.add('locked');
     let pos = at, mi = member, shown = null, ended = false;
-    // the badge goes keep, delete, keep only this one, keep: cyc remembers what the other copies
-    // were before, the last step brings that back
-    let cyc = null;
+    // The badge says what happens to the copy shown: kept alone ("Nur dieses behalten"), kept
+    // with others ("Behalten") or deleted ("Kommt weg"). A tap goes keep, keep only this one,
+    // delete and keep again: a deleted copy joins the ones kept (one kept alone before is then
+    // kept with it), "keep only this one" deletes the others and remembers them, keeping this
+    // copy again after "delete" brings them back. A copy kept alone goes to delete and back.
+    let mem = null; // { g, id, others }: what "keep only this one" put aside
     const markOf = (g, id) => {
       const k = keepOf(g);
-      if (cyc && cyc.g === g.id && cyc.id === id && cyc.only && k.size === 1 && k.has(id)) return 'only';
-      return k.has(id) ? 'keep' : 'drop';
+      if (!k.has(id)) return 'drop';
+      return k.size === 1 && g.items.length > 1 ? 'only' : 'keep';
     };
     const cycle = (g, id) => {
       const k = keepOf(g), st = markOf(g, id);
-      if (!cyc || cyc.g !== g.id || cyc.id !== id) cyc = { g: g.id, id, before: new Set(k), only: false };
-      if (st === 'keep') { const n = new Set(k); n.delete(id); D.keep.set(g.id, n); }
-      else if (st === 'drop' && g.items.length > 1) { D.keep.set(g.id, new Set([id])); cyc.only = true; }
-      else { D.keep.set(g.id, new Set([...cyc.before, id])); cyc = null; }
+      if (mem && (mem.g !== g.id || mem.id !== id)) mem = null; // another copy decided meanwhile
+      if (st === 'keep') { mem = { g: g.id, id, others: [...k].filter((x) => x !== id) }; D.keep.set(g.id, new Set([id])); }
+      else if (st === 'only') { const n = new Set(k); n.delete(id); D.keep.set(g.id, n); }
+      else { D.keep.set(g.id, new Set([...k, ...(mem?.others || []), id])); mem = null; }
     };
     // what was decided this round: group id -> { what: apply, ignore or later, freed }; a group
     // whose decision failed in the background is in the list again and does not count
@@ -472,7 +475,7 @@
       ended = true;
       shown = null; // the pictures are gone
       const left = visible().length, st = stats();
-      el.innerHTML = `<div class="qz-top"><b>${esc(t('Duplikate schnell prüfen'))}</b><span class="qz-prog"></span>
+      el.innerHTML = `<div class="qz-top"><b>${esc(t('Duplikate schnell prüfen'))}</b><span class="qz-prog"></span>${SK.Busy.mark()}
           <button class="btn ghost icon qz-x" data-x title="${esc(t('Schließen (Esc)'))}">${icon('x')}</button></div>
         <div class="qz-body"><div class="qz-end">${icon('check')}<h2>${esc(t('Runde fertig'))}</h2>
           <p>${esc([st.done && (st.done === 1 ? t('1 Gruppe bereinigt · {s} frei', { s: size(st.freed) }) : t('{n} Gruppen bereinigt · {s} frei', { n: num(st.done), s: size(st.freed) })), st.ignored && t('{n} keine Duplikate', { n: num(st.ignored) }), st.later && t('{n} für später', { n: num(st.later) })].filter(Boolean).join(' · ') || t('Nichts entschieden'))}</p>
@@ -509,7 +512,7 @@
       // the pictures stay when only the copy shown changes: switching is instant
       if (shown !== g.id) {
         shown = g.id;
-        el.innerHTML = `<div class="qz-top"><b>${esc(round ? t('Duplikate schnell prüfen') : t('Vergleichen'))}</b><span class="qz-prog"></span>
+        el.innerHTML = `<div class="qz-top"><b>${esc(round ? t('Duplikate schnell prüfen') : t('Vergleichen'))}</b><span class="qz-prog"></span>${SK.Busy.mark()}
             <button class="btn ghost icon qz-x" data-x title="${esc(t('Schließen (Esc)'))}">${icon('x')}</button></div>
           <div class="dp-stage" title="${esc(t('Tippen: nächste Kopie (Leertaste)'))}">${g.items.map((y) => `<img alt="" draggable="false" src="${large(y)}" data-id="${esc(y)}">`).join('')}
             <div class="dp-info"><div class="grow"><b></b><small></small></div>
@@ -547,7 +550,7 @@
       const mark = $('[data-mark]', el);
       mark.className = `dp-mark ${kept ? 'keep' : 'drop'}`;
       mark.innerHTML = `${icon(kept ? 'star' : 'trash', kept ? 'fill' : '')}<span>${esc({ keep: t('Behalten'), drop: t('Kommt weg'), only: t('Nur dieses behalten') }[st])}</span>`;
-      mark.title = `${{ keep: t('Behalten – tippen: kommt weg'), drop: g.items.length > 1 ? t('Kommt weg – tippen: nur dieses behalten') : t('Kommt weg – tippen: behalten'), only: t('Nur dieses behalten – tippen: behalten') }[st]} (K)`;
+      mark.title = `${{ keep: t('Behalten – tippen: nur dieses behalten'), drop: t('Kommt weg – tippen: behalten'), only: t('Nur dieses behalten – tippen: kommt weg') }[st]} (K)`;
       mark.setAttribute('aria-pressed', String(kept));
       $('.dp-info b', el).innerHTML = [
         `<span class="${best((y) => (y.w || 0) * (y.h || 0)) ? 'best' : ''}">${esc(x.w ? `${x.w} × ${x.h}` : '–')}</span>`,

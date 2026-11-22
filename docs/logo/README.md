@@ -10,11 +10,29 @@ shows is set under *Einstellungen → Aussehen* or with `ui.logo` (default
 hourly, daily or weekly) in a random order that never shows one twice in a
 row.
 
+The lid comes from a 3D scene: `scene.py` builds it in Blender (the box as
+drawn, a camera looking at it the way the drawing does, and a rounded lid
+with a lip and a recess, its open pose fitted to the drawing's lid),
+animates it and writes every frame of the lid as outlines on the page to
+`lid.json`; `schuhkarton.blend` is the scene, to look at or change:
+
+```sh
+blender -b --python docs/logo/scene.py
+```
+
+The box, the photos, the star and the rays stay the drawing; the logo shows
+the lid of an open frame.
+
 `NAME-loading.svg` in `web/logo/` is the loading animation the UI shows
-instead of a spinner: the box is closed, opens quickly while the photos rise
-and star and rays appear, closes slowly and stays closed for a second (3.2 s
-a loop; CSS inside the SVG, so it also runs in an `<img>`; with reduced
-motion it shows the logo standing still).
+instead of a spinner, the loop of the scene (3.6 s): the box is closed, the
+lid swings up and over to the side (a little past and back) and the photos
+rise at once, standing straighter; while they stay out they slowly lean out
+to their angle in the drawing and the star and the rays drift outwards; then
+the photos sink back and only then the lid
+swings shut, hopping a little as it lands. The lid's outlines morph from
+frame to frame (SMIL inside the SVG, so it also runs in an `<img>`; with
+reduced motion it shows the logo standing still). Every variant gets its
+colours on the same frames.
 
 ## Variants
 
@@ -93,8 +111,9 @@ muted ones only the box changes its colour; the scenes change the photos too. PN
 
 ## Building
 
-All files here and the icons in `web/` come from `generate.py` (needs Python
-with Pillow, and Node with Playwright and Chromium):
+All files here and the icons in `web/` come from `generate.py` and
+`lid.json` (needs Python with Pillow, and Node with Playwright and
+Chromium):
 
 ```sh
 python3 docs/logo/generate.py
