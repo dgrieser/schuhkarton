@@ -243,6 +243,27 @@ func (l *Library) carryDupeSig(it *Item, oldKey, newKey string) {
 	}
 }
 
+// carryDupeMember keeps a file in the groups it is in when Schuhkarton
+// itself changed it (turned it, wrote its metadata): it is still the same
+// picture, only its cache key moved, and the groups would otherwise drop it
+// until the next grouping (see sameDupeFile). A turned picture is hashed
+// again then; the hashes cover all turns, so it stays in its group.
+func (l *Library) carryDupeMember(it *Item, oldKey, newKey string) {
+	l.dupe.mu.Lock()
+	defer l.dupe.mu.Unlock()
+	if k, ok := l.dupe.keys[it.ID]; !ok || k != oldKey {
+		return
+	}
+	// a new map: callers read the old one without the lock
+	keys := make(map[string]string, len(l.dupe.keys))
+	for id, k := range l.dupe.keys {
+		keys[id] = k
+	}
+	keys[it.ID] = newKey
+	l.dupe.keys = keys
+	l.markDupesDirty()
+}
+
 // --- hashing ------------------------------------------------------------------
 
 const hashN = 32

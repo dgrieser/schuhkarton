@@ -22,17 +22,19 @@
 
   document.querySelector('body > svg')?.insertAdjacentHTML('beforeend', `
     <symbol id="i-dupes" viewBox="0 0 24 24"><rect x="3.5" y="7.5" width="12" height="12" rx="2.5"/><path d="M8.5 7.5V6a2.5 2.5 0 0 1 2.5-2.5h7A2.5 2.5 0 0 1 20.5 6v7a2.5 2.5 0 0 1-2.5 2.5h-2.5"/></symbol>
-    <symbol id="i-star" viewBox="0 0 24 24"><path d="m12 3.5 2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z"/></symbol>`);
+    <symbol id="i-star" viewBox="0 0 24 24"><path d="m12 3.5 2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z"/></symbol>
+    <symbol id="i-pin-off" viewBox="0 0 24 24"><path d="M12 21s-7-6.1-7-11.5A7 7 0 0 1 19 9.5C19 14.9 12 21 12 21z"/><path d="M4 4l16 16"/></symbol>`);
 
   // ---------------------------------------------------------------------------
   // data
   // ---------------------------------------------------------------------------
-  const D = { groups: [], members: {}, status: null, filter: 'all', loaded: false, keep: new Map() };
+  // pending: groups decided whose files still move in the background (not shown again meanwhile)
+  const D = { groups: [], members: {}, status: null, filter: 'all', loaded: false, keep: new Map(), pending: new Set() };
 
   async function load() {
     const r = await api('/api/admin/dupes').catch(() => null);
     if (!r) return false;
-    D.groups = r.groups || [];
+    D.groups = (r.groups || []).filter((g) => !D.pending.has(g.id));
     D.members = r.members || {};
     D.status = r.status;
     D.loaded = true;
@@ -137,7 +139,8 @@
       await new Promise((r) => setTimeout(r, 1200)); // the server groups again
       for (const g of groups) D.keep.delete(g.id);
       await load();
-      if (SK.route().view === 'duplikate') SK.render();
+      if (SK.route().view === 'duplikate' && !cmp && !full) SK.render();
+      redraw();
       ui.trashCount();
     }, err ? 20000 : 9000);
     if (r.warnings.length && !err) ui.report(r, t('Mit Hinweisen'));
@@ -147,19 +150,54 @@
     return true;
   }
 
-  async function ignore(g) {
-    const r = await ui.call('/api/admin/dupes/ignore', { ids: g.items });
-    if (!r) return false;
-    D.groups = D.groups.filter((x) => x.id !== g.id);
+  // a decision on one group: off the list at once (the next group is there right away), the
+  // files move in the background one group after the other; back in the list when that failed
+  let queue = Promise.resolve();
+  const later = (fn) => (queue = queue.catch(() => {}).then(fn));
+  const redraws = new Set(); // what shows the groups and needs drawing anew after a change
+  const redraw = () => { for (const f of [...redraws]) f(); };
+  function take(g) {
+    const at = D.groups.indexOf(g);
+    if (at >= 0) D.groups.splice(at, 1);
+    D.pending.add(g.id);
     recount();
-    toast(t('Gemerkt: keine Duplikate'));
+    return Math.max(0, at);
+  }
+  function settle(g, at, ok) {
+    D.pending.delete(g.id);
+    if (ok || D.groups.some((x) => x.id === g.id)) return;
+    D.groups.splice(Math.min(at, D.groups.length), 0, g);
+    recount();
+    redraw();
+  }
+  function resolveSoon(g) {
+    if (!keepOf(g).size || !removeOf(g).length) { toast(t('Nichts zu löschen')); return false; }
+    const at = take(g);
+    later(async () => settle(g, at, await apply([g]).catch(() => false)));
+    return true;
+  }
+  function ignoreSoon(g) {
+    const at = take(g);
+    later(async () => {
+      const r = await ui.call('/api/admin/dupes/ignore', { ids: g.items }).catch(() => null);
+      settle(g, at, !!r);
+      if (r) toast(t('Gemerkt: keine Duplikate'));
+    });
+    return true;
+  }
+  // which copies stay: one for the same picture, any number (at least one) for a series
+  function toggleKeep(g, id) {
+    const k = new Set(keepOf(g));
+    if (g.class !== 'aehnlich') { k.clear(); k.add(id); } // one stays
+    else if (k.has(id)) { if (k.size > 1) k.delete(id); else { toast(t('Mindestens eine Kopie muss bleiben')); return false; } } else k.add(id);
+    D.keep.set(g.id, k);
     return true;
   }
 
   // ---------------------------------------------------------------------------
   // the list
   // ---------------------------------------------------------------------------
-  let pollT = 0;
+  let pollT = 0, listRedraw = null;
   SK.VIEWS.duplikate = async (view) => {
     clearTimeout(pollT);
     if (!admin()) {
@@ -185,7 +223,7 @@
       <div class="head"><div><h1>${esc(t('Duplikate'))}</h1>
         <div class="sub">${st.mode === 'off' ? esc(t('Die Suche nach Duplikaten ist ausgeschaltet (Einstellungen → Fotos).'))
           : total ? esc(t('{n} Gruppen · bis zu {s} frei', { n: num(total), s: size(st.save) })) : esc(t('Keine Duplikate gefunden'))}</div></div>
-        <div class="tools"><button class="btn" data-rescan title="${esc(t('Alles neu vergleichen'))}">${icon('refresh')}<span>${esc(t('Neu prüfen'))}</span></button></div></div>
+        <div class="tools">${list.length ? `<button class="btn primary" data-round title="${esc(t('Gruppe für Gruppe im Vollbild entscheiden'))}">${icon('dupes')}<span>${esc(t('Schnell prüfen'))}</span></button>` : ''}<button class="btn dp-rescan" data-rescan title="${esc(t('Alles neu vergleichen'))}">${icon('refresh')}<span>${esc(t('Neu prüfen'))}</span></button></div></div>
       ${scanning ? `<div class="dp-scan">${SK.ring(st.todo ? st.done / st.todo : 0)}<span>${esc(t('Fotos werden verglichen'))} · ${num(st.done)} / ${num(st.todo)}</span></div>` : ''}
       <div class="dp-chips">${chip('all', 'Alle', total)}${chip('identisch', 'Identisch', c.identisch || 0)}${chip('gleich', 'Gleich', c.gleich || 0)}${chip('aehnlich', 'Ähnlich', c.aehnlich || 0)}</div>
       ${D.filter !== 'all' ? `<p class="dp-hint">${esc(t(CLASS_HINT[D.filter]))}</p>` : ''}
@@ -205,13 +243,17 @@
       if (!ok) return;
       const b = $('[data-bulk]', view);
       if (b) b.disabled = true;
-      await apply(sure, { bulk: true });
+      await later(() => apply(sure, { bulk: true }));
       draw(view);
     });
+    $('[data-round]', view)?.addEventListener('click', () => fullView(visible().map((g) => g.id), 0, { round: true }));
     $('.dp-list', view)?.addEventListener('click', (e) => {
       const c = e.target.closest('[data-g]');
       if (c) compare(list, +c.dataset.g, view);
     });
+    redraws.delete(listRedraw);
+    listRedraw = () => { if (view.isConnected && !cmp && !full && SK.route().view === 'duplikate') draw(view); };
+    redraws.add(listRedraw);
     if (scanning) pollT = setTimeout(() => { if (SK.route().view === 'duplikate') SK.VIEWS.duplikate(view); }, 4000);
   }
 
@@ -245,6 +287,7 @@
       el.remove();
       document.body.classList.remove('locked');
       removeEventListener('keydown', onKey, true);
+      redraws.delete(render);
       cmp = null;
       if (view.isConnected) draw(view);
     };
@@ -256,6 +299,7 @@
       render();
     };
     const render = () => {
+      if (full) return; // drawn when the full screen view closes
       list = visible();
       if (!list.length) { close(); return; }
       i = Math.min(i, list.length - 1);
@@ -306,7 +350,7 @@
           const x = m(id), kept = k.has(id);
           const why = g.reasons?.[id];
           return `<article class="dp-card ${kept ? 'keep' : 'drop'}" data-id="${esc(id)}">
-            <button class="dp-pic" data-zoom title="${esc(t('Groß ansehen'))}"><img alt="" src="${large(id)}" loading="lazy">
+            <button class="dp-pic" data-zoom title="${esc(t('Im Vollbild vergleichen'))}"><img alt="" src="${large(id)}" loading="lazy">
               ${x.kind === 2 ? `<span class="badge br">${icon('play', 'fill')}</span>` : ''}<span class="dp-num">${n + 1}</span></button>
             <button class="btn dp-keep ${kept ? 'on' : ''}" data-keep aria-pressed="${kept}">${icon('star', kept ? 'fill' : '')}<span>${esc(kept ? t('Behalten') : t('Kommt weg'))}</span></button>
             ${why ? `<p class="dp-why">${icon('spark')}${esc(t('Vorschlag: {w}', { w: why.map((w) => t(w)).join(', ') }))}</p>` : ''}
@@ -324,44 +368,25 @@
       $('[data-prev]', el).onclick = () => next(-1);
       $('[data-next]', el).onclick = () => next(1);
       $('[data-skip]', el).onclick = () => (i >= list.length - 1 ? close() : next(1));
-      $('[data-ignore]', el).onclick = async () => { if (await ignore(g)) render(); };
-      $('[data-apply]', el).onclick = async () => {
-        // at once something to see: moving files on a share takes a moment
-        const b = $('[data-apply]', el);
-        el.classList.add('dp-busy');
-        for (const x of $$('.dp-foot button, [data-keep], [data-prev], [data-next]', el)) x.disabled = true;
-        b.innerHTML = `${SK.loader('dp-spin')}<span>${esc(t('Wird gelöscht …'))}</span>`;
-        const ok = await apply([g]);
-        el.classList.remove('dp-busy');
-        render(); // the next group, or this one again after an error
-        return ok;
-      };
+      $('[data-ignore]', el).onclick = () => { if (ignoreSoon(g)) render(); };
+      // the next group at once, the files move in the background
+      $('[data-apply]', el).onclick = () => { if (resolveSoon(g)) render(); };
       for (const c of $$('.dp-card', el)) {
         const id = c.dataset.id;
-        $('[data-keep]', c).onclick = () => toggleKeep(g, id);
-        $('[data-zoom]', c).onclick = () => {
-          const items = g.items.map((x) => S.byId.get(x)).filter(Boolean);
-          const at = items.findIndex((x) => x.id === id);
-          if (items.length) SK.Viewer.open(items, Math.max(0, at));
-        };
+        $('[data-keep]', c).onclick = () => { if (toggleKeep(g, id)) render(); };
+        $('[data-zoom]', c).onclick = () => fullView([g.id], 0, { member: Math.max(0, g.items.indexOf(id)), onClose: render });
       }
     };
-    const toggleKeep = (g, id) => {
-      const k = new Set(keepOf(g));
-      if (g.class !== 'aehnlich') { k.clear(); k.add(id); } // one stays
-      else if (k.has(id)) { if (k.size > 1) k.delete(id); else { toast(t('Mindestens eine Kopie muss bleiben')); return; } } else k.add(id);
-      D.keep.set(g.id, k);
-      render();
-    };
+    redraws.add(render);
     const onKey = (e) => {
-      if (SK.Viewer.open_ || $('.adm-dlg') || SK.isTyping(e.target)) return;
+      if (full || SK.Viewer.open_ || $('.adm-dlg') || SK.isTyping(e.target)) return;
       const g = list[i];
       if (e.key === 'Escape') close();
       else if (e.key === 'ArrowRight') next(1);
       else if (e.key === 'ArrowLeft') next(-1);
       else if (e.key === 'Enter') { if (!$('[data-apply]', el)?.disabled) $('[data-apply]', el).click(); }
       else if (e.key === 'i' || e.key === 'I') $('[data-ignore]', el).click();
-      else if (/^[1-9]$/.test(e.key) && g && g.items[+e.key - 1]) toggleKeep(g, g.items[+e.key - 1]);
+      else if (/^[1-9]$/.test(e.key) && g && g.items[+e.key - 1]) { if (toggleKeep(g, g.items[+e.key - 1])) render(); }
       else return;
       e.preventDefault();
       e.stopPropagation();
@@ -369,6 +394,183 @@
     addEventListener('keydown', onKey, true);
     render();
     cmp = { close };
+  }
+
+  // ---------------------------------------------------------------------------
+  // full screen: one copy at a time, as big as it goes; a tap shows the next copy in
+  // the same place, without a transition, so differences jump out. As a quick round
+  // (round) it goes through the groups ids; from a group's comparison only that one.
+  // ---------------------------------------------------------------------------
+  let full = null;
+  function fullView(ids, at, { round = false, member = 0, onClose = null } = {}) {
+    full?.close();
+    const el = document.createElement('div');
+    el.className = 'quiz dp-full';
+    el.setAttribute('role', 'dialog');
+    el.setAttribute('aria-modal', 'true');
+    document.body.appendChild(el);
+    document.body.classList.add('locked');
+    let pos = at, mi = member, shown = null, ended = false;
+    // what was decided this round: group id -> { what: apply, ignore or later, freed }; a group
+    // whose decision failed in the background is in the list again and does not count
+    const decided = new Map();
+    const stats = () => {
+      const s = { done: 0, freed: 0, ignored: 0, later: 0 };
+      for (const [id, d] of decided) {
+        if (d.what === 'later') s.later++;
+        else if (D.groups.some((g) => g.id === id)) continue;
+        else if (d.what === 'apply') { s.done++; s.freed += d.freed; } else s.ignored++;
+      }
+      return s;
+    };
+    const group = () => D.groups.find((g) => g.id === ids[pos]);
+    const close = () => {
+      el.remove();
+      removeEventListener('keydown', onKey, true);
+      watch.disconnect();
+      redraws.delete(render);
+      full = null;
+      if (!cmp) document.body.classList.remove('locked');
+      if (onClose) onClose();
+      else redraw();
+    };
+    // the next group still there (from pos on, d: +1 or -1); none: the end
+    const step = (d) => {
+      for (let p = pos + d; p >= 0 && p < ids.length; p += d) {
+        if (D.groups.some((g) => g.id === ids[p])) { pos = p; mi = 0; render(); return; }
+      }
+      if (d > 0) end();
+    };
+    const end = () => {
+      if (!round) { close(); return; }
+      ended = true;
+      shown = null; // the pictures are gone
+      const left = visible().length, st = stats();
+      el.innerHTML = `<div class="qz-top"><b>${esc(t('Duplikate schnell prüfen'))}</b><span class="qz-prog"></span>
+          <button class="btn ghost icon qz-x" data-x title="${esc(t('Schließen (Esc)'))}">${icon('x')}</button></div>
+        <div class="qz-body"><div class="qz-end">${icon('check')}<h2>${esc(t('Runde fertig'))}</h2>
+          <p>${esc([st.done && (st.done === 1 ? t('1 Gruppe bereinigt · {s} frei', { s: size(st.freed) }) : t('{n} Gruppen bereinigt · {s} frei', { n: num(st.done), s: size(st.freed) })), st.ignored && t('{n} keine Duplikate', { n: num(st.ignored) }), st.later && t('{n} für später', { n: num(st.later) })].filter(Boolean).join(' · ') || t('Nichts entschieden'))}</p>
+          <div class="qz-endacts">${left ? `<button type="button" class="primary" data-again>${icon('dupes')}<span>${esc(t('Noch eine Runde ({n})', { n: num(left) }))}</span></button>` : ''}
+            <button type="button" data-x>${esc(t('Schließen'))}</button></div></div></div>`;
+      for (const b of $$('[data-x]', el)) b.onclick = close;
+      $('[data-again]', el)?.addEventListener('click', () => {
+        ids = visible().map((g) => g.id);
+        pos = 0; mi = 0; ended = false; shown = null;
+        decided.clear();
+        if (ids.length) render(); else end();
+      });
+    };
+    const decide = (what) => {
+      const g = group();
+      if (!g) return;
+      const freed = freedOf(g);
+      if (what === 'apply' && !resolveSoon(g)) return;
+      if (what === 'ignore') ignoreSoon(g);
+      decided.set(g.id, { what, freed });
+      step(1);
+    };
+    const render = () => {
+      if (ended) { end(); return; } // a decision failed meanwhile: the summary anew
+      const g = group();
+      if (!g) { step(1); return; }
+      document.body.classList.add('locked'); // the viewer, closing over it, unlocks
+      mi = Math.min(mi, g.items.length - 1);
+      const k = keepOf(g), id = g.items[mi], x = m(id), kept = k.has(id), removeN = removeOf(g).length;
+      const ms = g.items.map(m);
+      const best = (f) => { const v = ms.map(f), top = Math.max(...v); return new Set(v).size > 1 && f(x) === top; };
+      const it = S.byId.get(id);
+      const when = x.taken ? `${SK.fmtDay(x.taken)} ${SK.fmtTime(x.taken)}` : '';
+      // the pictures stay when only the copy shown changes: switching is instant
+      if (shown !== g.id) {
+        shown = g.id;
+        el.innerHTML = `<div class="qz-top"><b>${esc(round ? t('Duplikate schnell prüfen') : t('Vergleichen'))}</b><span class="qz-prog"></span>
+            <button class="btn ghost icon qz-x" data-x title="${esc(t('Schließen (Esc)'))}">${icon('x')}</button></div>
+          <div class="dp-stage" title="${esc(t('Tippen: nächste Kopie (Leertaste)'))}">${g.items.map((y) => `<img alt="" draggable="false" src="${large(y)}" data-id="${esc(y)}">`).join('')}
+            <span class="dp-tag"><em class="dp-cls ${g.class}">${esc(t(CLASS[g.class]))}</em><b></b></span>
+            <button type="button" class="dp-mark" data-mark></button>
+            <div class="dp-info"><div class="grow"><b></b><small></small></div>
+              <button type="button" class="dp-open" data-open title="${esc(t('Im Betrachter öffnen, z. B. zum Drehen (O)'))}">${icon('expand')}</button></div></div>
+          <div class="dp-thumbs">${g.items.map((y, n) => `<button type="button" data-m="${n}" title="${esc(t('Kopie {n}', { n: n + 1 }))} (${n + 1})"><img alt="" src="${thumb(y)}"><i></i></button>`).join('')}</div>
+          <div class="dp-qacts"><span class="dp-sum"></span>
+            <div class="dp-qbtns"><button type="button" data-ignore title="${esc(t('Diese Fotos nicht mehr als Duplikate zeigen (I)'))}">${esc(t('Keine Duplikate'))}</button>
+            <button type="button" data-later title="${esc(t('Später entscheiden (→)'))}">${esc(t('Später'))}</button>
+            <button type="button" class="primary" data-apply title="${esc(t('Übernehmen (Enter)'))}"></button></div></div>`;
+        $('[data-x]', el).onclick = close;
+        // a tap on the picture (not on its buttons, whose content is drawn anew meanwhile)
+        $('.dp-stage', el).addEventListener('click', (e) => {
+          if (!e.composedPath().every((n) => n.tagName !== 'BUTTON')) return;
+          mi = (mi + 1) % group().items.length;
+          render();
+        });
+        $('[data-mark]', el).onclick = () => { const gg = group(); if (gg && toggleKeep(gg, gg.items[mi])) render(); };
+        $('[data-open]', el).onclick = () => openViewer();
+        $('.dp-thumbs', el).onclick = (e) => { const b = e.target.closest('[data-m]'); if (b) { mi = +b.dataset.m; render(); } };
+        $('[data-ignore]', el).onclick = () => decide('ignore');
+        $('[data-later]', el).onclick = () => decide('later');
+        $('[data-apply]', el).onclick = () => decide('apply');
+      }
+      $('.qz-prog', el).textContent = ids.length > 1 ? `${num(Math.min(pos + 1, ids.length))} / ${num(ids.length)}` : '';
+      for (const img of $$('.dp-stage img', el)) {
+        img.hidden = img.dataset.id !== id;
+        if (it && img.dataset.id === id && img.getAttribute('src') !== large(id)) img.src = large(id); // turned meanwhile
+      }
+      const stage = $('.dp-stage', el);
+      stage.classList.toggle('keep', kept);
+      stage.classList.toggle('drop', !kept);
+      $('.dp-tag b', el).textContent = `${mi + 1} / ${g.items.length}`;
+      const mark = $('[data-mark]', el);
+      mark.className = `dp-mark ${kept ? 'keep' : 'drop'}`;
+      mark.innerHTML = `${icon(kept ? 'star' : 'trash', kept ? 'fill' : '')}<span>${esc(kept ? t('Behalten') : t('Kommt weg'))}</span>`;
+      mark.title = `${kept ? t('Behalten – tippen: kommt weg') : t('Kommt weg – tippen: behalten')} (K)`;
+      mark.setAttribute('aria-pressed', String(kept));
+      $('.dp-info b', el).innerHTML = [
+        `<span class="${best((y) => (y.w || 0) * (y.h || 0)) ? 'best' : ''}">${esc(x.w ? `${x.w} × ${x.h}` : '–')}</span>`,
+        esc(x.ext || ''),
+        `<span class="${best((y) => y.size || 0) ? 'best' : ''}">${esc(size(x.size))}</span>`,
+        `<span class="dp-gps ${x.gps || x.place ? 'on' : ''}" title="${esc(x.gps || x.place ? t('Mit Ortsangabe') : t('Ohne Ortsangabe'))}">${icon(x.gps || x.place ? 'pin' : 'pin-off')}</span>`,
+      ].filter(Boolean).join('<i>·</i>');
+      $('.dp-info small', el).textContent = [when, x.album, x.name].filter(Boolean).join(' · ');
+      $$('.dp-thumbs [data-m]', el).forEach((b, n) => {
+        b.classList.toggle('on', n === mi);
+        b.classList.toggle('keep', k.has(g.items[n]));
+        b.querySelector('i').innerHTML = icon(k.has(g.items[n]) ? 'star' : 'trash', k.has(g.items[n]) ? 'fill' : '');
+      });
+      $('.dp-sum', el).textContent = k.size ? t('{k} bleibt · {r} in den Papierkorb ({s})', { k: num(k.size), r: num(removeN), s: size(freedOf(g)) }) : t('Mindestens eine Kopie muss bleiben');
+      const ap = $('[data-apply]', el);
+      ap.disabled = !k.size || !removeN;
+      ap.innerHTML = `${icon('trash')}<span>${esc(removeN ? t('{n} löschen', { n: num(removeN) }) : t('Übernehmen'))}</span>`;
+    };
+    const openViewer = () => {
+      const g = group();
+      if (!g) return;
+      const items = g.items.map((y) => S.byId.get(y)).filter(Boolean);
+      const at2 = items.findIndex((y) => y.id === g.items[mi]);
+      if (items.length) SK.Viewer.open(items, Math.max(0, at2));
+    };
+    // back from the viewer (turned a copy?): the pictures anew
+    const watch = new MutationObserver(() => { if (!SK.Viewer.open_) { shown = null; render(); } });
+    if (SK.Viewer.el) watch.observe(SK.Viewer.el, { attributes: true, attributeFilter: ['hidden'] });
+    const onKey = (e) => {
+      if (SK.Viewer.open_ || $('.adm-dlg') || $('.adm-menu') || SK.isTyping(e.target)) return;
+      const g = group();
+      if (e.key === 'Escape') close();
+      else if (ended) return;
+      else if (e.key === ' ' && g) { mi = (mi + (e.shiftKey ? g.items.length - 1 : 1)) % g.items.length; render(); }
+      else if ((e.key === 'k' || e.key === 'K') && g) { if (toggleKeep(g, g.items[mi])) render(); }
+      else if (/^[1-9]$/.test(e.key) && g && g.items[+e.key - 1]) { mi = +e.key - 1; render(); }
+      else if (e.key === 'Enter') { if (!$('[data-apply]', el)?.disabled) decide('apply'); }
+      else if (e.key === 'i' || e.key === 'I') decide('ignore');
+      else if (e.key === 'ArrowRight') decide('later');
+      else if (e.key === 'ArrowLeft') step(-1);
+      else if (e.key === 'o' || e.key === 'O') openViewer();
+      else return;
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    addEventListener('keydown', onKey, true);
+    redraws.add(render);
+    full = { close };
+    if (ids.length) render(); else end();
   }
 
   // ---------------------------------------------------------------------------

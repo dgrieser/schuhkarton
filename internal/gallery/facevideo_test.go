@@ -205,3 +205,33 @@ func TestRedoVideoCrops(t *testing.T) {
 		}
 	}
 }
+
+// TestVideoFrameAtEnd: a video stopped at its very end gives its last frame
+// (ffmpeg writes nothing for a time at or past the end).
+func TestVideoFrameAtEnd(t *testing.T) {
+	ff, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skip("ffmpeg not installed")
+	}
+	root := t.TempDir()
+	out, err := exec.Command(ff, "-v", "error", "-f", "lavfi", "-i", "testsrc=s=640x360:r=25:d=4", "-c:v", "mpeg4",
+		filepath.Join(root, "clip.mp4")).CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v %s", err, out)
+	}
+	l, err := Open(Options{Roots: []Root{{Name: "B", Path: root}}, CacheDir: t.TempDir(), Workers: 1, FFmpeg: ff})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(l.Close)
+	if err := l.Scan(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	v := byRel(l, "clip.mp4")
+	for _, at := range []float64{1, 4, 4.5} {
+		img, err := l.frameImage(context.Background(), v, at)
+		if err != nil || img.Bounds().Dx() != 640 {
+			t.Errorf("frame at %v: %v", at, err)
+		}
+	}
+}
