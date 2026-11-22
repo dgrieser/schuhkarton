@@ -333,10 +333,11 @@ Compare the copies side by side (differences highlighted), pick what stays,
 apply. On a desktop: ←/→ groups, 1–9 pick, Enter apply, I "Keine
 Duplikate". Tap a picture for the full screen view: one copy at a time, as
 big as it goes; a tap (Space) shows the next copy in the same place, so
-differences jump out. The badge at the top right marks the copy to keep or
-delete (K), the bottom line shows resolution, format, size and whether it
-has a location; the corner button opens it in the viewer (to rotate it,
-say; a turned copy stays in its group). *Schnell prüfen* goes through all
+differences jump out. The badge at the bottom right goes keep, delete,
+keep only this one and back to keep with the other copies as they were (K);
+deleting every copy of a group is allowed. The top line shows resolution,
+format, size and whether it has a location; the corner button opens it in
+the viewer (to rotate it, say; a turned copy stays in its group). *Schnell prüfen* goes through all
 groups that way: "Keine Duplikate", "Später" or delete, and the next group
 is there at once; the files move in the background, a failed group comes
 back. *Alle Vorschläge übernehmen* cleans up every

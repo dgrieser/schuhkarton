@@ -1451,7 +1451,8 @@ func (l *Library) IgnoreDupes(ids []string) error {
 	return l.saveDupes()
 }
 
-// DupeResolution is one group decided: keep these, trash those.
+// DupeResolution is one group decided: keep these, trash those. Keep may be
+// empty: then every copy goes to the trash and nothing is merged.
 type DupeResolution struct {
 	Keep   []string `json:"keep"`
 	Remove []string `json:"remove"`
@@ -1466,16 +1467,19 @@ func (l *Library) ResolveDupes(rs []DupeResolution, by string) (EditResult, int6
 	var freed int64
 	var remove []string
 	for _, r := range rs {
-		if len(r.Keep) == 0 || len(r.Remove) == 0 {
+		if len(r.Remove) == 0 {
 			continue
 		}
 		l.dupe.mu.Lock()
 		keys := l.dupe.keys
 		l.dupe.mu.Unlock()
-		keep := l.Get(r.Keep[0])
-		if keep == nil || !l.sameDupeFile(keys, keep.ID) || !l.fileUnchanged(keep) {
-			res.warn("Element nicht gefunden")
-			continue
+		var keep *Item
+		if len(r.Keep) > 0 {
+			keep = l.Get(r.Keep[0])
+			if keep == nil || !l.sameDupeFile(keys, keep.ID) || !l.fileUnchanged(keep) {
+				res.warn("Element nicht gefunden")
+				continue
+			}
 		}
 		kept := map[string]bool{}
 		for _, id := range r.Keep {
@@ -1495,7 +1499,9 @@ func (l *Library) ResolveDupes(rs []DupeResolution, by string) (EditResult, int6
 		if len(rem) == 0 {
 			continue
 		}
-		l.mergeInto(keep, rem, by, &res)
+		if keep != nil {
+			l.mergeInto(keep, rem, by, &res)
+		}
 		for _, it := range rem {
 			remove = append(remove, it.ID)
 			freed += it.Size
