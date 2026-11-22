@@ -304,6 +304,28 @@ func TestResolveDupesMerges(t *testing.T) {
 	}
 }
 
+// nothing kept: every copy goes to the trash
+func TestResolveDupesAll(t *testing.T) {
+	l, _ := dupeLib(t)
+	groups, _ := l.Dupes()
+	g := groups[0]
+	res, freed, err := l.ResolveDupes([]DupeResolution{{Remove: g.Items}}, "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Changed != len(g.Items) || freed <= 0 {
+		t.Fatalf("result %+v freed %d", res, freed)
+	}
+	for _, id := range g.Items {
+		if l.Get(id) != nil {
+			t.Errorf("%s still in the library", id)
+		}
+	}
+	if len(l.TrashList()) != len(g.Items) {
+		t.Errorf("trash has %d entries, want %d", len(l.TrashList()), len(g.Items))
+	}
+}
+
 func TestRankCopies(t *testing.T) {
 	l := &Library{opt: Options{Roots: []Root{{Name: "B", Path: "/x"}}}, favs: map[string]map[string]bool{}, edits: map[string]*Override{}}
 	l.people = newPeopleStore("", 0.48, 0.42, 0.75)

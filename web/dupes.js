@@ -72,8 +72,15 @@
   const visible = () => D.groups.filter((g) => D.filter === 'all' || g.class === D.filter);
   const keepOf = (g) => D.keep.get(g.id) || new Set(g.keep);
   const removeOf = (g) => g.items.filter((id) => !keepOf(g).has(id));
-  const freedOf = (g) => removeOf(g).reduce((s, id) => s + (D.members[id]?.size || 0), 0);
+  const freedOf = (g, keep = keepOf(g)) => g.items.filter((id) => !keep.has(id)).reduce((s, id) => s + (D.members[id]?.size || 0), 0);
+  // the bulk cleanup promises that the best copy stays: a group left with nothing kept (decided
+  // in the full screen view, then skipped) falls back to the suggestion there
+  const bulkKeep = (g) => (keepOf(g).size ? keepOf(g) : new Set(g.keep));
   const m = (id) => D.members[id] || {};
+  const sumOf = (g) => {
+    const k = keepOf(g).size, r = removeOf(g).length, s = size(freedOf(g));
+    return k ? t('{k} bleibt · {r} in den Papierkorb ({s})', { k: num(k), r: num(r), s }) : t('Alle {r} in den Papierkorb ({s})', { r: num(r), s });
+  };
   const thumb = (id) => { const it = S.byId.get(id); return it ? SK.thumbURL(it) : `/t/${id}/s.jpg?v=${m(id).v || ''}`; };
   const large = (id) => { const it = S.byId.get(id); return it ? SK.largeURL(it) : `/t/${id}/m.jpg?v=${m(id).v || ''}`; };
 
@@ -86,7 +93,10 @@
   const BATCH = 25;
   let busy = false;
   async function apply(groups, { bulk = false } = {}) {
-    const todo = groups.map((g) => ({ g, r: { keep: [...keepOf(g)], remove: removeOf(g) } })).filter((x) => x.r.keep.length && x.r.remove.length);
+    const todo = groups.map((g) => {
+      const keep = bulk ? bulkKeep(g) : keepOf(g);
+      return { g, r: { keep: [...keep], remove: g.items.filter((id) => !keep.has(id)) } };
+    }).filter((x) => x.r.remove.length);
     if (!todo.length) { toast(t('Nichts zu löschen')); return false; }
     if (busy) return false;
     busy = true;
@@ -171,7 +181,7 @@
     redraw();
   }
   function resolveSoon(g) {
-    if (!keepOf(g).size || !removeOf(g).length) { toast(t('Nichts zu löschen')); return false; }
+    if (!removeOf(g).length) { toast(t('Nichts zu löschen')); return false; }
     const at = take(g);
     later(async () => settle(g, at, await apply([g]).catch(() => false)));
     return true;
@@ -185,11 +195,12 @@
     });
     return true;
   }
-  // which copies stay: one for the same picture, any number (at least one) for a series
+  // which copies stay: one for the same picture, any number for a series; none kept puts every
+  // copy in the trash
   function toggleKeep(g, id) {
     const k = new Set(keepOf(g));
     if (g.class !== 'aehnlich') { k.clear(); k.add(id); } // one stays
-    else if (k.has(id)) { if (k.size > 1) k.delete(id); else { toast(t('Mindestens eine Kopie muss bleiben')); return false; } } else k.add(id);
+    else if (k.has(id)) k.delete(id); else k.add(id);
     D.keep.set(g.id, k);
     return true;
   }
@@ -216,8 +227,8 @@
     const scanning = st.mode === 'on' && (st.running || st.done < st.todo);
     const list = visible();
     const sure = D.groups.filter((g) => g.class !== 'aehnlich' && (D.filter === 'all' || D.filter === g.class));
-    const sureFreed = sure.reduce((s, g) => s + freedOf(g), 0);
-    const sureFiles = sure.reduce((s, g) => s + removeOf(g).length, 0);
+    const sureFreed = sure.reduce((s, g) => s + freedOf(g, bulkKeep(g)), 0);
+    const sureFiles = sure.reduce((s, g) => s + g.items.filter((id) => !bulkKeep(g).has(id)).length, 0);
     const chip = (k, label, n) => `<button class="chip dp-chip ${D.filter === k ? 'on' : ''}" data-f="${k}">${esc(t(label))}${n !== undefined ? ` <em>${num(n)}</em>` : ''}</button>`;
     view.innerHTML = `
       <div class="head"><div><h1>${esc(t('Duplikate'))}</h1>
@@ -358,11 +369,11 @@
           </article>`;
         }).join('')}</div>
         <footer class="dp-foot">
-          <span class="dp-sum">${esc(k.size ? t('{k} bleibt · {r} in den Papierkorb ({s})', { k: num(k.size), r: num(removeN), s: size(freedOf(g)) }) : t('Mindestens eine Kopie muss bleiben'))}</span>
+          <span class="dp-sum">${esc(sumOf(g))}</span>
           <span class="grow"></span>
           <button class="btn" data-ignore title="${esc(t('Diese Fotos nicht mehr als Duplikate zeigen (I)'))}">${esc(t('Keine Duplikate'))}</button>
           <button class="btn" data-skip title="${esc(t('Später entscheiden (→)'))}">${esc(t('Später'))}</button>
-          <button class="btn primary" data-apply ${!k.size || !removeN ? 'disabled' : ''} title="${esc(t('Übernehmen (Enter)'))}">${icon('trash')}<span>${esc(removeN ? t('{n} löschen', { n: num(removeN) }) : t('Übernehmen'))}</span></button>
+          <button class="btn primary" data-apply ${!removeN ? 'disabled' : ''} title="${esc(t('Übernehmen (Enter)'))}">${icon('trash')}<span>${esc(removeN ? t('{n} löschen', { n: num(removeN) }) : t('Übernehmen'))}</span></button>
         </footer>`;
       $('[data-close]', el).onclick = close;
       $('[data-prev]', el).onclick = () => next(-1);
@@ -411,6 +422,21 @@
     document.body.appendChild(el);
     document.body.classList.add('locked');
     let pos = at, mi = member, shown = null, ended = false;
+    // the badge goes keep, delete, keep only this one, keep: cyc remembers what the other copies
+    // were before, the last step brings that back
+    let cyc = null;
+    const markOf = (g, id) => {
+      const k = keepOf(g);
+      if (cyc && cyc.g === g.id && cyc.id === id && cyc.only && k.size === 1 && k.has(id)) return 'only';
+      return k.has(id) ? 'keep' : 'drop';
+    };
+    const cycle = (g, id) => {
+      const k = keepOf(g), st = markOf(g, id);
+      if (!cyc || cyc.g !== g.id || cyc.id !== id) cyc = { g: g.id, id, before: new Set(k), only: false };
+      if (st === 'keep') { const n = new Set(k); n.delete(id); D.keep.set(g.id, n); }
+      else if (st === 'drop' && g.items.length > 1) { D.keep.set(g.id, new Set([id])); cyc.only = true; }
+      else { D.keep.set(g.id, new Set([...cyc.before, id])); cyc = null; }
+    };
     // what was decided this round: group id -> { what: apply, ignore or later, freed }; a group
     // whose decision failed in the background is in the list again and does not count
     const decided = new Map();
@@ -475,7 +501,7 @@
       if (!g) { step(1); return; }
       document.body.classList.add('locked'); // the viewer, closing over it, unlocks
       mi = Math.min(mi, g.items.length - 1);
-      const k = keepOf(g), id = g.items[mi], x = m(id), kept = k.has(id), removeN = removeOf(g).length;
+      const k = keepOf(g), id = g.items[mi], x = m(id), kept = k.has(id), removeN = removeOf(g).length, st = markOf(g, id);
       const ms = g.items.map(m);
       const best = (f) => { const v = ms.map(f), top = Math.max(...v); return new Set(v).size > 1 && f(x) === top; };
       const it = S.byId.get(id);
@@ -486,10 +512,10 @@
         el.innerHTML = `<div class="qz-top"><b>${esc(round ? t('Duplikate schnell prüfen') : t('Vergleichen'))}</b><span class="qz-prog"></span>
             <button class="btn ghost icon qz-x" data-x title="${esc(t('Schließen (Esc)'))}">${icon('x')}</button></div>
           <div class="dp-stage" title="${esc(t('Tippen: nächste Kopie (Leertaste)'))}">${g.items.map((y) => `<img alt="" draggable="false" src="${large(y)}" data-id="${esc(y)}">`).join('')}
-            <span class="dp-tag"><em class="dp-cls ${g.class}">${esc(t(CLASS[g.class]))}</em><b></b></span>
-            <button type="button" class="dp-mark" data-mark></button>
             <div class="dp-info"><div class="grow"><b></b><small></small></div>
-              <button type="button" class="dp-open" data-open title="${esc(t('Im Betrachter öffnen, z. B. zum Drehen (O)'))}">${icon('expand')}</button></div></div>
+              <button type="button" class="dp-open" data-open title="${esc(t('Im Betrachter öffnen, z. B. zum Drehen (O)'))}">${icon('expand')}</button></div>
+            <div class="dp-sfoot"><span class="dp-tag"><em class="dp-cls ${g.class}">${esc(t(CLASS[g.class]))}</em><b></b></span>
+              <button type="button" class="dp-mark" data-mark></button></div></div>
           <div class="dp-thumbs">${g.items.map((y, n) => `<button type="button" data-m="${n}" title="${esc(t('Kopie {n}', { n: n + 1 }))} (${n + 1})"><img alt="" src="${thumb(y)}"><i></i></button>`).join('')}</div>
           <div class="dp-qacts"><span class="dp-sum"></span>
             <div class="dp-qbtns"><button type="button" data-ignore title="${esc(t('Diese Fotos nicht mehr als Duplikate zeigen (I)'))}">${esc(t('Keine Duplikate'))}</button>
@@ -502,7 +528,7 @@
           mi = (mi + 1) % group().items.length;
           render();
         });
-        $('[data-mark]', el).onclick = () => { const gg = group(); if (gg && toggleKeep(gg, gg.items[mi])) render(); };
+        $('[data-mark]', el).onclick = () => { const gg = group(); if (gg) { cycle(gg, gg.items[mi]); render(); } };
         $('[data-open]', el).onclick = () => openViewer();
         $('.dp-thumbs', el).onclick = (e) => { const b = e.target.closest('[data-m]'); if (b) { mi = +b.dataset.m; render(); } };
         $('[data-ignore]', el).onclick = () => decide('ignore');
@@ -520,8 +546,8 @@
       $('.dp-tag b', el).textContent = `${mi + 1} / ${g.items.length}`;
       const mark = $('[data-mark]', el);
       mark.className = `dp-mark ${kept ? 'keep' : 'drop'}`;
-      mark.innerHTML = `${icon(kept ? 'star' : 'trash', kept ? 'fill' : '')}<span>${esc(kept ? t('Behalten') : t('Kommt weg'))}</span>`;
-      mark.title = `${kept ? t('Behalten – tippen: kommt weg') : t('Kommt weg – tippen: behalten')} (K)`;
+      mark.innerHTML = `${icon(kept ? 'star' : 'trash', kept ? 'fill' : '')}<span>${esc({ keep: t('Behalten'), drop: t('Kommt weg'), only: t('Nur dieses behalten') }[st])}</span>`;
+      mark.title = `${{ keep: t('Behalten – tippen: kommt weg'), drop: g.items.length > 1 ? t('Kommt weg – tippen: nur dieses behalten') : t('Kommt weg – tippen: behalten'), only: t('Nur dieses behalten – tippen: behalten') }[st]} (K)`;
       mark.setAttribute('aria-pressed', String(kept));
       $('.dp-info b', el).innerHTML = [
         `<span class="${best((y) => (y.w || 0) * (y.h || 0)) ? 'best' : ''}">${esc(x.w ? `${x.w} × ${x.h}` : '–')}</span>`,
@@ -535,9 +561,9 @@
         b.classList.toggle('keep', k.has(g.items[n]));
         b.querySelector('i').innerHTML = icon(k.has(g.items[n]) ? 'star' : 'trash', k.has(g.items[n]) ? 'fill' : '');
       });
-      $('.dp-sum', el).textContent = k.size ? t('{k} bleibt · {r} in den Papierkorb ({s})', { k: num(k.size), r: num(removeN), s: size(freedOf(g)) }) : t('Mindestens eine Kopie muss bleiben');
+      $('.dp-sum', el).textContent = sumOf(g);
       const ap = $('[data-apply]', el);
-      ap.disabled = !k.size || !removeN;
+      ap.disabled = !removeN;
       ap.innerHTML = `${icon('trash')}<span>${esc(removeN ? t('{n} löschen', { n: num(removeN) }) : t('Übernehmen'))}</span>`;
     };
     const openViewer = () => {
@@ -556,7 +582,7 @@
       if (e.key === 'Escape') close();
       else if (ended) return;
       else if (e.key === ' ' && g) { mi = (mi + (e.shiftKey ? g.items.length - 1 : 1)) % g.items.length; render(); }
-      else if ((e.key === 'k' || e.key === 'K') && g) { if (toggleKeep(g, g.items[mi])) render(); }
+      else if ((e.key === 'k' || e.key === 'K') && g) { cycle(g, g.items[mi]); render(); }
       else if (/^[1-9]$/.test(e.key) && g && g.items[+e.key - 1]) { mi = +e.key - 1; render(); }
       else if (e.key === 'Enter') { if (!$('[data-apply]', el)?.disabled) decide('apply'); }
       else if (e.key === 'i' || e.key === 'I') decide('ignore');
