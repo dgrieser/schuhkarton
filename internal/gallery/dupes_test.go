@@ -516,6 +516,9 @@ func TestDupesGroupAgainAfterReadFailure(t *testing.T) {
 	}
 	member := l.Get(g[0].Items[0])
 	l.dupe.dims = sync.Map{} // read the headers again
+	for _, s := range l.dupe.sigs {
+		s.WH = [2]int{}
+	}
 	os.Chmod(l.Path(member), 0)
 	defer os.Chmod(l.Path(member), 0o644)
 	ctx := context.Background()
@@ -708,5 +711,40 @@ func TestDupesSavedSplit(t *testing.T) {
 	b, _ = os.ReadFile(filepath.Join(dir, "dupes.json"))
 	if json.Unmarshal(b, &state) != nil || state["sigs"] != nil {
 		t.Error("hashes still in dupes.json")
+	}
+}
+
+// the pixel sizes read from the headers are kept with the hashes; the list of
+// duplicates never waits for reading them
+func TestDupeDimsKept(t *testing.T) {
+	l, _ := dupeLib(t)
+	g, _ := l.Dupes()
+	id := g[0].Items[0]
+	it := l.Get(id)
+	w, h := l.dims(it)
+	if l.dupe.sigs[l.favKey(it)].WH != [2]int{w, h} {
+		t.Fatalf("size not kept with the hash: %v", l.dupe.sigs[l.favKey(it)].WH)
+	}
+	if err := l.saveDupes(); err != nil {
+		t.Fatal(err)
+	}
+	l.loadDupes()
+	l.dupe.dims = sync.Map{}
+	if w2, h2, ok := l.knownDims(it); !ok || w2 != w || h2 != h {
+		t.Errorf("after a start: %d×%d %v, want %d×%d", w2, h2, ok, w, h)
+	}
+
+	// unknown: the members come at once, the sizes are read in the background
+	for _, s := range l.dupe.sigs {
+		s.WH = [2]int{}
+	}
+	l.dupe.dims = sync.Map{}
+	os.Chmod(l.Path(it), 0) // reading it would fail: not tried while listing
+	defer os.Chmod(l.Path(it), 0o644)
+	if m := l.DupeMembers([]string{id}); m[id].ID != id {
+		t.Fatal("member missing")
+	}
+	for l.dupe.filling.Load() {
+		time.Sleep(10 * time.Millisecond)
 	}
 }
