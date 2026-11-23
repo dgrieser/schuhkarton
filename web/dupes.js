@@ -29,7 +29,16 @@
   // data
   // ---------------------------------------------------------------------------
   // pending: groups decided whose files still move in the background (not shown again meanwhile)
-  const D = { groups: [], members: {}, status: null, filter: 'all', loaded: false, keep: new Map(), pending: new Set() };
+  const D = { groups: [], members: {}, status: null, filter: 'all', loaded: false, keep: new Map(), pending: new Set(), later: new Map() };
+  // a quick round has at most this many groups (as many as a quick round of faces); the groups
+  // put off for later come last, the one put off last at the end
+  const ROUND = 12;
+  let laterN = 0;
+  const roundIds = () => {
+    const ids = visible().map((g) => g.id);
+    const off = ids.filter((id) => D.later.has(id)).sort((a, b) => D.later.get(a) - D.later.get(b));
+    return [...ids.filter((id) => !D.later.has(id)), ...off].slice(0, ROUND);
+  };
 
   async function load() {
     const r = await api('/api/admin/dupes').catch(() => null);
@@ -257,7 +266,7 @@
       await later(() => apply(sure, { bulk: true }));
       draw(view);
     });
-    $('[data-round]', view)?.addEventListener('click', () => fullView(visible().map((g) => g.id), 0, { round: true }));
+    $('[data-round]', view)?.addEventListener('click', () => fullView(roundIds(), 0, { round: true }));
     $('.dp-list', view)?.addEventListener('click', (e) => {
       const c = e.target.closest('[data-g]');
       if (c) compare(list, +c.dataset.g, view);
@@ -483,7 +492,7 @@
             <button type="button" data-x>${esc(t('Schließen'))}</button></div></div></div>`;
       for (const b of $$('[data-x]', el)) b.onclick = close;
       $('[data-again]', el)?.addEventListener('click', () => {
-        ids = visible().map((g) => g.id);
+        ids = roundIds();
         pos = 0; mi = 0; ended = false; shown = null;
         decided.clear();
         if (ids.length) render(); else end();
@@ -496,6 +505,7 @@
       if (what === 'apply' && !resolveSoon(g)) return;
       if (what === 'ignore') ignoreSoon(g);
       decided.set(g.id, { what, freed });
+      if (round && what === 'later') D.later.set(g.id, ++laterN);
       step(1);
     };
     const render = () => {

@@ -3,6 +3,7 @@ package gallery
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"image"
 	"image/color"
 	"image/jpeg"
@@ -12,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -567,4 +569,144 @@ func TestDupesKeepTurnedMember(t *testing.T) {
 		}
 	}
 	t.Errorf("group gone after turning a copy: %v", groups)
+}
+
+func seriesOf(t *testing.T, l *Library) DupeGroup {
+	t.Helper()
+	groups, _ := l.Dupes()
+	for _, g := range groups {
+		if g.Class == DupSimilar {
+			return g
+		}
+	}
+	t.Fatal("no series")
+	return DupeGroup{}
+}
+
+func together(groups []DupeGroup, a, b string) bool {
+	for _, g := range groups {
+		if slices.Contains(g.Items, a) && slices.Contains(g.Items, b) {
+			return true
+		}
+	}
+	return false
+}
+
+// two photos marked as no duplicates stay apart even when a third one is
+// like both of them
+func TestIgnoreDupesNoChain(t *testing.T) {
+	for _, pair := range [][2]int{{0, 1}, {0, 2}, {1, 2}} {
+		l, _ := dupeLib(t)
+		g := seriesOf(t, l)
+		a, b := g.Items[pair[0]], g.Items[pair[1]]
+		if err := l.IgnoreDupes([]string{a, b}); err != nil {
+			t.Fatal(err)
+		}
+		if err := l.IgnoreDupes([]string{b, a}); err != nil { // asked again: remembered once
+			t.Fatal(err)
+		}
+		if n := len(l.dupe.ignore); n != 1 {
+			t.Errorf("%d sets remembered, want 1", n)
+		}
+		l.groupDupes()
+		groups, _ := l.Dupes()
+		if together(groups, a, b) {
+			t.Errorf("ignored pair %v grouped again through a third photo: %v", relsOfIDs(l, []string{a, b}), groups)
+		}
+	}
+}
+
+// the copies kept of a group are no duplicates of each other any more: not
+// shown again, neither before the groups are made again nor after
+func TestResolveDupesRemembersKept(t *testing.T) {
+	l, _ := dupeLib(t)
+	g := seriesOf(t, l)
+	keep, drop := g.Items[:2], g.Items[2:]
+	if _, _, err := l.ResolveDupes([]DupeResolution{{Keep: keep, Remove: drop}}, "admin"); err != nil {
+		t.Fatal(err)
+	}
+	groups, _ := l.Dupes()
+	if together(groups, keep[0], keep[1]) {
+		t.Errorf("kept copies shown again before grouping: %v", groups)
+	}
+	l.groupDupes()
+	groups, _ = l.Dupes()
+	if together(groups, keep[0], keep[1]) {
+		t.Errorf("kept copies grouped again: %v", groups)
+	}
+}
+
+// a group of the last pass that is left with only photos marked as no
+// duplicates of each other is not shown
+func TestDupesHidesIgnoredBeforeGrouping(t *testing.T) {
+	l, _ := dupeLib(t)
+	g := seriesOf(t, l)
+	if err := l.IgnoreDupes(g.Items); err != nil {
+		t.Fatal(err)
+	}
+	groups, _ := l.Dupes()
+	for _, x := range groups {
+		if x.ID == g.ID {
+			t.Errorf("ignored group still shown: %v", relsOfIDs(l, x.Items))
+		}
+	}
+}
+
+// the hashes go to dupesigs.gob, written only when they change; a
+// dupes.json of version 1 (hashes inside) is taken over
+func TestDupesSavedSplit(t *testing.T) {
+	l, _ := dupeLib(t)
+	if err := l.saveDupes(); err != nil {
+		t.Fatal(err)
+	}
+	dir := l.opt.CacheDir
+	sigs := filepath.Join(dir, "dupesigs.gob")
+	fi, err := os.Stat(sigs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var state map[string]json.RawMessage
+	b, _ := os.ReadFile(filepath.Join(dir, "dupes.json"))
+	if json.Unmarshal(b, &state) != nil || state["sigs"] != nil || state["groups"] == nil {
+		t.Fatalf("dupes.json: %.200s", b)
+	}
+	// a decision writes dupes.json only
+	old := time.Unix(1, 0)
+	os.Chtimes(sigs, old, old)
+	g := seriesOf(t, l)
+	if err := l.IgnoreDupes(g.Items); err != nil {
+		t.Fatal(err)
+	}
+	if fi2, _ := os.Stat(sigs); !fi2.ModTime().Equal(old) {
+		t.Error("hashes written again for a decision")
+	}
+	n := len(l.dupe.sigs)
+
+	// loaded again from both files
+	l.loadDupes()
+	if len(l.dupe.sigs) != n || len(l.dupe.ignore) != 1 {
+		t.Errorf("loaded %d hashes (want %d), %d sets", len(l.dupe.sigs), n, len(l.dupe.ignore))
+	}
+
+	// version 1: everything in dupes.json
+	all := map[string]any{"version": 1, "sigs": l.dupe.sigs, "ignore": l.dupe.ignore}
+	b, _ = json.Marshal(all)
+	os.Remove(sigs)
+	if err := os.WriteFile(filepath.Join(dir, "dupes.json"), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	l.loadDupes()
+	if len(l.dupe.sigs) != n || fi.Size() == 0 {
+		t.Fatalf("version 1: %d hashes, want %d", len(l.dupe.sigs), n)
+	}
+	if err := l.saveDupes(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(sigs); err != nil {
+		t.Error("version 1 hashes not moved to dupesigs.gob")
+	}
+	b, _ = os.ReadFile(filepath.Join(dir, "dupes.json"))
+	if json.Unmarshal(b, &state) != nil || state["sigs"] != nil {
+		t.Error("hashes still in dupes.json")
+	}
 }
