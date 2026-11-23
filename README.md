@@ -339,14 +339,17 @@ turns a kept one into the only one kept (the others back after delete and
 keep again) and deletes the one kept alone;
 deleting every copy of a group is allowed. The top line shows resolution,
 format, size and whether it has a location; the corner button opens it in
-the viewer (to rotate it, say; a turned copy stays in its group). *Schnell prüfen* goes through all
-groups that way: "Keine Duplikate", "Später" or delete, and the next group
+the viewer (to rotate it, say; a turned copy stays in its group). *Schnell prüfen* goes through up to 12
+groups that way (another round takes the next ones, the groups put off
+come last): "Keine Duplikate", "Später" or delete, and the next group
 is there at once; the files move in the background, a failed group comes
 back. *Alle Vorschläge übernehmen* cleans up every
 identical and same group at once. The copies that go land in the trash
 (undo there); favorites of every account, names of faces, place, category,
 text, position, a camera date, notes and the AI description move to the
-copy that stays. "Keine Duplikate" remembers that photos only look alike.
+copy that stays. "Keine Duplikate" remembers that photos only look alike,
+and so does keeping several copies of a group while deleting others: those
+never land in one group again, not even through a third photo like both.
 
 `dupes.sensitivity` (strict, normal, loose) trades sure matches for more
 matches; `dupes.mode: off` switches the search off. Photos of the same scene
