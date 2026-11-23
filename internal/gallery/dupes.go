@@ -96,6 +96,7 @@ type dupeSig struct {
 	AR  float32      `json:"r"` // aspect ratio of the thumbnail
 	Sha string       `json:"s,omitempty"`
 	SK  string       `json:"sk,omitempty"` // cache key the SHA belongs to
+	WH  [2]int       `json:"wh,omitempty"` // pixel size from the file header, as shown (see dims)
 	Err string       `json:"e,omitempty"`
 }
 
@@ -128,12 +129,14 @@ type dupeStore struct {
 	ver        int64       // -1: not checked since the start; else the item list the groups are right for (see listVer)
 	dirty      atomic.Bool // dupes.json to write
 	sigsDirty  atomic.Bool // dupesigs.gob to write too
+	sigsOnDisk atomic.Bool // dupesigs.gob there (loaded or written)
 	saveMu     sync.Mutex  // one dupes.json write at a time
 
 	grouped time.Time // last grouping
 	pending int       // changes since the last grouping (new hashes, written files)
 
-	dims             sync.Map // cache key -> [2]int pixel size from the file header
+	dims             sync.Map    // cache key -> [2]int pixel size from the file header
+	filling          atomic.Bool // dims of the copies shown being read (fillDims)
 	wake             chan struct{}
 	done, todo, nGrp atomic.Int64
 	running          atomic.Bool
@@ -149,6 +152,7 @@ func (l *Library) loadDupes() {
 		var sigs map[string]*dupeSig
 		if gob.NewDecoder(bufio.NewReader(f)).Decode(&sigs) == nil && sigs != nil {
 			l.dupe.sigs = sigs
+			l.dupe.sigsOnDisk.Store(true)
 		}
 		f.Close()
 	}
@@ -178,14 +182,22 @@ func (l *Library) loadDupes() {
 }
 
 // saveDupes writes what changed: the hashes (megabytes) only when they did.
-func (l *Library) saveDupes() error {
+func (l *Library) saveDupes() error { return l.saveDupesNow(true) }
+
+// saveDupesNow writes dupes.json, and the hashes when they changed and
+// withSigs (else they wait for the timer of markDupesDirty: a decision is
+// kept at once without writing megabytes).
+func (l *Library) saveDupesNow(withSigs bool) error {
 	// one save at a time: an older state must not land after a newer one
 	l.dupe.saveMu.Lock()
 	defer l.dupe.saveMu.Unlock()
 	if !l.dupe.dirty.Swap(false) {
 		return nil
 	}
-	sigs := l.dupe.sigsDirty.Swap(false)
+	// without dupesigs.gob (version 1 taken over) the hashes come first:
+	// dupes.json without them must not be all there is
+	withSigs = withSigs || !l.dupe.sigsOnDisk.Load()
+	sigs := withSigs && l.dupe.sigsDirty.Swap(false)
 	l.dupe.mu.Lock()
 	var copied map[string]dupeSig
 	if sigs {
@@ -203,10 +215,16 @@ func (l *Library) saveDupes() error {
 		if err = gob.NewEncoder(&buf).Encode(copied); err == nil {
 			// first: dupes.json without hashes must not land before them
 			err = writeFileAtomic(filepath.Join(l.opt.CacheDir, "dupesigs.gob"), buf.Bytes())
+			if err == nil {
+				l.dupe.sigsOnDisk.Store(true)
+			}
 		}
 	}
 	if err == nil {
 		err = writeFileAtomic(filepath.Join(l.opt.CacheDir, "dupes.json"), b)
+	}
+	if err == nil && l.dupe.sigsDirty.Load() {
+		l.markDupesDirty() // the hashes left for later
 	}
 	if err != nil {
 		// tried again with the next save
@@ -1308,13 +1326,13 @@ func (l *Library) rankCopies(items []*Item) ([]*Item, []string) {
 }
 
 // dims returns the pixel size of a photo from its file header (the index
-// may not know it without exiftool), else what the index says.
+// may not know it without exiftool), else what the index says. The header is
+// read once per file version and kept with the hashes (dupesigs.gob).
 func (l *Library) dims(it *Item) (int, int) {
+	if w, h, ok := l.knownDims(it); ok {
+		return w, h
+	}
 	if it.Kind == Photo && l.unreadable(it) == nil {
-		if v, ok := l.dupe.dims.Load(it.key); ok {
-			d := v.([2]int)
-			return d[0], d[1]
-		}
 		f, err := os.Open(l.Path(it))
 		if err != nil {
 			l.dupeReadFailed(it, err)
@@ -1332,11 +1350,61 @@ func (l *Library) dims(it *Item) (int, int) {
 					w, h = h, w // shown turned (EXIF orientation)
 				}
 				l.dupe.dims.Store(it.key, [2]int{w, h})
+				l.dupe.mu.Lock()
+				s := l.dupe.sigs[l.favKey(it)]
+				kept := s != nil && s.Key == it.key
+				if kept {
+					s.WH = [2]int{w, h}
+				}
+				l.dupe.mu.Unlock()
+				if kept {
+					l.markSigsDirty()
+				}
 				return w, h
 			}
 		}
 	}
 	return it.W, it.H
+}
+
+// knownDims is the pixel size of a photo when its header was read already
+// (videos and photos without hashes: what the index says), without reading
+// the file: ok false means dims would read it.
+func (l *Library) knownDims(it *Item) (int, int, bool) {
+	if it.Kind != Photo || l.unreadable(it) != nil {
+		return it.W, it.H, true
+	}
+	if v, ok := l.dupe.dims.Load(it.key); ok {
+		d := v.([2]int)
+		return d[0], d[1], true
+	}
+	l.dupe.mu.Lock()
+	s := l.dupe.sigs[l.favKey(it)]
+	var wh [2]int
+	if s != nil && s.Key == it.key {
+		wh = s.WH
+	}
+	l.dupe.mu.Unlock()
+	if wh[0] > 0 {
+		l.dupe.dims.Store(it.key, wh)
+		return wh[0], wh[1], true
+	}
+	return it.W, it.H, false
+}
+
+// fillDims reads the headers of photos in the background (one run at a
+// time): the list of duplicates does not wait for a share, the sizes are
+// there with the next load.
+func (l *Library) fillDims(items []*Item) {
+	if len(items) == 0 || !l.dupe.filling.CompareAndSwap(false, true) {
+		return
+	}
+	go func() {
+		defer l.dupe.filling.Store(false)
+		for _, it := range items {
+			l.dims(it)
+		}
+	}()
 }
 
 func (l *Library) favCount(it *Item) int {
@@ -1489,12 +1557,17 @@ type DupeMember struct {
 // DupeMembers describes items for the comparison view.
 func (l *Library) DupeMembers(ids []string) map[string]DupeMember {
 	out := map[string]DupeMember{}
+	var unknown []*Item
+	defer func() { l.fillDims(unknown) }()
 	for _, id := range ids {
 		it := l.Get(id)
 		if it == nil {
 			continue
 		}
-		w, h := l.dims(it)
+		w, h, ok := l.knownDims(it)
+		if !ok {
+			unknown = append(unknown, it)
+		}
 		m := DupeMember{ID: it.ID, Name: path.Base(it.Rel), Album: l.AlbumOf(it), Kind: it.Kind, W: w, H: h, Size: it.Size,
 			Ext: strings.TrimPrefix(strings.ToUpper(path.Ext(it.Rel)), "."), Taken: it.Taken, TakenSrc: it.TakenSrc,
 			Place: it.Place, GPS: it.GPS, Camera: strings.TrimSpace(it.Make + " " + it.Model), Duration: it.Duration,
@@ -1514,7 +1587,7 @@ func (l *Library) IgnoreDupes(ids []string) error {
 		return errors.New("zu wenige Elemente")
 	}
 	l.kickDupes()
-	return l.saveDupes()
+	return l.saveDupesNow(false)
 }
 
 // keepApart remembers that the items (at least two still there) are no

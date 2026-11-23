@@ -585,64 +585,119 @@ def _colours(name):
 LID_TOLERANCE = 2.0  # px: how far a left-out frame may be from where the morph draws it
 
 
-def _pct(frame):
-    return f"{100 * frame / LID['frames']:.1f}".rstrip("0").rstrip(".") + "%"
+# Where the photos, the star and the rays turn and grow from: the middle of each one's box
+# as Chrome measures it (getBBox of the drawing's elements)
+CENTRE = {"p1": (569.97, 543.35), "p2": (765.01, 547.98), "star": (854.5, 322.0), "rays": (911.5, 389.5)}
+EASE = {"ease": (.25, .1, .25, 1), "ease-in": (.42, 0, 1, 1), "ease-out": (0, 0, .58, 1),
+        "ease-in-out": (.42, 0, .58, 1), "linear": (0, 0, 1, 1)}
 
 
-def loading_css():
-    """The photos, the star and the rays in the scene's time: the photos rise standing
-    straighter and slowly lean out to their angle in the drawing while they are out, the
-    star and the rays come and slowly drift outwards to where the drawing has them; then all
-    go before the lid shuts. Where they end up while out is the drawing."""
+def _bezier(x1, y1, x2, y2):
+    """A CSS cubic-bezier timing function (y may overshoot)."""
+    def at(a, b, t):
+        return 3 * a * t * (1 - t) ** 2 + 3 * b * t * t * (1 - t) + t ** 3
+
+    def f(x):
+        lo, hi = 0.0, 1.0
+        for _ in range(60):
+            mid = (lo + hi) / 2
+            if at(x1, x2, mid) < x:
+                lo = mid
+            else:
+                hi = mid
+        return at(y1, y2, (lo + hi) / 2)
+    return f
+
+
+def _track(keys, n):
+    """The values of keyframes [(frame, values, timing of the stretch to the next)] at
+    every frame 0 … n, as CSS would draw them."""
+    keys = [(min(max(f, 0), n), v, e) for f, v, e in keys]
+    out = []
+    for fr in range(n + 1):
+        for (f0, v0, e), (f1, v1, _) in zip(keys, keys[1:]):
+            if f0 <= fr <= f1:
+                k = 0.0 if f1 == f0 else (fr - f0) / (f1 - f0)
+                k = _bezier(*(EASE.get(e, e) if e else EASE["ease"]))(k)
+                out.append(tuple(a + (b - a) * k for a, b in zip(v0, v1)))
+                break
+    return out
+
+
+def _smil(tag, attr, vals, n, fmt, tol, extra=""):
+    """One animation of the loop from values at every frame: linear between the frames kept,
+    a frame left out when a straight line between its neighbours draws it within tol."""
+    def fits(a, c):  # a straight line from frame a to c draws every frame between
+        return all(abs(x + (z - x) * (i - a) / (c - a) - y) <= tol
+                   for i in range(a + 1, c) for x, y, z in zip(vals[a], vals[i], vals[c]))
+    keep = [0]
+    for i in range(1, n):
+        if not fits(keep[-1], i + 1):
+            keep.append(i)
+    keep.append(n)
+    times = ";".join(_num(i / n) for i in keep)
+    values = ";".join(fmt(vals[i]) for i in keep)
+    return (f'<{tag} attributeName="{attr}"{extra} dur="{LOOP}s" repeatCount="indefinite" '
+            f'keyTimes="{times}" values="{values}"/>')
+
+
+def loading_moves():
+    """The photos, the star and the rays in the scene's time, on the same clock as the lid
+    (SMIL: CSS animations in an image run on a clock of their own and drift away from it).
+    The photos rise standing straighter and slowly lean out to their angle in the drawing
+    while they are out, the star and the rays come and slowly drift outwards to where the
+    drawing has them; then all go before the lid shuts. Where they end up while out is the
+    drawing. Returns, per element, the animations (photos) or the wrapper (star, rays)."""
     ph = LID["photos"]
     up, out, down, lean = ph["up"], ph["out"], ph["down"], ph["lean"]
     n = LID["frames"]
-    p = lambda f: _pct(min(max(f, 0), n))
-    return f"""
+    rise = (.2, .8, .3, 1.15)
+    slow = (.35, .45, .4, 1)
+    tr = lambda v: f"{_num(v[0])} {_num(v[1])}"
+    move = lambda keys: _track(keys, n)
+
+    def photo(cls, dy, d0, d1, sign, overshoot):
+        y = move([(0, (0, dy), None), (up[0] + d0, (0, dy), (.2, .8, .3, overshoot)), (up[1] + d0, (0, 0), None),
+                  (down[0] - d1, (0, 0), "ease-in"), (down[1] - d1, (0, dy), None), (n, (0, dy), None)])
+        r = move([(0, (sign * lean,), None), (up[0] + d0, (sign * lean,), slow), (out, (0,), None), (n, (0,), None)])
+        cx, cy = CENTRE[cls]
+        return (_smil("animateTransform", "transform", y, n, tr, .1, ' type="translate" additive="sum"')
+                + _smil("animateTransform", "transform", r, n, lambda v: f"{_num(v[0])} {cx} {cy}", .05,
+                        ' type="rotate" additive="sum"'))
+
+    def parts(keys, comps):
+        """translate, scale, rotate and opacity of the star or the rays (CSS transform lists
+        interpolate function by function)."""
+        v = move(keys)
+        tx = [(a[0], a[1]) for a in v]
+        sc = [(a[2],) for a in v]
+        ro = [(a[3],) for a in v]
+        op = [(a[4],) for a in v]
+        anims = [_smil("animateTransform", "transform", tx, n, tr, .1, ' type="translate" additive="sum"'),
+                 _smil("animateTransform", "transform", sc, n, lambda x: _num(x[0]), .002, ' type="scale" additive="sum"')]
+        if "rotate" in comps:
+            anims.append(_smil("animateTransform", "transform", ro, n, lambda x: _num(x[0]), .1, ' type="rotate" additive="sum"'))
+        anims.append(_smil("animate", "opacity", op, n, lambda x: _num(x[0]), .005))
+        return "".join(anims)
+
+    star = parts([(0, (-34, 34, 0, -90, 0), None), (up[1] - 4, (-34, 34, 0, -90, 0), (.2, .8, .3, 1.4)),
+                  (up[1] + 3, (-30, 30, 1, 0, 1), "ease-in-out"), (out, (0, 0, 1, 0, 1), None),
+                  (down[0], (0, 0, 1, 0, 1), "ease-in"), (down[0] + 6, (0, 0, 0, 45, 0), None), (n, (0, 0, 0, 45, 0), None)],
+                 ("rotate",))
+    rays = parts([(0, (-34, 0, .2, 0, 0), None), (up[1] - 1, (-34, 0, .2, 0, 0), "ease-out"),
+                  (up[1] + 5, (-30, 0, 1, 0, 1), "ease-in-out"), (out, (0, 0, 1, 0, 1), None),
+                  (down[0], (0, 0, 1, 0, 1), "ease-in"), (down[0] + 5, (12, 0, .2, 0, 0), None), (n, (12, 0, .2, 0, 0), None)], ())
+    return {"p1": photo("p1", 260, 0, 0, 1, 1.15), "p2": photo("p2", 240, 2, 1, -1, 1.2), "star": star, "rays": rays}
+
+
+LOADING_CSS = """
   <style>
-    .p1, .p2, .star, .rays {{ transform-box: fill-box; transform-origin: center; animation: {LOOP}s infinite both; }}
-    .p1 {{ animation-name: sk-p1, sk-p1-lean; }}
-    .p2 {{ animation-name: sk-p2, sk-p2-lean; }}
-    .star {{ animation-name: sk-star; }}
-    .rays {{ animation-name: sk-rays; }}
-    .lid-still {{ display: none; }}
-    /* rising and leaning out are two animations of their own (translate, rotate): the lean
-       starts with the rise and slows down into the drawing's angle, one move */
-    @keyframes sk-p1 {{
-      0%, {p(up[0])} {{ translate: 0 260px; animation-timing-function: cubic-bezier(.2, .8, .3, 1.15); }}
-      {p(up[1])}, {p(down[0])} {{ translate: 0 0; animation-timing-function: ease-in; }}
-      {p(down[1])}, 100% {{ translate: 0 260px; }}
-    }}
-    @keyframes sk-p1-lean {{
-      0%, {p(up[0])} {{ rotate: {lean}deg; animation-timing-function: cubic-bezier(.35, .45, .4, 1); }}
-      {p(out)}, 100% {{ rotate: 0deg; }}
-    }}
-    @keyframes sk-p2 {{
-      0%, {p(up[0] + 2)} {{ translate: 0 240px; animation-timing-function: cubic-bezier(.2, .8, .3, 1.2); }}
-      {p(up[1] + 2)}, {p(down[0] - 1)} {{ translate: 0 0; animation-timing-function: ease-in; }}
-      {p(down[1] - 1)}, 100% {{ translate: 0 240px; }}
-    }}
-    @keyframes sk-p2-lean {{
-      0%, {p(up[0] + 2)} {{ rotate: -{lean}deg; animation-timing-function: cubic-bezier(.35, .45, .4, 1); }}
-      {p(out)}, 100% {{ rotate: 0deg; }}
-    }}
-    @keyframes sk-star {{
-      0%, {p(up[1] - 4)} {{ transform: translate(-34px, 34px) scale(0) rotate(-90deg); opacity: 0; animation-timing-function: cubic-bezier(.2, .8, .3, 1.4); }}
-      {p(up[1] + 3)} {{ transform: translate(-30px, 30px); opacity: 1; animation-timing-function: ease-in-out; }}
-      {p(out)}, {p(down[0])} {{ transform: none; opacity: 1; animation-timing-function: ease-in; }}
-      {p(down[0] + 6)}, 100% {{ transform: scale(0) rotate(45deg); opacity: 0; }}
-    }}
-    @keyframes sk-rays {{
-      0%, {p(up[1] - 1)} {{ transform: translateX(-34px) scale(.2); opacity: 0; animation-timing-function: ease-out; }}
-      {p(up[1] + 5)} {{ transform: translateX(-30px); opacity: 1; animation-timing-function: ease-in-out; }}
-      {p(out)}, {p(down[0])} {{ transform: none; opacity: 1; animation-timing-function: ease-in; }}
-      {p(down[0] + 5)}, 100% {{ transform: translateX(12px) scale(.2); opacity: 0; }}
-    }}
-    @media (prefers-reduced-motion: reduce) {{
-      .p1, .p2, .star, .rays {{ animation: none; }}
-      .lid-move {{ display: none; }}
-      .lid-still {{ display: inline; }}
-    }}
+    .lid-still { display: none; }
+    /* without motion: the plain logo */
+    @media (prefers-reduced-motion: reduce) {
+      .lid-move { display: none; }
+      .lid-still { display: inline; }
+    }
   </style>
 """
 
@@ -747,7 +802,25 @@ def _lid_moving():
 
 def loading_svg(name):
     s = svg(name)
-    s = s.replace("  </defs>\n", "  </defs>" + loading_css(), 1)
+    s = s.replace("  </defs>\n", "  </defs>" + LOADING_CSS, 1)
+    mv = loading_moves()
+    # each moving part twice: still (shown without motion) and moving; the class on
+    # wrappers without animations of their own, as for the lid
+    for cls in ("p1", "p2"):
+        i = s.index(f'  <g class="{cls}">')
+        j = s.index("</g></g>\n", i) + len("</g></g>\n")
+        el = s[i:j]
+        moving = el.replace(f'<g class="{cls}">', f'<g class="{cls}">{mv[cls]}', 1)
+        s = s[:i] + f'  <g class="lid-still">\n{el}  </g>\n  <g class="lid-move">\n{moving}  </g>\n' + s[j:]
+    for cls in ("star", "rays"):
+        # turned and grown about their middle: moved there, animated, moved back
+        i = s.index(f'  <path class="{cls}"')
+        j = s.index("/>", i) + 3
+        cx, cy = CENTRE[cls]
+        el = s[i:j]
+        moved = el.strip().replace(f'class="{cls}"', f'class="{cls}" transform="translate({-cx} {-cy})"', 1)
+        s = (s[:i] + f'  <g class="lid-still">\n{el}  </g>\n'
+             f'  <g class="lid-move"><g transform="translate({cx} {cy})"><g>{mv[cls]}{moved}</g></g></g>\n' + s[j:])
     start = s.index('  <g class="lid">')
     end = s.index("  </g>\n", start) + len("  </g>\n")
     still = s[start:end].replace('class="lid"', 'class="lid lid-still"', 1)

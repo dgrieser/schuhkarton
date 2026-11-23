@@ -49,8 +49,8 @@ LID_BEVEL = 12.0   # the rounded edge of the top face
 LID_WALL = 22.0    # the lip's thickness
 LID_RECESS = 16.0  # the inside's floor below the top face
 LID_N = 8          # points of a quarter circle
-# closed: on the box, the lip over the rim; open: fitted to the drawing's lid
-CLOSED = ((0.0, 0.0, -30.0), (0.0, 0.0, 0.0))
+# closed: on the box, the lip a little over the rim (not deep down the box); open: fitted to the drawing's lid
+CLOSED = ((0.0, 0.0, -12.0), (0.0, 0.0, 0.0))
 OPEN = ((-75.48, -12.4, 225.39), (-62.924, 0.218, 37.912))
 
 # --- time (30 frames a second, the loop 3.6 s) ----------------------------------------
@@ -62,7 +62,7 @@ PHOTOS_DOWN = (60, 70)         # and are back in the box
 CLOSE_AT, CLOSED_AT = 71, 85   # before the lid swings shut,
 HOP, HOP_DONE = 88, 91         # hops a little as it lands and settles
 PHOTO_LEAN = 8                 # degrees the photos stand straighter when they come out
-HOP_POSE = ((0.0, 4.0, -22.0), (-5.0, 0.0, 0.0))  # its front a hand's breadth up
+HOP_POSE = ((0.0, 4.0, -4.0), (-5.0, 0.0, 0.0))  # its front a hand's breadth up
 PHOTO_RISE = 287               # how far the photos rise (in the drawing: 260 px on the page)
 
 

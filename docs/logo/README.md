@@ -30,8 +30,10 @@ rise at once, standing straighter; while they stay out they slowly lean out
 to their angle in the drawing and the star and the rays drift outwards; then
 the photos sink back and only then the lid
 swings shut, hopping a little as it lands. The lid's outlines morph from
-frame to frame (SMIL inside the SVG, so it also runs in an `<img>`; with
-reduced motion it shows the logo standing still). Every variant gets its
+frame to frame; the photos, the star and the rays move on the same clock,
+their CSS easing sampled frame by frame (all SMIL inside the SVG, so it also
+runs in an `<img>`: CSS animations there keep a clock of their own and drift
+away from the lid; with reduced motion it shows the logo standing still). Every variant gets its
 colours on the same frames.
 
 ## Variants
