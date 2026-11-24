@@ -45,6 +45,7 @@ type QuizFace struct {
 	V      string  `json:"v"` // version of the item's pictures
 	Person string  `json:"person,omitempty"`
 	Name   string  `json:"name,omitempty"`   // the name it has now (approving)
+	Alt    string  `json:"alt,omitempty"`    // the other named person most alike (approving)
 	Group  int     `json:"group,omitempty"`  // faces of its group (naming)
 	Photos int     `json:"photos,omitempty"` // photos of its group (naming)
 	Score  float32 `json:"score"`            // why it was chosen (larger: more worth it)
@@ -160,6 +161,8 @@ type quizCand struct {
 	it    *Item
 	idx   int
 	name  string
+	label string    // "!…": the people it is not
+	alt   string    // the other person most alike
 	emb   []float32 // unit (once sampled)
 	raw2  []int8
 	emb2  []float32
@@ -197,7 +200,7 @@ func (l *Library) quizApprove(n int) []QuizFace {
 				if name == "" || it.FacesOK || it.Kind != Photo || (f.Emb == nil && f.Emb2 == nil) {
 					continue
 				}
-				cands = append(cands, quizCand{it: it, idx: i, name: name, emb: f.Emb, raw2: f.Emb2, clear: clarity(it, f)})
+				cands = append(cands, quizCand{it: it, idx: i, name: name, label: label, emb: f.Emb, raw2: f.Emb2, clear: clarity(it, f)})
 				continue
 			}
 			name := ""
@@ -269,9 +272,11 @@ func (l *Library) quizApprove(n int) []QuizFace {
 					sOwn := quizLikeness(c, own)
 					sOther := float32(-1)
 					for name, r := range refs {
-						if name != c.name {
+						if name != c.name && !rejects(c.label, name) {
 							if v := quizCentroid(c, r); v > sOther-0.1 { // only close ones face by face
-								sOther = max(sOther, quizLikeness(c, r))
+								if v2 := quizLikeness(c, r); v2 > sOther || c.alt == "" {
+									sOther, c.alt = max(sOther, v2), name
+								}
 							}
 						}
 					}
@@ -288,12 +293,14 @@ func (l *Library) quizApprove(n int) []QuizFace {
 					}
 				}
 				dense := float64(d) * float64(total[c.name]) / float64(len(same))
-				// people with few approved faces first
+				// people with few approved faces first: below some 50 they are
+				// recognised far worse (on a real library: a quarter to a half
+				// of their faces named right, nine in ten with 100 and more)
 				anchors := 0
 				if r := refs[c.name]; r != nil {
 					anchors = max(len(r.f1), len(r.f2))
 				}
-				boost := 1 + 1/float32(1+anchors)
+				boost := 1 + 3/(1+float32(anchors)/10)
 				c.value = (0.25 + u) * float32(math.Log(2+dense)) * boost * (0.5 + c.clear)
 			}
 		}()
@@ -336,7 +343,7 @@ func (l *Library) quizApprove(n int) []QuizFace {
 		seen[c.it.ID] = true
 		perName[c.name]++
 		q := quizFace(c.it, c.idx)
-		q.Name, q.Person, q.Score = c.name, idOf[c.name], c.value
+		q.Name, q.Person, q.Score, q.Alt = c.name, idOf[c.name], c.value, c.alt
 		out = append(out, q)
 	}
 	return interleave(out)

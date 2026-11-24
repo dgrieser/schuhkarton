@@ -90,9 +90,11 @@ or another one.
   approved, to the rest of its group. Approving shows faces with a name that
   are not approved where the recognition is least sure (close to
   `named_threshold`, or another person about as alike), weighed by how many
-  similar faces each stands for, people with few approved faces first,
-  spread over people and photos. Yes, no (then the right name) or skip; keys
-  J/N/S, a swipe on a phone, Z to go back. The date and place are on the
+  similar faces each stands for, people with few approved faces first (they
+  are recognised far worse), spread over people and photos. The buttons are
+  the name it has (yes), the other person it looks most like (no, that one),
+  *Jemand anders …* (no, then the right name) and skip; keys J/A/N/S, a
+  swipe on a phone, Z to go back. The date and place are on the
   picture; the magnifier (key V) shows the whole photo instead of the face.
   A name just given is offered to choose at once, here and in the name
   sheet, also while the grouping that makes a person of it is still behind. Afterwards *Neu zuordnen* matches

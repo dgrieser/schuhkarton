@@ -1641,7 +1641,11 @@ body.side-mini #sideToggle { position: static; margin: -6px auto 10px; }
 .qz-yesno button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 56px; border-radius: 14px; border: 1px solid #333; background: #1c1d20; color: #fff; font-size: 17px; font-weight: 650; cursor: pointer; }
 .qz-yesno .i { width: 22px; height: 22px; stroke-width: 2.6; }
 .qz-yesno .qz-yes { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
-.qz-yesno .qz-no:hover { background: #2a2b2f; }
+.qz-yesno .qz-no:hover, .qz-yesno .qz-alt:hover { background: #2a2b2f; }
+.qz-yesno:not(.alt) { grid-template-columns: 1fr; }
+.qz-yesno button { min-width: 0; padding: 0 12px; }
+.qz-yesno button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qz-yesno button img { width: 36px; height: 36px; flex: none; border-radius: 50%; object-fit: cover; background: #333; }
 .qz-chips { display: flex; gap: 8px; overflow-x: auto; padding: 2px 2px 6px; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
 .qz-chips::-webkit-scrollbar { display: none; }
 @media (hover: hover) { /* a mouse: a thin bar shows there is more */
