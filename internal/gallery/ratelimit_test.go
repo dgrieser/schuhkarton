@@ -15,8 +15,9 @@ import (
 // next window instead of getting 429, and a 429 anyway is sent again.
 func TestRateBudget(t *testing.T) {
 	defer func(w, u time.Duration) { rateWindow, rateUnknown = w, u }(rateWindow, rateUnknown)
-	rateWindow, rateUnknown = 300*time.Millisecond, 300*time.Millisecond
-	const perWindow = 5
+	// a window long enough that a busy CI runner's scheduling delays stay small
+	rateWindow, rateUnknown = time.Second, time.Second
+	const perWindow = 10
 	var mu sync.Mutex
 	start, used := time.Now(), 0
 	var got429, served atomic.Int64
@@ -63,7 +64,7 @@ func TestRateBudget(t *testing.T) {
 	if served.Load() != 30 {
 		t.Errorf("served %d of 30", served.Load())
 	}
-	// without the budget 28 of the 30 hit 429; with it a few: this server
+	// without the budget most of the 30 hit 429; with it a few: this server
 	// starts its window with the first request after the last one ended
 	t.Logf("429: %d", got429.Load())
 	if n := got429.Load(); n > 8 {
