@@ -161,8 +161,8 @@ type quizCand struct {
 	it    *Item
 	idx   int
 	name  string
-	label string // "!…": the people it is not
-	alt   string // the other person most alike
+	label string    // "!…": the people it is not
+	alt   string    // the other person most alike
 	emb   []float32 // unit (once sampled)
 	raw2  []int8
 	emb2  []float32
