@@ -139,3 +139,73 @@ func TestQuizRounds(t *testing.T) {
 		t.Error("unknown mode accepted")
 	}
 }
+
+// TestQuizApproveAlt: a face to approve comes with the other named person it
+// is most alike, never one it was said not to be.
+func TestQuizApproveAlt(t *testing.T) {
+	var files []string
+	for i := range 7 {
+		files = append(files, fmt.Sprintf("p%d.jpg", i))
+	}
+	l, _ := testLib(t, files...)
+	l.faces = &listFaces{}
+	x, y := []float32{1, 0, 0, 0}, []float32{0, 1, 0, 0}
+	wobble := func(e []float32, k int) []float32 {
+		return normalize([]float32{e[0] + .02*float32(k), e[1] + .015*float32(k%3), e[2] + .01*float32(k), e[3]})
+	}
+	var items []*Item
+	for _, f := range files {
+		items = append(items, byRel(l, f))
+	}
+	l.mu.Lock()
+	for i, it := range items {
+		e := x
+		if i >= 4 {
+			e = y
+		}
+		it.Faces = []Face{{X: .3, Y: .3, W: .3, H: .3, Score: .99, Emb: wobble(e, i)}}
+		it.FacesDone = true
+	}
+	l.mu.Unlock()
+	l.recluster()
+	q, _ := l.QuizFaces("name", 5)
+	if len(q) != 2 {
+		t.Fatalf("name round: %+v", q)
+	}
+	for k, name := range []string{"Xaver", "Yvonne"} {
+		f := q[k]
+		if _, err := l.HintGroup(f.Person, name, FaceRef{f.Item, f.Idx}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := l.LabelFace(f.Item, f.Idx, name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a, err := l.QuizFaces("approve", 10)
+	if err != nil || len(a) == 0 {
+		t.Fatalf("approve round: %v %v", a, err)
+	}
+	for _, f := range a {
+		want := map[string]string{"Xaver": "Yvonne", "Yvonne": "Xaver"}[f.Name]
+		if f.Alt != want {
+			t.Errorf("%s: alt %q, want %q", f.Name, f.Alt, want)
+		}
+	}
+	// said not to be the other one: not offered
+	f := a[0]
+	l.people.mu.Lock()
+	l.people.labels[FaceRef{f.Item, f.Idx}.key()] = "!" + f.Alt
+	l.people.mu.Unlock()
+	for _, g := range must(l.QuizFaces("approve", 10)) {
+		if g.Item == f.Item && g.Alt != "" {
+			t.Errorf("alt %q offered although rejected", g.Alt)
+		}
+	}
+}
+
+func must[T any](v T, err error) T {
+	if err != nil {
+		panic(err)
+	}
+	return v
+}

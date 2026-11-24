@@ -3870,11 +3870,24 @@
       Object.assign(box.style, { width: `${f.w * iw}px`, height: `${f.h * ih}px`, left: `${left + f.x * iw}px`, top: `${top + f.y * ih}px` });
     },
 
+    // the name it has (yes), the other person it is most alike (no, it is that one) and somebody
+    // else (no, then the names to choose from); a face of the person on each
     approveActs(f) {
-      $('.qz-acts', this.el).innerHTML = `<div class="qz-yesno">
-          <button type="button" class="qz-no" data-q="no" title="${t('Nein')} (N, ←)">${icon('x')}<span>${t('Nein')}</span></button>
-          <button type="button" class="qz-yes" data-q="yes" title="${t('Ja')} (J, Enter, →)">${icon('check')}<span>${t('Ja')}</span></button></div>
-        <div class="qz-more">${this.done.length ? `<button type="button" class="qz-back" data-q="back" title="${t('Zurück')} (Z)">${icon('left')}</button>` : ''}<button type="button" data-q="skip" title="S">${icon('right')}<span>${t('Überspringen')}</span></button></div>`;
+      const cover = new Map();
+      for (const p of namedPeople()) if (!(cover.get(p.name)?.count >= p.count)) cover.set(p.name, p);
+      const alt = f.alt && f.alt !== f.name && cover.has(f.alt) ? f.alt : '';
+      const pic = (n) => { const p = cover.get(n); return p?.cover ? `<img src="${faceURL(p.cover.item, p.cover.idx)}" alt="">` : ''; };
+      $('.qz-acts', this.el).innerHTML = `<div class="qz-yesno${alt ? ' alt' : ''}">
+          ${alt ? `<button type="button" class="qz-alt" data-q="alt" title="${esc(t('Nein, das ist {name}', { name: alt }))} (A)">${pic(alt) || icon('user')}<span>${esc(alt)}</span></button>` : ''}
+          <button type="button" class="qz-yes" data-q="yes" title="${esc(t('Ja, das ist {name}', { name: f.name }))} (J, Enter, →)">${pic(f.name) || icon('check')}<span>${esc(f.name)}</span></button></div>
+        <div class="qz-more">${this.done.length ? `<button type="button" class="qz-back" data-q="back" title="${t('Zurück')} (Z)">${icon('left')}</button>` : ''}<button type="button" class="qz-no" data-q="no" title="${t('Jemand anders')} (N, ←)">${icon('user-q')}<span>${t('Jemand anders …')}</span></button><button type="button" data-q="skip" title="S">${icon('right')}<span>${t('Überspringen')}</span></button></div>`;
+    },
+
+    // no, it is the other person offered: "no" to the name shown and that name, one step
+    altAnswer(f) {
+      if (this.busy || !f?.alt) return;
+      this.reject(f, false);
+      this.answerName(f, f.alt, false);
     },
 
     // names to choose from: the people the face looks like first, then the recent ones; a name
@@ -3934,6 +3947,7 @@
       if (q === 'close') this.close();
       else if (q === 'yes') this.approve(f);
       else if (q === 'no') this.reject(f);
+      else if (q === 'alt') this.altAnswer(f);
       else if (q === 'skip') { this.stats.skipped++; this.next(); }
       else if (q === 'back') this.back();
       else if (q === 'noface') this.label(f, '-', false, 'named');
@@ -3956,6 +3970,7 @@
       if (this.mode === 'approve' && $('.qz-yesno', this.el)) {
         if (k === 'j' || k === 'y' || k === 'enter' || k === 'arrowright') { e.preventDefault(); this.approve(f); }
         else if (k === 'n' || k === 'arrowleft') { e.preventDefault(); this.reject(f); }
+        else if (k === 'a' && f.alt) { e.preventDefault(); this.altAnswer(f); }
         else if (k === 's' || k === 'arrowdown') { e.preventDefault(); this.stats.skipped++; this.next(); }
       }
       if (k === 'backspace' || k === 'z') { e.preventDefault(); this.back(); }
@@ -4043,12 +4058,13 @@
     },
 
     // not this person: said so, then the right name can be given (or not)
-    reject(f) {
+    reject(f, pick = true) {
       if (this.busy) return;
       const d = { f, i: this.i, stat: 'rejected' };
       this.done.push(d);
       this.stats.rejected++;
       this.later(() => post(`/api/face/${f.item}/${f.idx}`, { not: f.name }).then((r) => { d.labels = r.undo; }), () => this.drop(d)); // the name shown
+      if (!pick) return;
       $('.qz-q', this.el).innerHTML = t('Wer ist das dann?');
       this.namePicker(f, false, f.name); // not the name it was said not to be
     },
