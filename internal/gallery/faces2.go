@@ -3,7 +3,6 @@ package gallery
 import (
 	"math"
 	"os"
-	"runtime"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -271,7 +270,7 @@ func (l *Library) promoteExtras(force bool) bool {
 	found := make([][]move, len(todo))
 	var wg sync.WaitGroup
 	next := atomic.Int64{}
-	for range runtime.NumCPU() {
+	for range bgWorkers() {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

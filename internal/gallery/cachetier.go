@@ -21,12 +21,20 @@ import (
 // in the cache folder (tier 1, a local disk). When it grows above the cap,
 // the large files (lightbox previews, video previews, converted videos)
 // move to the overflow folder (tier 2, e.g. on the NAS), oldest first, and
-// are read from there; they do not come back. Thumbnails, face crops and
-// the index always stay in tier 1: the grid needs them all the time.
+// are read from there. A file a viewer read from there is copied back (the
+// share may take seconds to wake up; the next look is quick), as the newest.
+// Thumbnails, face crops, video previews (small, the grid plays them) and
+// the index always stay in tier 1.
 
 // spillable tells which variants may move to tier 2.
 func spillable(variant string) bool {
-	return variant == VarLarge || variant == VarPreview || variant == VarH264
+	return variant == VarLarge || variant == VarH264
+}
+
+// inTier2Variant tells which variants may be found in tier 2: the ones
+// that move there, and video previews moved by older versions.
+func inTier2Variant(variant string) bool {
+	return spillable(variant) || variant == VarPreview
 }
 
 // variantOf returns the variant of a cache file name ("<key>-<v>.<ext>").
@@ -41,9 +49,11 @@ func variantOf(name string) string {
 type cacheTiers struct {
 	mu        sync.Mutex // one file at a time moves (rekey, spill, removal)
 	wake      chan struct{}
-	spilled   int64         // files moved in this run, for the log
-	awayUntil atomic.Int64  // tier 2 did not answer: not asked before this time (unix ns)
-	lookups   chan struct{} // viewers' lookups under way, those left hanging included
+	spilled   int64          // files moved in this run, for the log
+	awayUntil atomic.Int64   // tier 2 did not answer: not asked before this time (unix ns)
+	lookups   chan struct{}  // viewers' lookups under way, those left hanging included
+	back      chan [2]string // files to copy back from tier 2 (from, to)
+	backing   sync.Map       // to -> true: queued or being copied
 }
 
 // Tier 2 is a share, and a share can hang. A viewer's lookup there waits at
@@ -104,7 +114,7 @@ func (l *Library) inTier2(p string) (bool, error) {
 
 // overflowFile is where a variant of a key lives in tier 2 ("" without one).
 func (l *Library) overflowFile(key, variant string) string {
-	if l.opt.OverflowDir == "" || !spillable(variant) || len(key) < 2 {
+	if l.opt.OverflowDir == "" || !inTier2Variant(variant) || len(key) < 2 {
 		return ""
 	}
 	return filepath.Join(l.opt.OverflowDir, "thumbs", key[:2], filepath.Base(l.cacheFile(key, variant)))
@@ -131,7 +141,63 @@ func (l *Library) cached(it *Item, variant string, background bool) (string, err
 	if ok, err := l.inTier2(p); !ok {
 		return "", err
 	}
+	l.bringBack(p, l.CachePath(it, variant))
 	return p, nil
+}
+
+// bringBack copies a file a viewer read from tier 2 back to tier 1, in the
+// background, a few at a time (more wait for the next look).
+func (l *Library) bringBack(from, to string) {
+	if l.tiers.back == nil {
+		return
+	}
+	if _, busy := l.tiers.backing.LoadOrStore(to, true); busy {
+		return
+	}
+	select {
+	case l.tiers.back <- [2]string{from, to}:
+	default:
+		l.tiers.backing.Delete(to)
+	}
+}
+
+func (l *Library) bringBackLoop(ctx context.Context) {
+	defer l.bg.Done()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case ft := <-l.tiers.back:
+			l.copyBack(ctx, ft[0], ft[1])
+			l.tiers.backing.Delete(ft[1])
+		}
+	}
+}
+
+func (l *Library) copyBack(ctx context.Context, from, to string) {
+	if exists(to) {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(to), 0o755); err != nil {
+		return
+	}
+	tmp, err := copyToTemp(ctx, from, to)
+	if err != nil {
+		return
+	}
+	now := time.Now()
+	os.Chtimes(tmp, now, now) // the newest: the last to move out again
+	l.tiers.mu.Lock()
+	defer l.tiers.mu.Unlock()
+	if exists(to) || !exists(from) { // made anew or removed (rotated, deleted) meanwhile
+		os.Remove(tmp)
+		return
+	}
+	if err := os.Rename(tmp, to); err != nil {
+		os.Remove(tmp)
+		return
+	}
+	l.kickSpill()
 }
 
 // CachedPath is cached for the server (a viewer).
@@ -186,7 +252,7 @@ func (l *Library) haveCached() func(*Item, string) bool {
 		if exists(p) {
 			return true
 		}
-		if l.opt.OverflowDir == "" || !spillable(variant) {
+		if l.opt.OverflowDir == "" || !inTier2Variant(variant) {
 			return false
 		}
 		if unreadable[""] || len(it.key) >= 2 && unreadable[it.key[:2]] {

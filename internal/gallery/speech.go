@@ -110,7 +110,7 @@ func (l *Library) markSpeechDirty() {
 	if l.speech.dirty.Swap(true) {
 		return
 	}
-	time.AfterFunc(30*time.Second, func() {
+	time.AfterFunc(resultsEvery, func() {
 		if err := l.saveSpeech(); err != nil {
 			l.logf("%v", err)
 		}
@@ -384,7 +384,7 @@ func (l *Library) extractAudio(ctx context.Context, src string, maxSec int) ([]b
 	cmd := exec.CommandContext(ctx, l.media.ffmpeg, "-v", "info", "-nostats", "-y", "-i", src, "-vn", "-sn", "-dn",
 		"-t", strconv.Itoa(maxSec), "-ac", "1", "-ar", "16000", "-af", "volumedetect",
 		"-c:a", "libmp3lame", "-b:a", "32k", "-f", "mp3", tmp.Name())
-	out, err := cmd.CombinedOutput()
+	out, err := combinedNice(cmd)
 	text := string(out)
 	if err != nil {
 		if ctx.Err() != nil {

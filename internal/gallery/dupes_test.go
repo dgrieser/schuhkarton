@@ -680,6 +680,9 @@ func TestDupesSavedSplit(t *testing.T) {
 	if err := l.IgnoreDupes(g.Items); err != nil {
 		t.Fatal(err)
 	}
+	if err := l.saveDupesNow(false); err != nil { // what the timer of markDupesDirty does a while later
+		t.Fatal(err)
+	}
 	if fi2, _ := os.Stat(sigs); !fi2.ModTime().Equal(old) {
 		t.Error("hashes written again for a decision")
 	}

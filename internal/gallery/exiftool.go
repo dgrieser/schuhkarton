@@ -78,6 +78,7 @@ func startExifTool(bin, cfg string) (*exifTool, error) {
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
+	niceStarted(cmd)
 	return &exifTool{cmd: cmd, in: in, out: bufio.NewReaderSize(out, 1<<20), errBuf: eb}, nil
 }
 

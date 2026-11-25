@@ -118,7 +118,7 @@ func (l *Library) markOCRDirty() {
 	if l.ocr.dirty.Swap(true) {
 		return
 	}
-	time.AfterFunc(30*time.Second, func() {
+	time.AfterFunc(resultsEvery, func() {
 		if err := l.saveOCR(); err != nil {
 			l.logf("%v", err)
 		}

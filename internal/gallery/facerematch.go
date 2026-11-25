@@ -3,7 +3,6 @@ package gallery
 import (
 	"errors"
 	"math"
-	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -107,7 +106,7 @@ func (l *Library) rematch(person string) (looked, changed int) {
 	need := l.people.threshNamed
 	var wg sync.WaitGroup
 	next := atomic.Int64{}
-	for range runtime.NumCPU() {
+	for range bgWorkers() {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

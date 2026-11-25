@@ -276,7 +276,7 @@ func (l *Library) ffmpegImage(src, sp, lp string, both bool) error {
 	}
 	for _, t := range targets {
 		cmd := exec.Command(l.media.ffmpeg, "-v", "error", "-y", "-i", src, "-frames:v", "1", "-vf", t.vf, "-q:v", "3", t.path+".tmp.jpg")
-		if out, err := cmd.CombinedOutput(); err != nil {
+		if out, err := combinedNice(cmd); err != nil {
 			return fmt.Errorf("ffmpeg: %v %s", err, firstLine(out))
 		}
 		if err := os.Rename(t.path+".tmp.jpg", t.path); err != nil {
@@ -422,7 +422,7 @@ func (l *Library) runFFmpeg(ctx context.Context, args ...string) error {
 	tctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(tctx, l.media.ffmpeg, append([]string{"-v", "error", "-y", "-nostdin"}, args...)...)
-	if out, err := cmd.CombinedOutput(); err != nil {
+	if out, err := combinedNice(cmd); err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -603,7 +603,7 @@ func (l *Library) decodeExternal(ctx context.Context, it *Item) (image.Image, er
 	}
 	if err != nil && l.media.ffmpeg != "" {
 		cmd := exec.CommandContext(ctx, l.media.ffmpeg, "-v", "error", "-y", "-i", src, "-frames:v", "1", "-q:v", "2", "-update", "1", tmp.Name())
-		if out, cerr := cmd.CombinedOutput(); cerr != nil {
+		if out, cerr := combinedNice(cmd); cerr != nil {
 			err = fmt.Errorf("ffmpeg: %v %s", cerr, firstLine(out))
 		} else {
 			err = nil

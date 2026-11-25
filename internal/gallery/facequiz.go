@@ -170,7 +170,67 @@ type quizCand struct {
 	value float32
 }
 
+// quizRanking is the faces worth approving, most worth it first, as
+// quizRank found them; the next round takes from it at once (ranking takes
+// seconds on a small machine) and it is made again in the background.
+type quizRanking struct {
+	at    time.Time
+	cands []quizCand
+	idOf  map[string]string // name -> person id
+	names int               // people with faces in it
+}
+
+// quizFresh is how long a ranking serves rounds: the faces in it are
+// checked again when picked (approved meanwhile, another name), only their
+// order may be a little behind.
+const quizFresh = 15 * time.Minute
+
+// quizWarm is when after the start the first ranking is made.
+var quizWarm = 2 * time.Minute
+
 func (l *Library) quizApprove(n int) []QuizFace {
+	l.quizMu.Lock()
+	r := l.quizRank
+	l.quizMu.Unlock()
+	made := false
+	if r == nil || time.Since(r.at) > quizFresh {
+		r, made = l.rankQuiz(runtime.NumCPU()), true // somebody waits: every core
+	}
+	out := l.pickQuiz(r, n)
+	if len(out) < n && !made {
+		// the kept ranking is used up (answered meanwhile), or faces got a
+		// name since: ranked anew before a round comes short or empty
+		out = l.pickQuiz(l.rankQuiz(runtime.NumCPU()), n)
+	}
+	l.rankQuizSoon() // the next round
+	return out
+}
+
+// rankQuizSoon ranks the faces again in the background (one at a time).
+func (l *Library) rankQuizSoon() {
+	if l.quizRanking.Swap(true) {
+		return
+	}
+	l.Go(func() {
+		defer l.quizRanking.Store(false)
+		if !l.closing.Load() {
+			l.rankQuiz(bgWorkers())
+		}
+	})
+}
+
+// rankQuiz ranks the faces not approved by how much an answer is worth
+// and keeps the ranking for the next rounds.
+func (l *Library) rankQuiz(workers int) *quizRanking {
+	cands, idOf, names := l.quizRankNow(workers)
+	r := &quizRanking{at: time.Now(), cands: cands, idOf: idOf, names: names}
+	l.quizMu.Lock()
+	l.quizRank = r
+	l.quizMu.Unlock()
+	return r
+}
+
+func (l *Library) quizRankNow(workers int) ([]quizCand, map[string]string, int) {
 	s := l.people
 	s.mu.RLock()
 	labels := make(map[string]string, len(s.labels))
@@ -229,7 +289,7 @@ func (l *Library) quizApprove(n int) []QuizFace {
 	}
 	l.mu.RUnlock()
 	if len(cands) == 0 {
-		return nil
+		return nil, idOf, 0
 	}
 	for _, r := range refs {
 		r.cent1, r.cent2 = meanUnit(r.f1), meanUnit(r.f2)
@@ -260,7 +320,7 @@ func (l *Library) quizApprove(n int) []QuizFace {
 	need := l.people.threshNamed
 	var wg sync.WaitGroup
 	next := make(chan int)
-	for range runtime.NumCPU() {
+	for range workers {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -311,22 +371,36 @@ func (l *Library) quizApprove(n int) []QuizFace {
 	close(next)
 	wg.Wait()
 	sort.Slice(cands, func(a, b int) bool { return cands[a].value > cands[b].value })
+	return cands, idOf, len(byName)
+}
 
-	// the most worth it, spread over people, no photo twice, no near copies
+// pickQuiz takes the most worth it from a ranking: spread over people, no
+// photo twice, no near copies, and only faces still as they were ranked
+// (not approved meanwhile, the same name, the item still there).
+func (l *Library) pickQuiz(r *quizRanking, n int) []QuizFace {
+	if r == nil || len(r.cands) == 0 {
+		return nil
+	}
+	cands := r.cands
 	perName := map[string]int{}
-	people := len(byName)
-	most := max(2, (n+people-1)/people+1)
+	most := max(2, (n+r.names-1)/max(1, r.names)+1)
 	seen := map[string]bool{}
 	var picked []*quizCand
 	var out []QuizFace
-	l.mu.RLock()
+	s := l.people
+	l.mu.RLock() // the library first, then the people (as dropDuplicateFaces)
 	defer l.mu.RUnlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	for k := range cands {
 		c := &cands[k]
 		if len(out) >= n {
 			break
 		}
 		if seen[c.it.ID] || perName[c.name] >= most || c.idx >= len(c.it.Faces) {
+			continue
+		}
+		if !l.quizStill(c) {
 			continue
 		}
 		dup := false
@@ -343,10 +417,26 @@ func (l *Library) quizApprove(n int) []QuizFace {
 		seen[c.it.ID] = true
 		perName[c.name]++
 		q := quizFace(c.it, c.idx)
-		q.Name, q.Person, q.Score, q.Alt = c.name, idOf[c.name], c.value, c.alt
+		q.Name, q.Person, q.Score, q.Alt = c.name, r.idOf[c.name], c.value, c.alt
 		out = append(out, q)
 	}
 	return interleave(out)
+}
+
+// quizStill tells whether a ranked face is still to approve as ranked; the
+// caller holds l.mu and l.people.mu (read).
+func (l *Library) quizStill(c *quizCand) bool {
+	if l.byID[c.it.ID] != c.it || c.it.FacesOK {
+		return false // rescanned, removed, or approved as a whole
+	}
+	s := l.people
+	key := FaceRef{c.it.ID, c.idx}.key()
+	label := s.labels[key]
+	if label != c.label || faceKept(c.it.Faces[c.idx], approvedLabel(label)) {
+		return false // answered meanwhile
+	}
+	p := s.byID[s.byFace[key]]
+	return p != nil && p.Name == c.name
 }
 
 // interleave orders the faces so the same person does not come twice in a

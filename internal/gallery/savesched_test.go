@@ -6,10 +6,10 @@ import (
 )
 
 // Background changes are saved at most every saveEvery; changes made by
-// hand come sooner; changes coming together are saved together.
+// hand come sooner (at most every saveGap); changes coming together are saved together.
 func TestSaveSchedule(t *testing.T) {
-	defer func(d, e time.Duration) { saveDelay, saveEvery = d, e }(saveDelay, saveEvery)
-	saveDelay, saveEvery = 30*time.Millisecond, 400*time.Millisecond
+	defer func(d, g, e time.Duration) { saveDelay, saveGap, saveEvery = d, g, e }(saveDelay, saveGap, saveEvery)
+	saveDelay, saveGap, saveEvery = 30*time.Millisecond, 30*time.Millisecond, 400*time.Millisecond
 	l, err := Open(Options{Roots: []Root{{Name: "B", Path: t.TempDir()}}, CacheDir: t.TempDir(), Workers: 1})
 	if err != nil {
 		t.Fatal(err)

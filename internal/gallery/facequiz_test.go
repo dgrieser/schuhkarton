@@ -93,6 +93,18 @@ func TestQuizRounds(t *testing.T) {
 	if f, _ := l.FaceApproval(l.Get(no.Item)); f[no.Idx] {
 		t.Error("rejected face approved")
 	}
+	// the next round comes from the ranking kept (no waiting), without the face answered
+	l.quizMu.Lock()
+	kept := l.quizRank
+	l.quizMu.Unlock()
+	if kept == nil {
+		t.Fatal("no ranking kept")
+	}
+	for _, f := range l.pickQuiz(kept, 10) {
+		if f.Item == no.Item && f.Idx == no.Idx {
+			t.Error("face answered comes again")
+		}
+	}
 	if _, err := l.RejectFace(first.Item, first.Idx, "Yvonne"); err == nil {
 		t.Error("a face named otherwise said not to be somebody else")
 	}

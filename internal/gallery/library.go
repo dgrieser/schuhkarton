@@ -391,6 +391,9 @@ type Library struct {
 	saveGen     int
 	// reclusterSoon: a run is queued; one runs at a time
 	reclusterQueued atomic.Bool
+	quizMu          sync.Mutex
+	quizRank        *quizRanking // see quizApprove
+	quizRanking     atomic.Bool  // a ranking is being made in the background
 	reclusterRun    sync.Mutex
 	lock            *os.File
 
@@ -490,10 +493,14 @@ func Open(opt Options) (*Library, error) {
 		l.xmpJob.name, l.xmpJob.kind = "metadata", schedule.JobMetadata
 	}
 	l.people = newPeopleStore(filepath.Join(opt.CacheDir, "people.json"), opt.Faces.ClusterThreshold, opt.Faces.NamedThreshold, opt.Faces.SamePhotoThreshold)
+	l.people.lazy = newLazyWrite("people.json", pageDelay, l.people.writeNow, l.logf)
 	l.importJob.wake = make(chan struct{}, 1)
 	l.manualEmb = make(chan struct{}, 1)
 	l.tiers.wake = make(chan struct{}, 1)
 	l.tiers.lookups = make(chan struct{}, maxTier2Lookups)
+	if opt.OverflowDir != "" {
+		l.tiers.back = make(chan [2]string, 32)
+	}
 	l.loadEdits()
 	if err := l.SetRules(opt.Rules); err != nil {
 		l.logf("Regeln ausgeschaltet: %v", err)
@@ -528,6 +535,9 @@ func (l *Library) Close() {
 		l.logf("background jobs still running, closing anyway")
 	}
 	l.saveIndex()
+	if err := l.people.lazy.flushStop(); err != nil {
+		l.logf("people.json: %v", err)
+	}
 	if l.opt.Import.Dir != "" {
 		l.importJob.dirty.Store(true) // filing may have moved imported files after the import loop stopped
 		l.saveImportStems()
@@ -872,7 +882,7 @@ func (l *Library) saveIndexErr() (err error) {
 		err = e
 		l.logf("save index: %v", e)
 		l.dirty.Store(true) // try again later
-		l.scheduleSave(saveEvery)
+		l.scheduleSave(saveGap)
 	}
 	// only the encoding holds the lock (a writer waiting for it holds up
 	// every reader, the viewer too); compressing and writing come after
@@ -885,6 +895,8 @@ func (l *Library) saveIndexErr() (err error) {
 		failed(err)
 		return err
 	}
+	diskMu.Lock()
+	defer diskMu.Unlock()
 	path := filepath.Join(l.opt.CacheDir, "index.gob.gz")
 	tmp := path + ".tmp"
 	f, err := os.Create(tmp)
@@ -916,30 +928,38 @@ func (l *Library) saveIndexErr() (err error) {
 }
 
 // saveDelay is the wait before a save, so that changes coming together
-// are saved together; saveEvery the least time between two saves for work
-// that is made again after a crash (face scans, metadata): each save costs
-// seconds of CPU on a small machine.
+// are saved together; saveGap the least time between two saves for what was
+// done on the page (at most some five minutes of it are lost when the
+// program is killed); saveEvery the least time between two saves for work
+// that is made again after a crash (face scans, metadata). The index is
+// tens of megabytes: on an SD card each save keeps the disk busy for half a
+// minute, slowing everything else that needs it.
 var (
-	saveDelay = 20 * time.Second
-	saveEvery = 3 * time.Minute
+	saveDelay = pageDelay
+	saveGap   = 4 * time.Minute
+	saveEvery = resultsEvery
 )
 
 // markDirty schedules an index save: saveDelay from now, or saveEvery after
 // the last save when that is later.
 func (l *Library) markDirty() {
 	l.dirty.Store(true)
-	wait := saveDelay
-	if last := l.lastSave.Load(); last != 0 {
-		wait = max(wait, time.Until(time.Unix(0, last).Add(saveEvery)))
-	}
-	l.scheduleSave(wait)
+	l.scheduleSave(l.saveWait(saveEvery))
 }
 
-// saveSoon is markDirty for what somebody did by hand (it cannot be made
-// again): saved after saveDelay, however recent the last save.
+// saveSoon is markDirty for what somebody did by hand: saved after
+// saveDelay, or saveGap after the last save when that is later.
 func (l *Library) saveSoon() {
 	l.dirty.Store(true)
-	l.scheduleSave(saveDelay)
+	l.scheduleSave(l.saveWait(saveGap))
+}
+
+func (l *Library) saveWait(gap time.Duration) time.Duration {
+	wait := saveDelay
+	if last := l.lastSave.Load(); last != 0 {
+		wait = max(wait, time.Until(time.Unix(0, last).Add(gap)))
+	}
+	return wait
 }
 
 // cancelSave drops the pending save (a save runs now).
@@ -1169,6 +1189,8 @@ func (l *Library) RenameKeys(pairs map[string]string) error {
 }
 
 func writeFileAtomic(path string, b []byte) error {
+	diskMu.Lock()
+	defer diskMu.Unlock()
 	// a temp file of its own: two saves at once must not rename each
 	// other's away ("rename dupes.json.tmp: no such file or directory");
 	// it is made 0600, only for the gallery's own user

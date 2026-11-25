@@ -13,6 +13,8 @@ func TestAsyncRegroup(t *testing.T) {
 	a.Faces = []Face{{X: .1, Y: .1, W: .2, H: .2, Score: .9, Emb: normalize([]float32{1, 0})}}
 	l.mu.Unlock()
 	l.opt.AsyncRegroup = true
+	defer func(d time.Duration) { regroupSettle = d }(regroupSettle)
+	regroupSettle = 10 * time.Millisecond
 	if _, err := l.LabelFace(a.ID, 0, "Anna"); err != nil {
 		t.Fatal(err)
 	}

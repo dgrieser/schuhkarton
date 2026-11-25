@@ -126,11 +126,13 @@ type dupeStore struct {
 	// incomplete: the last grouping could not read some files; it is
 	// grouped again after dupeRegroup (no scan may come for days)
 	incomplete bool
-	ver        int64       // -1: not checked since the start; else the item list the groups are right for (see listVer)
-	dirty      atomic.Bool // dupes.json to write
-	sigsDirty  atomic.Bool // dupesigs.gob to write too
-	sigsOnDisk atomic.Bool // dupesigs.gob there (loaded or written)
-	saveMu     sync.Mutex  // one dupes.json write at a time
+	ver        int64        // -1: not checked since the start; else the item list the groups are right for (see listVer)
+	dirty      atomic.Bool  // dupes.json to write
+	sigsDirty  atomic.Bool  // dupesigs.gob to write too
+	sigsOnDisk atomic.Bool  // dupesigs.gob there (loaded or written)
+	sigsAt     atomic.Int64 // when dupesigs.gob was last written (unix nanoseconds)
+	sigsLater  atomic.Bool  // a write of the hashes is scheduled
+	saveMu     sync.Mutex   // one dupes.json write at a time
 
 	grouped time.Time // last grouping
 	pending int       // changes since the last grouping (new hashes, written files)
@@ -153,6 +155,7 @@ func (l *Library) loadDupes() {
 		if gob.NewDecoder(bufio.NewReader(f)).Decode(&sigs) == nil && sigs != nil {
 			l.dupe.sigs = sigs
 			l.dupe.sigsOnDisk.Store(true)
+			l.dupe.sigsAt.Store(time.Now().UnixNano()) // the next write counts from the start
 		}
 		f.Close()
 	}
@@ -191,7 +194,7 @@ func (l *Library) saveDupesNow(withSigs bool) error {
 	// one save at a time: an older state must not land after a newer one
 	l.dupe.saveMu.Lock()
 	defer l.dupe.saveMu.Unlock()
-	if !l.dupe.dirty.Swap(false) {
+	if !l.dupe.dirty.Swap(false) && !(withSigs && l.dupe.sigsDirty.Load()) {
 		return nil
 	}
 	// without dupesigs.gob (version 1 taken over) the hashes come first:
@@ -217,40 +220,54 @@ func (l *Library) saveDupesNow(withSigs bool) error {
 			err = writeFileAtomic(filepath.Join(l.opt.CacheDir, "dupesigs.gob"), buf.Bytes())
 			if err == nil {
 				l.dupe.sigsOnDisk.Store(true)
+				l.dupe.sigsAt.Store(time.Now().UnixNano())
 			}
 		}
 	}
 	if err == nil {
 		err = writeFileAtomic(filepath.Join(l.opt.CacheDir, "dupes.json"), b)
 	}
-	if err == nil && l.dupe.sigsDirty.Load() {
-		l.markDupesDirty() // the hashes left for later
-	}
 	if err != nil {
 		// tried again with the next save
 		if sigs {
-			l.dupe.sigsDirty.Store(true)
+			l.markSigsDirty()
 		}
 		l.markDupesDirty()
 	}
 	return err
 }
 
+// markDupesDirty schedules writing dupes.json (decisions, groups) after
+// pageDelay; the hashes wait for markSigsDirty's own timer.
 func (l *Library) markDupesDirty() {
 	if l.dupe.dirty.Swap(true) {
 		return
 	}
-	time.AfterFunc(30*time.Second, func() {
-		if err := l.saveDupes(); err != nil {
+	time.AfterFunc(pageDelay, func() {
+		if err := l.saveDupesNow(false); err != nil {
 			l.logf("dupes.json: %v", err)
 		}
 	})
 }
 
-// markSigsDirty notes changed hashes (written with the next save).
+// markSigsDirty notes changed hashes: written at most every resultsEvery
+// (megabytes; they are made again after a crash).
 func (l *Library) markSigsDirty() {
 	l.dupe.sigsDirty.Store(true)
-	l.markDupesDirty()
+	if l.dupe.sigsLater.Swap(true) {
+		return
+	}
+	wait := pageDelay
+	if at := l.dupe.sigsAt.Load(); at != 0 {
+		wait = max(wait, time.Until(time.Unix(0, at).Add(resultsEvery)))
+	}
+	time.AfterFunc(wait, func() {
+		l.dupe.sigsLater.Store(false)
+		l.dupe.dirty.Store(true)
+		if err := l.saveDupesNow(true); err != nil {
+			l.logf("dupes.json: %v", err)
+		}
+	})
 }
 
 // renameDupes moves hashes and ignore entries to new keys ("" drops them).
@@ -1587,7 +1604,8 @@ func (l *Library) IgnoreDupes(ids []string) error {
 		return errors.New("zu wenige Elemente")
 	}
 	l.kickDupes()
-	return l.saveDupesNow(false)
+	l.markDupesDirty() // written a while later, with the next decisions
+	return nil
 }
 
 // keepApart remembers that the items (at least two still there) are no
