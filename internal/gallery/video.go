@@ -88,7 +88,7 @@ func (l *Library) videoClip(ctx context.Context, it *Item) (string, int, error) 
 	run := func(codec ...string) error {
 		args := append([]string{"-v", "error", "-nostdin", "-y"}, in...)
 		args = append(append(args, "-frames:v", strconv.Itoa(clipFrames), "-pix_fmt", "yuv420p"), codec...)
-		out, err := exec.CommandContext(ctx, l.media.ffmpeg, append(args, "-movflags", "+faststart", "-f", "mp4", f.Name())...).CombinedOutput()
+		out, err := combinedNice(exec.CommandContext(ctx, l.media.ffmpeg, append(args, "-movflags", "+faststart", "-f", "mp4", f.Name())...))
 		if err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
@@ -128,9 +128,9 @@ func (l *Library) seekFrames(ctx context.Context, it *Item, dir, scale string) (
 		go func() {
 			defer func() { <-sem; wg.Done() }()
 			at := (float64(i) + 0.5) * it.Duration / clipFrames
-			out, err := exec.CommandContext(ctx, l.media.ffmpeg, "-v", "error", "-nostdin", "-y",
+			out, err := combinedNice(exec.CommandContext(ctx, l.media.ffmpeg, "-v", "error", "-nostdin", "-y",
 				"-ss", fmt.Sprintf("%.3f", at), "-i", l.Path(it), "-map", "0:v:0", "-frames:v", "1",
-				"-vf", scale, "-q:v", "3", filepath.Join(dir, fmt.Sprintf("s%02d.jpg", i))).CombinedOutput()
+				"-vf", scale, "-q:v", "3", filepath.Join(dir, fmt.Sprintf("s%02d.jpg", i))))
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
@@ -172,10 +172,10 @@ func (l *Library) clipPictures(ctx context.Context, clip string, frames, n int) 
 	}
 	defer os.RemoveAll(dir)
 	every := max(1, int(math.Ceil(float64(frames)/float64(n))))
-	out, err := exec.CommandContext(ctx, l.media.ffmpeg, "-v", "error", "-nostdin", "-y", "-i", clip,
+	out, err := combinedNice(exec.CommandContext(ctx, l.media.ffmpeg, "-v", "error", "-nostdin", "-y", "-i", clip,
 		// new times without gaps, or the output would fill them with copies
 		"-vf", fmt.Sprintf("select='not(mod(n\\,%d))',setpts=N/FRAME_RATE/TB", every),
-		"-frames:v", strconv.Itoa(n), "-q:v", "4", filepath.Join(dir, "f%02d.jpg")).CombinedOutput()
+		"-frames:v", strconv.Itoa(n), "-q:v", "4", filepath.Join(dir, "f%02d.jpg")))
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()

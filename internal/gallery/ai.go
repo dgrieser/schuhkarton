@@ -129,7 +129,7 @@ func (l *Library) markAIDirty() {
 	if l.ai.dirty.Swap(true) {
 		return
 	}
-	time.AfterFunc(30*time.Second, func() {
+	time.AfterFunc(resultsEvery, func() {
 		if err := l.saveAI(); err != nil {
 			l.logf("%v", err)
 		}

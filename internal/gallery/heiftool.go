@@ -352,7 +352,7 @@ func decodeHEIFToolWith(tool, p string) (image.Image, error) {
 	out := filepath.Join(dir, "img.jpg")
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	if b, err := exec.CommandContext(ctx, tool, "-q", "95", p, out).CombinedOutput(); err != nil {
+	if b, err := combinedNice(exec.CommandContext(ctx, tool, "-q", "95", p, out)); err != nil {
 		return nil, fmt.Errorf("%s: %v %s", filepath.Base(tool), err, firstLine(b))
 	}
 	if !exists(out) {

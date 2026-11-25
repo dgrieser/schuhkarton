@@ -106,7 +106,8 @@ func TestSpillOldestFirst(t *testing.T) {
 		return p
 	}
 	oldest := mk("aa11-m.jpg", 4000, 3*time.Hour)
-	middle := mk("bb22-p.mp4", 4000, 2*time.Hour)
+	middle := mk("bb22-m.jpg", 4000, 2*time.Hour)
+	video := mk("ff66-p.mp4", 400, 6*time.Hour) // a video preview stays: the grid plays them
 	newest := mk("cc33-h.mp4", 4000, time.Hour)
 	thumb := mk("dd44-s.jpg", 4000, 5*time.Hour)
 	l.opt.MaxCache = 20000
@@ -119,7 +120,7 @@ func TestSpillOldestFirst(t *testing.T) {
 	if exists(oldest) || exists(middle) || !exists(newest) || !exists(thumb) {
 		t.Errorf("oldest %v middle %v newest %v thumb %v", exists(oldest), exists(middle), exists(newest), exists(thumb))
 	}
-	if !exists(filepath.Join(over, "thumbs", "aa", "aa11-m.jpg")) || !exists(filepath.Join(over, "thumbs", "bb", "bb22-p.mp4")) {
+	if !exists(filepath.Join(over, "thumbs", "aa", "aa11-m.jpg")) || !exists(filepath.Join(over, "thumbs", "bb", "bb22-m.jpg")) {
 		t.Error("not in tier 2")
 	}
 	// with the grace time a request that has the old path still finds it
@@ -132,6 +133,9 @@ func TestSpillOldestFirst(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	if exists(newest) || !exists(filepath.Join(over, "thumbs", "cc", "cc33-h.mp4")) {
 		t.Error("not removed after the grace time")
+	}
+	if !exists(video) {
+		t.Error("video preview moved to tier 2")
 	}
 	// overflow folder gone (NAS not mounted): nothing is written there
 	gone := filepath.Join(t.TempDir(), "nas", "cache")
@@ -279,5 +283,32 @@ func TestSpillGoneFile(t *testing.T) {
 	var l Library
 	if err := l.moveToTier2(context.Background(), filepath.Join(t.TempDir(), "gone-l.jpg"), filepath.Join(t.TempDir(), "x-l.jpg")); !errors.Is(err, errSpillGone) {
 		t.Errorf("got %v", err)
+	}
+}
+
+// A file a viewer reads from tier 2 comes back to tier 1, as the newest.
+func TestBringBack(t *testing.T) {
+	cache, over := t.TempDir(), t.TempDir()
+	l := &Library{opt: Options{CacheDir: cache, OverflowDir: over}}
+	l.tiers.back = make(chan [2]string, 4)
+	from := filepath.Join(over, "thumbs", "aa", "aa11-m.jpg")
+	to := filepath.Join(cache, "thumbs", "aa", "aa11-m.jpg")
+	os.MkdirAll(filepath.Dir(from), 0o755)
+	os.WriteFile(from, []byte("big"), 0o644)
+	old := time.Now().Add(-time.Hour)
+	os.Chtimes(from, old, old)
+	l.bringBack(from, to)
+	l.bringBack(from, to) // asked twice: copied once
+	if len(l.tiers.back) != 1 {
+		t.Fatalf("%d queued", len(l.tiers.back))
+	}
+	ft := <-l.tiers.back
+	l.copyBack(context.Background(), ft[0], ft[1])
+	st, err := os.Stat(to)
+	if err != nil || time.Since(st.ModTime()) > time.Minute {
+		t.Fatalf("not back as the newest: %v", err)
+	}
+	if b, _ := os.ReadFile(to); string(b) != "big" {
+		t.Error("content")
 	}
 }

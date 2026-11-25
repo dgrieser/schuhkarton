@@ -17,6 +17,18 @@ import (
 // until ctx ends. Scan kicks it after every pass.
 func (l *Library) Start(ctx context.Context) {
 	ctx, l.stopBG = context.WithCancel(ctx)
+	// the first quick round need not wait for the ranking either
+	l.bg.Add(1)
+	go func() {
+		defer l.bg.Done()
+		select {
+		case <-ctx.Done():
+		case <-time.After(quizWarm):
+			if l.people.count() > 0 {
+				l.rankQuizSoon()
+			}
+		}
+	}()
 	l.bg.Add(1)
 	go func() {
 		defer l.bg.Done()
@@ -65,6 +77,10 @@ func (l *Library) Start(ctx context.Context) {
 	if l.opt.OverflowDir != "" && l.opt.MaxCache >= 0 {
 		l.bg.Add(1)
 		go l.spillLoop(ctx)
+	}
+	if l.tiers.back != nil {
+		l.bg.Add(1)
+		go l.bringBackLoop(ctx)
 	}
 	if l.opt.Import.Dir != "" {
 		l.bg.Add(1)

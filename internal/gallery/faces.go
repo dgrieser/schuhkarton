@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math"
 	"os"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -84,6 +83,8 @@ type peopleStore struct {
 	byFace map[string]string // face key -> person id
 	hidden []hiddenRec       // groups hidden with "Ausblenden", newest last
 
+	lazy *lazyWrite // people.json is written a while after a change
+
 	clusterMu sync.Mutex
 	apart     int // faces the last clustering kept away from a person already in their picture
 }
@@ -104,13 +105,23 @@ func newPeopleStore(path string, threshNew, threshNamed, threshSame float64) *pe
 	return s
 }
 
+// save writes the labels a while later (see lazyWrite); without one (in
+// tests) at once.
 func (s *peopleStore) save() error {
+	if s.lazy == nil {
+		return s.writeNow()
+	}
+	s.lazy.mark()
+	return nil
+}
+
+func (s *peopleStore) writeNow() error {
 	s.mu.RLock()
 	f := map[string]any{"labels": s.labels}
 	if len(s.hidden) > 0 {
 		f["hidden"] = s.hidden
 	}
-	b, err := json.MarshalIndent(f, "", " ")
+	b, err := json.Marshal(f)
 	s.mu.RUnlock()
 	if err != nil {
 		return err
@@ -736,11 +747,16 @@ type faceSnap struct {
 // recluster rebuilds the people from a consistent snapshot of the faces.
 // reclusterSoon groups the faces again in the background; calls while
 // one runs make one more run after it.
+// regroupSettle is the wait before grouping again in the background.
+var regroupSettle = 3 * time.Second
+
 func (l *Library) reclusterSoon() {
 	if l.reclusterQueued.Swap(true) {
 		return
 	}
 	l.Go(func() { // Close waits for it (its changes go into the last save)
+		// answers coming one after another (a quick round) are grouped once
+		time.Sleep(regroupSettle)
 		l.reclusterRun.Lock()
 		defer l.reclusterRun.Unlock()
 		l.reclusterQueued.Store(false)
@@ -951,7 +967,8 @@ func buildPeople(items []faceSnap, labels map[string]string, threshNew, threshNa
 		cands := candidates(rest, namedList, threshNamed-knnFar)
 		per := make([][]pair, len(rest))
 		var wg sync.WaitGroup
-		step := max(1, (len(rest)+runtime.NumCPU()-1)/runtime.NumCPU())
+		nw := bgWorkers() // one core left for answering the page
+		step := max(1, (len(rest)+nw-1)/nw)
 		for lo := 0; lo < len(rest); lo += step {
 			wg.Add(1)
 			go func(lo, hi int) {
@@ -1203,7 +1220,7 @@ type match struct {
 func candidates(faces []*faceRec, clusters []*cluster, least float32) [][]match {
 	out := make([][]match, len(faces))
 	var wg sync.WaitGroup
-	n := runtime.NumCPU()
+	n := bgWorkers() // one core left for answering the page
 	step := max(1, (len(faces)+n-1)/n)
 	for start := 0; start < len(faces); start += step {
 		wg.Add(1)
@@ -1229,7 +1246,7 @@ func bestMatches(faces []*faceRec, clusters []*cluster) []match {
 		return out
 	}
 	var wg sync.WaitGroup
-	n := runtime.NumCPU()
+	n := bgWorkers() // one core left for answering the page
 	step := (len(faces) + n - 1) / n
 	for start := 0; start < len(faces); start += step {
 		wg.Add(1)
