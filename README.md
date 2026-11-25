@@ -26,7 +26,9 @@ or another one.
   details with a mini map, camera data, people and the full picture text. Also
   face boxes with naming, Live Photos, favorites, download and printing
   (full resolution, turned like on screen, HEIC and RAW too; `P` or Ctrl+P
-  in the viewer).
+  in the viewer). Videos zoom like photos and play in a loop when the loop
+  button (`L`) is on. The browser's back button and back gesture close the
+  viewer, dialogs, menus, the filter panel and the selection, one at a time.
 - **Videos:** animated previews made from short snippets of each video, and
   on-the-fly H.264 for browsers that cannot play HEVC.
 - **Descriptions (optional):** an AI model (mittwald AI hosting, vLLM,

@@ -287,6 +287,13 @@
     });
     return grip;
   }
+  // a dialog, menu or popup the browser's back button closes (see Back): close does what its own
+  // close button does
+  function layer(el, close) {
+    el.dataset.layer = '';
+    el.skClose = close;
+    return el;
+  }
   // menu: a small list of actions next to a button (a phone: a sheet at the bottom). entries:
   // { icon, label, run, danger }, or { head, sub } for a line on top that is not an action
   function menu(anchor, entries) {
@@ -298,6 +305,7 @@
     m.innerHTML = entries.map((e, i) => (e.head !== undefined ? `<div class="mh"><b>${esc(e.head)}</b>${e.sub ? `<small>${esc(e.sub)}</small>` : ''}</div>`
       : `<button type="button" role="menuitem" data-i="${i}" class="${e.danger ? 'danger' : ''}">${icon(e.icon)}<span>${esc(e.label)}</span></button>`)).join('');
     document.body.appendChild(m);
+    layer(m, () => { m.remove(); removeEventListener('pointerdown', off, true); });
     const off = (e) => {
       if (m.contains(e.target)) return;
       if (anchor?.contains?.(e.target)) anchor.menuShut = Date.now();
@@ -1104,8 +1112,7 @@
       this.mark?.end();
       $('#pop')?.remove();
       $('.adm-menu')?.remove();
-      if (FS.auto) FS.exit();
-      if (!fromPop) history.back();
+      if (FS.auto) FS.exit(); // the browser history follows (Back)
       if (S.personStale) {
         S.personStale = false;
         if (route.view === 'person') rerender();
@@ -1135,6 +1142,7 @@
       if (it.k === 2) {
         const v = document.createElement('video');
         v.controls = true; v.autoplay = true; v.playsInline = true;
+        v.loop = !!store.get('loop', false);
         v.poster = largeURL(it);
         let triedH264 = false;
         const h264 = () => { if (triedH264) return; triedH264 = true; v.src = `/v/${it.id}?h264=1`; v.play().catch(() => {}); };
@@ -1160,6 +1168,7 @@
         big.src = largeURL(it);
       }
       $('#vLive').hidden = !it.lv;
+      this.markLoop();
       this.placeLive();
       $('#vFav').classList.toggle('on', !!it.f);
       $('#vFav').innerHTML = icon('heart', it.f ? 'fill' : '');
@@ -1176,6 +1185,26 @@
       this.drawFaces();
       if (it.lv && store.get('livePlay', true)) this.playLive(true);
     },
+
+    // videos play again from the start when the switch is on (remembered on the device)
+    markLoop() {
+      const b = $('#vLoop'), on = !!store.get('loop', false);
+      b.hidden = this.it?.k !== 2;
+      b.classList.toggle('on', on);
+      b.setAttribute('aria-pressed', on);
+    },
+    toggleLoop() {
+      if (this.it?.k !== 2) return;
+      const on = !store.get('loop', false);
+      store.set('loop', on);
+      const v = $('video:not(.live-v)', this.media);
+      if (v) v.loop = on;
+      this.markLoop();
+      toast(on ? t('Videos werden wiederholt') : t('Videos werden nicht wiederholt'));
+    },
+    // a zoomed video has no controls (they would grow with it): it is moved and pinched like a
+    // photo, a tap plays or pauses it; fitted again, the controls are back
+    videoEl() { return this.it?.k === 2 ? $('video:not(.live-v)', this.media) : null; },
 
     preload() {
       for (const d of [1, -1, 2]) {
@@ -1496,6 +1525,7 @@
       menu.style.top = `${clamp(touch ? y - menu.offsetHeight - 24 : y, 8, innerHeight - menu.offsetHeight - 8)}px`;
       const off = (e) => { if (!menu.contains(e.target)) close(); };
       const close = () => { menu.remove(); removeEventListener('pointerdown', off, true); };
+      layer(menu, close);
       addEventListener('pointerdown', off, true);
       menu.onclick = (e) => {
         const b = e.target.closest('[data-i]');
@@ -2069,6 +2099,7 @@
       const close = () => { pop.remove(); onClose?.(); };
       // swiped away: a box marked by hand can still be adjusted
       const dismiss = () => { if (face.back) { pop.remove(); face.back(); } else close(); };
+      layer(pop, () => { removeEventListener('pointerdown', off, true); dismiss(); });
       // a press beside it puts it away (a box marked by hand: back to the box)
       const off = (e) => {
         if (pop.isConnected && (pop.contains(e.target) || e.target.closest('.sp, .adm-menu'))) return;
@@ -2227,6 +2258,8 @@
       else this.clampZoom();
       this.media.style.transform = z.s === 1 ? '' : `translate(${z.x}px, ${z.y}px) scale(${z.s})`;
       this.media.style.setProperty('--zs', z.s); // what keeps its size while zooming divides by it
+      const v = this.videoEl();
+      if (v) v.controls = z.s === 1;
       this.stage.style.cursor = z.s > 1 ? 'grab' : '';
       this.placeLive();
     },
@@ -2282,6 +2315,7 @@
     $('#vFaces').onclick = () => { V.showFaces = !V.showFaces; V.drawFaces(); };
     $('#vFav').onclick = () => V.toggleFav();
     $('#vPlay').onclick = () => (V.slideT ? V.stopSlides() : V.startSlides());
+    $('#vLoop').onclick = () => V.toggleLoop();
     $('#vShare').onclick = (e) => V.shareMenu(e.currentTarget);
     $('#vStrip').onclick = (e) => { const b = e.target.closest('[data-j]'); if (b) { V.i = +b.dataset.j; V.step(0); } };
     const live = $('#vLive');
@@ -2334,7 +2368,7 @@
 
     // wheel zoom
     V.stage.addEventListener('wheel', (e) => {
-      if (V.it?.k !== 1) return;
+      if (V.it?.k !== 1 && V.it?.k !== 2) return;
       e.preventDefault();
       V.zoomAt(e.clientX, e.clientY, V.zoom.s * Math.exp(-e.deltaY * 0.0022));
     }, { passive: false });
@@ -2343,7 +2377,8 @@
     const pts = new Map();
     let start = null, pinch = null, moved = false, multi = false, held = false, menued = false, lastTap = null, tapT = 0, longT = 0, lastType = 'mouse';
     V.stage.addEventListener('dblclick', (e) => {
-      if (V.it?.k !== 1 || lastType !== 'mouse' || e.target.closest('.v-approve-all')) return; // touch double taps are handled in end()
+      if (lastType !== 'mouse' || e.target.closest('.v-approve-all')) return; // touch double taps are handled in end()
+      if (V.it?.k !== 1 && !(V.it?.k === 2 && V.zoom.s > 1)) return; // a fitted video: the browser's own double click
       V.animateZoom();
       V.zoom.s > 1 ? V.resetZoom() : V.zoomAt(e.clientX, e.clientY, 2.5);
     });
@@ -2371,7 +2406,7 @@
         clearTimeout(tapT);
         lastTap = null;
         if (V.zoom.s === 1) { V.media.style.transform = ''; V.media.style.opacity = ''; } // drop a started swipe
-        pinch = V.it?.k === 1 ? { d: Math.hypot(a.x - b.x, a.y - b.y) || 1, cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2 } : null;
+        pinch = V.it?.k === 1 || V.it?.k === 2 ? { d: Math.hypot(a.x - b.x, a.y - b.y) || 1, cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2 } : null;
       }
     });
     V.stage.addEventListener('pointermove', (e) => {
@@ -2421,16 +2456,22 @@
         else if (swipe && Math.abs(dx) > 70 && Math.abs(dx) > Math.abs(dy)) { V.media.style.transform = ''; V.media.style.opacity = ''; V.step(dx < 0 ? 1 : -1); }
         else { V.animateZoom(); V.media.style.transform = ''; V.media.style.opacity = ''; }
       }
+      const zv = V.zoom.s > 1 && V.videoEl();
+      if (zv && start && !moved && !multi && !held && e.type !== 'pointercancel' && e.pointerType === 'mouse') zv.paused ? zv.play().catch(() => {}) : zv.pause();
       if (start && !moved && !multi && !held && e.type !== 'pointercancel' && e.pointerType !== 'mouse') {
         // touch: one tap toggles the controls (a little later, so a double tap does not), two taps zoom
         const now = Date.now(), x = e.clientX, y = e.clientY;
         clearTimeout(tapT);
         if (lastTap && now - lastTap.t < 320 && Math.hypot(x - lastTap.x, y - lastTap.y) < 40) {
           lastTap = null;
-          if (V.it?.k === 1) { V.animateZoom(); V.zoom.s > 1 ? V.resetZoom() : V.zoomAt(x, y, 2.5); }
+          if (V.it?.k === 1 || zv) { V.animateZoom(); V.zoom.s > 1 ? V.resetZoom() : V.zoomAt(x, y, 2.5); }
         } else {
           lastTap = { t: now, x, y };
-          tapT = setTimeout(() => { lastTap = null; V.el.classList.toggle('idle'); }, 280);
+          tapT = setTimeout(() => {
+            lastTap = null;
+            if (zv) zv.paused ? zv.play().catch(() => {}) : zv.pause();
+            else V.el.classList.toggle('idle');
+          }, 280);
         }
       }
       start = null;
@@ -2446,8 +2487,10 @@
 
     // Videos keep their own controls (tap to play, seek bar). A sideways swipe on the
     // picture still goes to the neighbours and a swipe down closes, also while playing;
-    // touches on the control bar at the bottom are left alone.
-    let vs = null, vlong = 0;
+    // touches on the control bar at the bottom are left alone. Two fingers zoom like on a
+    // photo; zoomed, the video loses its controls and the gestures above take over.
+    let vs = null, vlong = 0, vpinch = null;
+    const vpts = new Map();
     const vreset = (animate) => {
       if (animate) V.animateZoom();
       V.media.style.transform = '';
@@ -2455,9 +2498,23 @@
     };
     V.stage.addEventListener('pointerdown', (e) => {
       const v = e.target.closest('video[controls]');
-      vs = null;
-      clearTimeout(vlong);
       if (!v || e.pointerType === 'mouse') return;
+      if (vpts.size === 1 && !vpinch) {
+        // a second finger: a pinch, not a swipe
+        clearTimeout(vlong);
+        vpts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (vs?.dir) vreset();
+        vs = null;
+        const [a, b] = [...vpts.values()];
+        vpinch = { d: Math.hypot(a.x - b.x, a.y - b.y) || 1, cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2 };
+        V.media.style.transition = '';
+        return;
+      }
+      vs = null;
+      vpinch = null;
+      vpts.clear();
+      clearTimeout(vlong);
+      vpts.set(e.pointerId, { x: e.clientX, y: e.clientY });
       if (e.clientY > v.getBoundingClientRect().bottom - 72) return;
       vs = { id: e.pointerId, x: e.clientX, y: e.clientY, dir: '' };
       // a long press while the faces are shown: add one, like on a photo
@@ -2465,6 +2522,21 @@
       vlong = setTimeout(() => { if (V.faceMenu(x, y, true)) { vs = null; v.pause(); } }, 450);
     });
     V.stage.addEventListener('pointermove', (e) => {
+      if (vpts.has(e.pointerId)) vpts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (vpinch && vpts.size === 2) {
+        const [a, b] = [...vpts.values()];
+        const d = Math.hypot(a.x - b.x, a.y - b.y) || 1, cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2;
+        V.zoomAt(vpinch.cx, vpinch.cy, V.zoom.s * d / vpinch.d, cx, cy, 0.8);
+        vpinch = { d, cx, cy };
+        return;
+      }
+      if (vpinch && vpts.size === 1 && V.zoom.s > 1 && vpts.has(e.pointerId)) {
+        // one finger of the pinch lifted: it moves the zoomed video
+        const p = vpinch.pan;
+        if (p) { V.zoom.x += e.clientX - p.x; V.zoom.y += e.clientY - p.y; V.applyZoom(); }
+        vpinch.pan = { x: e.clientX, y: e.clientY };
+        return;
+      }
       if (!vs || e.pointerId !== vs.id) return;
       const dx = e.clientX - vs.x, dy = e.clientY - vs.y;
       if (Math.abs(dx) + Math.abs(dy) > 8) clearTimeout(vlong);
@@ -2478,6 +2550,12 @@
     });
     const vend = (e) => {
       clearTimeout(vlong);
+      if (vpts.delete(e.pointerId) && vpinch) {
+        if (vpts.size) { vpinch.pan = null; return; }
+        vpinch = null;
+        if (V.zoom.s !== 1 && V.zoom.s < 1.1) V.resetZoom(true); // nearly fitted: snap back
+        return;
+      }
       if (!vs || e.pointerId !== vs.id) return;
       const g = vs;
       vs = null;
@@ -2540,6 +2618,7 @@
         case '-': V.zoomAt(innerWidth / 2, innerHeight / 2, V.zoom.s / 1.4); break;
         case '0': V.resetZoom(); break;
         case 'v': case 'V': FS.toggle(); break;
+        case 'l': case 'L': if (V.it.k !== 2) return; V.toggleLoop(); break;
         default: return;
       }
       e.preventDefault();
@@ -2638,8 +2717,7 @@
       else if (S.byId.has(r.item)) Viewer.open([S.byId.get(r.item)], 0, false);
     }
   }
-  addEventListener('hashchange', onRoute);
-  addEventListener('popstate', () => { if (!parseHash().item && Viewer.open_) Viewer.close(true); });
+  addEventListener('hashchange', () => { Back.stamp(); onRoute(); });
 
   function teardown() {
     for (const fn of cleanup) fn();
@@ -2749,7 +2827,8 @@
   }
   function runQuery(q) {
     const target = q ? `#/suche/${encodeURIComponent(q)}` : '#/fotos';
-    if (route.view === 'suche') history.replaceState(null, '', target), onRoute();
+    // the filter panel open: no entry of its own, back closes the panel and keeps the filters
+    if (route.view === 'suche' || Filter.open_) history.replaceState(null, '', target), onRoute();
     else location.hash = target;
   }
 
@@ -2917,6 +2996,7 @@
         <button class="btn vrow ${S.animate ? 'on' : ''}" data-anim>${icon('play')}<span>${t('Videos und Live Photos animiert zeigen')}</span></button>`;
       document.body.appendChild(m);
       this.el = m;
+      layer(m, () => this.close());
       sheetGrip(m, { key: 'view', onClose: () => this.close() });
       bindTools(m, g);
       $('[data-close]', m).onclick = () => this.close();
@@ -2933,6 +3013,95 @@
     },
   };
   const byKind = (items) => items.filter(shown);
+
+  // ---------------------------------------------------------------------------
+  // back and forward: the viewer, every dialog, menu and popup, the filter panel, the side
+  // menu on a phone and the selection are entries in the browser history. Back (the button,
+  // the back gesture on a phone) closes the topmost; closing one on the page goes back past
+  // its entry, so the next back goes where the user expects. Each entry knows its place (n),
+  // a layer's entry its layer (layer). The entry of a layer closed while it was not on top
+  // (or before a reload) is passed over.
+  // ---------------------------------------------------------------------------
+  const Back = (() => {
+    const H = history, push0 = H.pushState.bind(H), replace0 = H.replaceState.bind(H);
+    let n = H.state?.n ?? 0;
+    if (H.state?.n == null) replace0({ ...H.state, n }, '');
+    let url = location.href, seq = Date.now(), moving = false, movingT = 0, carry = false;
+    let stack = []; // open layers, lowest first: { key, id, n, close, url (the viewer: it has an address) }
+    // every entry gets its place, also the ones the page adds or replaces itself
+    H.pushState = (st, title, u) => { push0({ ...st, n: ++n }, title, u); url = location.href; };
+    H.replaceState = (st, title, u) => { replace0({ ...st, n, layer: H.state?.layer, lv: H.state?.lv }, title, u); url = location.href; };
+    const fixed = [
+      { key: 'viewer', url: true, open: () => Viewer.open_, close: () => Viewer.close(true) },
+      { key: 'side', open: () => $('#side').classList.contains('open'), close: () => $('#side').classList.remove('open') },
+      { key: 'filter', open: () => Filter.open_, close: () => Filter.close() },
+      { key: 'sel', open: () => S.selecting || S.sel.size > 0, close: () => endSelection() },
+    ];
+    const go = (d) => {
+      moving = true;
+      clearTimeout(movingT);
+      movingT = setTimeout(() => { moving = false; check(); }, 1500); // the browser never answered
+      H.go(d);
+    };
+    // a new entry the page made with a link or location.hash: the next place
+    const stamp = () => {
+      if (H.state?.n != null) return;
+      replace0({ ...H.state, n: ++n }, '');
+      url = location.href;
+    };
+    function check() {
+      if (moving) return; // once the browser went back
+      const now = new Map();
+      for (const f of fixed) if (f.open()) now.set(f.key, f);
+      for (const el of $$('[data-layer]')) now.set(el, { key: el, close: () => el.skClose() });
+      // closed on the page: the ones on top go back past their entries in one step
+      let k = stack.length;
+      while (k && !now.has(stack[k - 1].key)) k--;
+      const top = stack[stack.length - 1], run = stack.slice(k);
+      stack = stack.filter((l) => now.has(l.key));
+      if (run.length && H.state?.layer === top.id) { // not when the page went somewhere else meanwhile
+        const to = run[0].n - 1;
+        if (to >= 0 && to < n) {
+          carry = !run.some((l) => l.url); // a dialog keeps the address (filters changed while it was open)
+          go(to - n);
+          return;
+        }
+        // the viewer opened by a link: there is nothing before it here
+        replace0({ n }, '', `#${routeBase()}`);
+        url = location.href;
+      }
+      for (const [key, d] of now) {
+        if (stack.some((l) => l.key === key)) continue;
+        const id = ++seq;
+        if (d.url) replace0({ ...H.state, n, layer: id, lv: 1 }, ''); // the viewer has its entry already (its address)
+        else push0({ n: ++n, layer: id }, '');
+        stack.push({ key, id, n, close: d.close, url: !!d.url });
+      }
+    }
+    new MutationObserver(check).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['hidden', 'class'] });
+    addEventListener('popstate', () => {
+      const st = H.state;
+      if (st?.n == null) { stamp(); check(); return; } // a link
+      const was = n, to = st.n;
+      n = to;
+      const closing = stack.filter((l) => l.n > to).reverse();
+      stack = stack.filter((l) => l.n <= to);
+      if ((carry || (closing.length && !closing.some((l) => l.url))) && url !== location.href) replace0(st, '', url);
+      carry = false;
+      moving = false;
+      clearTimeout(movingT);
+      for (const l of closing) l.close();
+      url = location.href;
+      // the entry of a layer that is not open any more: passed over (the viewer opens again by its address)
+      if (st.layer && !st.lv && !stack.some((l) => l.id === st.layer) && to !== was) {
+        if (to < was) go(-1);
+        else H.go(1); // at the end nothing happens: it stays here
+        return;
+      }
+      check();
+    });
+    return { stamp, check };
+  })();
 
   // the photos of a gallery (the page's, else everything) as a slideshow, full screen
   function slideshow(g) {
@@ -3730,6 +3899,7 @@
         <div class="row"><button class="primary" data-a="save">${t('Speichern')}</button><button data-a="cancel">${t('Abbrechen')}</button></div></form>`;
       document.body.appendChild(pop);
       sheetGrip(pop, { onClose: () => pop.remove() });
+      layer(pop, () => pop.remove());
       if (!phoneMQ.matches) { // a phone: a sheet at the bottom
         const r = $('#account').getBoundingClientRect();
         pop.style.left = `${clamp(r.left, 8, innerWidth - 270)}px`;
@@ -3787,6 +3957,7 @@
       this.stats = { named: 0, approved: 0, rejected: 0, skipped: 0 };
       const el = (this.el = document.createElement('div'));
       el.className = 'quiz';
+      layer(el, () => this.close());
       el.innerHTML = `<div class="qz-top"><b>${mode === 'name' ? t('Schnell benennen') : t('Schnell bestätigen')}</b><span class="qz-prog"></span>${Busy.mark()}
         <button type="button" class="btn ghost icon qz-x" data-q="close" title="${t('Schließen')} (Esc)">${icon('x')}</button></div>
         <div class="qz-body">${loading()}</div>`;
@@ -4185,7 +4356,7 @@
   window.SK = {
     t, LANG, S, VIEWS, Viewer, Gallery, Account, api, post, toast, esc, icon, $, $$, num, plural, pl, clamp, debounce,
     fmtLong, fmtTime, fmtMonth, thumbURL, largeURL, tileLayer, galleryView,
-    Quiz, route: () => route, render, rerender, loadItems, loadPeople, scheduleReload, selectionChanged, endSelection, updateCounts, sheetGrip, phoneMQ,
+    Quiz, route: () => route, render, rerender, loadItems, loadPeople, scheduleReload, selectionChanged, endSelection, updateCounts, sheetGrip, phoneMQ, layer,
     fmtSize, fmtDay, shown, isTyping, menu, pageSelection, pageSelActive: () => !!pageSel, loader, loading, Busy, ring,
   };
 

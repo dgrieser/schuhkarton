@@ -311,6 +311,7 @@
       cmp = null;
       if (view.isConnected) draw(view);
     };
+    SK.layer(el, close);
     const next = (d) => {
       const live = visible();
       if (!live.length) { close(); return; }
@@ -472,6 +473,7 @@
       if (onClose) onClose();
       else redraw();
     };
+    SK.layer(el, close);
     // the next group still there (from pos on, d: +1 or -1); none: the end
     const step = (d) => {
       for (let p = pos + d; p >= 0 && p < ids.length; p += d) {

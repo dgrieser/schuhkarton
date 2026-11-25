@@ -33,6 +33,7 @@
     document.body.appendChild(el);
     const prev = document.activeElement;
     const close = () => { el.remove(); prev?.focus?.(); };
+    SK.layer(el, close);
     SK.sheetGrip?.($('.adm-box', el), { key: 'dlg', onClose: close });
     // keys stay in the dialog (the viewer listens on window)
     el.addEventListener('keydown', (e) => {
