@@ -70,7 +70,7 @@
     el.innerHTML = `<span>${esc(msg)}</span>${acts.map(([l]) => `<button type="button">${esc(l)}</button>`).join('')}`;
     el.classList.toggle('act', acts.length > 0);
     // over the viewer or a quick round at the top: the buttons, names and faces are below
-    el.classList.toggle('top', !!document.querySelector('#viewer:not([hidden]), .quiz, .dp-cmp'));
+    el.classList.toggle('at-top', !!document.querySelector('#viewer:not([hidden]), .quiz, .dp-cmp'));
     el.classList.add('on');
     clearTimeout(toastT);
     toastT = setTimeout(() => el.classList.remove('on'), ms || (acts.length ? 10000 : 2400));
@@ -85,7 +85,7 @@
     const at = (dx, dy) => `translateX(calc(-50% + ${dx}px)) translateY(${dy}px)`;
     el.addEventListener('pointerdown', (e) => {
       if (!el.classList.contains('on') || e.target.closest('button')) return;
-      st = { x: e.clientX, y: e.clientY, t: performance.now(), dx: 0, dy: 0, id: e.pointerId, s: el.classList.contains('top') ? -1 : 1 };
+      st = { x: e.clientX, y: e.clientY, t: performance.now(), dx: 0, dy: 0, id: e.pointerId, s: el.classList.contains('at-top') ? -1 : 1 };
       el.setPointerCapture(e.pointerId);
       el.style.transition = 'none';
       clearTimeout(toastT); // held: it does not go on its own meanwhile
@@ -4023,7 +4023,10 @@
       if (this.mode === 'name') {
         this.namePicker(f, true);
         for (const g of this.list.slice(this.i + 1, this.i + 3)) this.suggest(g); // ready when they come
-      } else this.approveActs(f);
+      } else {
+        this.approveActs(f);
+        this.suggest(f); // the names behind "Jemand anders …" ready when asked for
+      }
     },
 
     // the photo zoomed so the face is about 40 % of the frame's height, in its middle; or the whole
@@ -4084,7 +4087,8 @@
         const row = $('.qz-chips', acts);
         if (!row || row.dataset.done) return;
         row.dataset.done = '1';
-        row.innerHTML = top(sugg).map(chip).join('');
+        // approving: the other person offered on the left button first, as it was offered
+        row.innerHTML = top(f.alt ? [f.alt, ...sugg] : sugg).map(chip).join('');
         row.hidden = !row.firstChild; // nobody to offer
       };
       const draw = () => {

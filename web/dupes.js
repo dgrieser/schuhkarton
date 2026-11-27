@@ -100,15 +100,17 @@
   // minutes, longer than a proxy keeps a request open, and the page shows
   // how far it got
   const BATCH = 25;
+  // sent: called once the server has the work (queued there in order): the next decision can go
+  // while the files still move; only the message waits for them
   let busy = false;
-  async function apply(groups, { bulk = false } = {}) {
+  async function apply(groups, { bulk = false, sent = null } = {}) {
     const todo = groups.map((g) => {
       const keep = bulk ? bulkKeep(g) : keepOf(g);
       return { g, r: { keep: [...keep], remove: g.items.filter((id) => !keep.has(id)) } };
     }).filter((x) => x.r.remove.length);
     if (!todo.length) { toast(t('Nichts zu löschen')); return false; }
-    if (busy) return false;
-    busy = true;
+    if (bulk && busy) return false;
+    if (bulk) busy = true;
     if (bulk) clearTimeout(pollT); // the list must not be drawn anew meanwhile (draw arms it again)
     const r = { changed: 0, freed: 0, entries: [], warnings: [] };
     const done = new Set();
@@ -123,7 +125,9 @@
         try {
           // moving files on a share can take longer than the server waits: then the work is
           // queued, and what it did (the count, the space freed) comes when it is done
-          a = await ui.untilDone(await api('/api/admin/dupes/resolve', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ groups: part.map((x) => x.r) }) }));
+          const first = await api('/api/admin/dupes/resolve', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ groups: part.map((x) => x.r) }) });
+          sent?.();
+          a = await ui.untilDone(first);
           if (!a.ok) err = a.error || t('Fehler');
         } catch (e) {
           err = String(e.message || e).replace(/^\d{3} /, '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 160) || t('Fehler');
@@ -137,7 +141,8 @@
         r.warnings.push(...(a.warnings || []));
       }
     } finally {
-      busy = false;
+      sent?.();
+      if (bulk) busy = false;
     }
     if (!done.size) {
       ui.snack(t('Fehler: {e}', { e: t(err) }), '', null, 8000);
@@ -194,7 +199,10 @@
   function resolveSoon(g) {
     if (!removeOf(g).length) { toast(t('Nichts zu löschen')); return false; }
     const at = take(g);
-    later(async () => settle(g, at, await apply([g]).catch(() => false)));
+    // the queue goes on once the server has it; the group settles when its files moved
+    later(() => new Promise((sent) => {
+      apply([g], { sent }).catch(() => false).then((ok) => { sent(); settle(g, at, ok); });
+    }));
     return true;
   }
   function ignoreSoon(g) {
