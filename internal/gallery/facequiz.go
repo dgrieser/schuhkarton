@@ -103,9 +103,13 @@ func (l *Library) quizName(n int) []QuizFace {
 	}
 	s.mu.RLock()
 	var groups []group
+	grouped := map[string]bool{} // faces in a group or matched to a person
 	for _, p := range s.people {
 		if p.Name == "" {
 			groups = append(groups, group{p.ID, p.refs, p.cent, p.Count})
+		}
+		for _, r := range p.refs {
+			grouped[r.key()] = true
 		}
 	}
 	labels := make(map[string]string, len(s.labels))
@@ -153,8 +157,49 @@ func (l *Library) quizName(n int) []QuizFace {
 		seen[bestIt.ID] = true
 		out = append(out, q)
 	}
+	// fewer groups than the round is long: faces alike no other (each its own), the clearest
+	// first, so every round is about as long
+	if len(out) < n {
+		type lone struct {
+			it    *Item
+			idx   int
+			clear float32
+		}
+		var lones []lone
+		for _, it := range l.items {
+			if it.Kind != Photo || seen[it.ID] {
+				continue
+			}
+			for i, f := range it.Faces {
+				k := FaceRef{Item: it.ID, Idx: i}.key()
+				if f.OK || grouped[k] || labels[k] != "" {
+					continue
+				}
+				if c := clarity(it, f); c >= quizLoneClear {
+					lones = append(lones, lone{it, i, c})
+				}
+			}
+		}
+		sort.SliceStable(lones, func(a, b int) bool { return lones[a].clear > lones[b].clear })
+		for _, c := range lones {
+			if len(out) >= n {
+				break
+			}
+			if seen[c.it.ID] {
+				continue
+			}
+			q := quizFace(c.it, c.idx)
+			q.Photos, q.Score = 1, c.clear
+			seen[c.it.ID] = true
+			out = append(out, q)
+		}
+	}
 	return out
 }
+
+// quizLoneClear is how clear a face alike no other must be to be asked for
+// (a blurred face in the background is not worth a question).
+const quizLoneClear = 0.6
 
 // quizCand is a face not approved that has a name, for approving.
 type quizCand struct {

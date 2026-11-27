@@ -1415,7 +1415,8 @@
       all.id = 'vApproveAll';
       all.className = `v-approve-all${d.facesMine ? ' on' : ''}`;
       all.title = d.facesMine ? t('Bestätigung aufheben') : t('Alle Gesichter in diesem Bild stimmen: sie bleiben so, wenn neu gesucht wird');
-      all.innerHTML = `${icon('check')}<span>${d.facesMine ? t('Bestätigt') : t('Alle bestätigen')}</span>`;
+      // both labels take the room of the longer one: the button and its tick stay in place
+      all.innerHTML = `${icon('check')}<span class="v-aa-l"><span class="off">${t('Alle bestätigen')}</span><span class="on">${t('Bestätigt')}</span></span>`;
       const it = this.it;
       all.onclick = (e) => {
         e.stopPropagation();
@@ -1563,9 +1564,12 @@
     // approves faces of the photo (ok false: takes it back); all: every face and the photo as a whole
     async approveFaces(req) {
       const it = this.it;
+      // the last faces not approved yet: the photo is approved as a whole ("Alle bestätigen" is
+      // not needed any more); taking one back takes that back too
+      if (req.ok && req.faces && !req.all && (this.detail?.faces || []).every((x) => x.ok || req.faces.includes(x.idx))) req = { ...req, all: true };
       const res = await post(`/api/faces/${it.id}/approve`, req).catch((e) => ({ error: e.message }));
       if (res.error) { toast(t('Fehler: {e}', { e: String(res.error).replace(/^\d{3} /, '') })); return false; }
-      const msg = req.ok ? (req.all ? t('Gesichter bestätigt') : t('Gesicht bestätigt')) : t('Bestätigung aufgehoben');
+      const msg = req.ok ? (req.all && !req.faces ? t('Gesichter bestätigt') : t('Gesicht bestätigt')) : t('Bestätigung aufgehoben');
       if (res.undo) toast(msg, t('Rückgängig'), async () => { await post(`/api/faces/${it.id}/approve`, { undo: res.undo }); await this.refreshItem(it); });
       else toast(msg);
       await this.refreshItem(it).catch(() => { if (this.it === it) this.drawFaces(); });
@@ -3993,6 +3997,7 @@
       if (!this.el || sid !== this.sid) return;
       if (res.error) { body.innerHTML = `<div class="empty"><h2>${t('Fehler: {e}', { e: esc(String(res.error).replace(/^\d{3} /, '')) })}</h2></div>`; return; }
       this.list = res.faces || [];
+      this.suggs = new Map(); // the answers of the last round changed what faces look like
       this.i = 0;
       this.done = [];
       if (!this.list.length) { this.end(true); return; }
@@ -4015,8 +4020,10 @@
       img.src = largeURL({ id: f.item, v: f.v });
       this.place();
       this.bindSwipe($('.qz-crop', body));
-      if (this.mode === 'name') this.namePicker(f, true);
-      else this.approveActs(f);
+      if (this.mode === 'name') {
+        this.namePicker(f, true);
+        for (const g of this.list.slice(this.i + 1, this.i + 3)) this.suggest(g); // ready when they come
+      } else this.approveActs(f);
     },
 
     // the photo zoomed so the face is about 40 % of the frame's height, in its middle; or the whole
@@ -4070,11 +4077,20 @@
       const cover = new Map();
       for (const p of named) if (!(cover.get(p.name)?.count >= p.count)) cover.set(p.name, p);
       const chip = (n) => { const p = cover.get(n); return `<button type="button" class="qz-chip" data-name="${esc(n)}">${p?.cover ? `<img src="${faceURL(p.cover.item, p.cover.idx)}" alt="">` : ''}<span>${esc(n)}</span></button>`; };
-      const draw = (sugg) => {
-        const top = [...new Set([...sugg, ...store.get('recent-names', [])])].filter((n) => cover.has(n) && n !== not).slice(0, 8);
+      // the names once the suggestions are there (asked for ahead): drawn once, they do not
+      // change their order under a finger about to tap one
+      const top = (sugg) => [...new Set([...sugg, ...store.get('recent-names', [])])].filter((n) => cover.has(n) && n !== not).slice(0, 8);
+      const fill = (sugg) => {
+        const row = $('.qz-chips', acts);
+        if (!row || row.dataset.done) return;
+        row.dataset.done = '1';
+        row.innerHTML = top(sugg).map(chip).join('');
+        row.hidden = !row.firstChild; // nobody to offer
+      };
+      const draw = () => {
         // the names in one row that scrolls sideways, the typed name below, the other answers as
         // a row of equal buttons (the back arrow only as a symbol)
-        acts.innerHTML = `${top.length ? `<div class="qz-chips">${top.map(chip).join('')}</div>` : ''}
+        acts.innerHTML = `${cover.size ? '<div class="qz-chips"></div>' : ''}
           <form class="qz-form"><input class="qz-name" list="qzNames" placeholder="${t('Name eingeben …')}" autocomplete="off" enterkeyhint="done"><datalist id="qzNames">${names.map((n) => `<option value="${esc(n)}">`).join('')}</datalist><button class="btn primary" title="Enter">${icon('check')}</button></form>
           <div class="qz-more">${this.done.length ? `<button type="button" class="qz-back" data-q="back" title="${t('Zurück')} (Z)">${icon('left')}</button>` : ''}${this.mode === 'name'
             ? `<button type="button" data-q="noface" title="${t('Kein Gesicht')}">${icon('face-x')}<span>${t('Kein Gesicht')}</span></button><button type="button" data-q="hide" title="${t('Ausblenden')}">${icon('eye-off')}<span>${t('Ausblenden')}</span></button>` : ''}${named.length
@@ -4092,11 +4108,27 @@
         form.onsubmit = (e) => { e.preventDefault(); const n = inp.value.trim(); if (n) this.answerName(f, n, group); };
         if (!isTouch) inp.focus();
       };
-      draw([]);
-      const sid = this.sid;
-      const sugg = await api(`/api/face/${f.item}/${f.idx}/suggest`).then((r) => (r.suggestions || r || []).map((s) => s.name)).catch(() => []);
-      // drawn again with the suggestions, unless somebody started typing
-      if (sid === this.sid && this.list[this.i] === f && acts.isConnected && !$('.qz-name', acts)?.value) draw(Array.isArray(sugg) ? sugg : []);
+      draw();
+      const row = $('.qz-chips', acts);
+      if (!row) return;
+      const late = setTimeout(() => fill([]), 2500); // the server slow: the recent names
+      const sugg = await this.suggest(f);
+      clearTimeout(late);
+      if (row.isConnected) fill(sugg);
+    },
+
+    // the people a face looks like (names), asked for once per face: the next faces of the round
+    // are asked for ahead, so their names are there when they are shown
+    suggest(f) {
+      const k = `${f.item}/${f.idx}`;
+      this.suggs ||= new Map();
+      if (!this.suggs.has(k)) {
+        this.suggs.set(k, api(`/api/face/${f.item}/${f.idx}/suggest`)
+          .then((r) => { const a = r?.suggestions || r || []; return Array.isArray(a) ? a.map((s) => s.name) : []; })
+          .catch(() => { this.suggs.delete(k); return []; }));
+        if (this.suggs.size > 200) this.suggs.delete(this.suggs.keys().next().value);
+      }
+      return this.suggs.get(k);
     },
 
     // the whole photo or the face zoomed, for the rest of the round

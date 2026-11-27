@@ -469,6 +469,9 @@ body.has-scrubber .view { padding-right: 64px; }
   transition: opacity .2s; }
 .v-approve-all .i { width: 18px; height: 18px; padding: 2px; border: 2px solid #fff; border-radius: 50%; color: transparent; stroke-width: 3; box-sizing: content-box; }
 .v-approve-all.on .i { border-color: var(--accent); background: var(--accent); color: #111; }
+.v-aa-l { display: grid; }
+.v-aa-l > span { grid-area: 1 / 1; }
+.v-approve-all:not(.on) .v-aa-l > .on, .v-approve-all.on .v-aa-l > .off { visibility: hidden; }
 .v-approve-all:hover { background: rgba(0, 0, 0, .7); }
 .v-approve-all:disabled { cursor: progress; }
 /* the loading animation of the viewer: the stage's bottom right corner (beside the strip, above the
@@ -709,7 +712,7 @@ body > .pop.name-pop.sheet { z-index: 130; } /* a person of a selection: over th
 .hold-hint.on { opacity: 1; }
 @media (pointer: coarse) { button, [role="button"] { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; } }
 .toast.act { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px 12px; padding: 6px; border-radius: 14px; }
-.toast.act span { padding: 0 4px 0 12px; }
+.toast.act span { padding: 0 2px 0 8px; } /* the text about as far from the edge as the button */
 .toast.act.on { pointer-events: auto; }
 /* a touch screen: every toast can be swiped away (the script moves it) */
 @media (pointer: coarse) { .toast.on { pointer-events: auto; touch-action: none; -webkit-user-select: none; user-select: none; } }
@@ -1646,7 +1649,7 @@ body.side-mini #sideToggle { position: static; margin: -6px auto 10px; }
 .qz-yesno button { min-width: 0; padding: 0 12px; }
 .qz-yesno button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .qz-yesno button img { width: 36px; height: 36px; flex: none; border-radius: 50%; object-fit: cover; background: #333; }
-.qz-chips { display: flex; gap: 8px; overflow-x: auto; padding: 2px 2px 6px; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+.qz-chips { display: flex; gap: 8px; overflow-x: auto; padding: 2px 2px 6px; min-height: 50px; box-sizing: border-box; /* the room of the names before they come */ scrollbar-width: none; -webkit-overflow-scrolling: touch; }
 .qz-chips::-webkit-scrollbar { display: none; }
 @media (hover: hover) { /* a mouse: a thin bar shows there is more */
   .qz-chips { scrollbar-width: thin; scrollbar-color: #444 transparent; }
