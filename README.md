@@ -97,7 +97,8 @@ or another one.
   similar faces each stands for, people with few approved faces first (they
   are recognised far worse), spread over people and photos. The buttons are
   the name it has (yes), the other person it looks most like (no, that one),
-  *Jemand anders …* (no, then the right name) and skip; keys J/A/N/S, a
+  *Jemand anders …* (no, then the right name) and skip; *Kein Gesicht* and
+  *Unbekannt* are in both rounds (naming also has *Ausblenden*); keys J/A/N/S, a
   swipe on a phone, Z to go back. The date and place are on the
   picture; the magnifier (key V) shows the whole photo instead of the face.
   A name just given is offered to choose at once, here and in the name

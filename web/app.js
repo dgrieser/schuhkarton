@@ -4061,7 +4061,7 @@
       $('.qz-acts', this.el).innerHTML = `<div class="qz-yesno${alt ? ' alt' : ''}">
           ${alt ? `<button type="button" class="qz-alt" data-q="alt" title="${esc(t('Nein, das ist {name}', { name: alt }))} (A)">${pic(alt) || icon('user')}<span>${esc(alt)}</span></button>` : ''}
           <button type="button" class="qz-yes" data-q="yes" title="${esc(t('Ja, das ist {name}', { name: f.name }))} (J, Enter, →)">${pic(f.name) || icon('check')}<span>${esc(f.name)}</span></button></div>
-        <div class="qz-more">${this.done.length ? `<button type="button" class="qz-back" data-q="back" title="${t('Zurück')} (Z)">${icon('left')}</button>` : ''}<button type="button" class="qz-no" data-q="no" title="${t('Jemand anders')} (N, ←)">${icon('user-q')}<span>${t('Jemand anders …')}</span></button><button type="button" data-q="skip" title="S">${icon('right')}<span>${t('Überspringen')}</span></button></div>`;
+        <div class="qz-more">${this.done.length ? `<button type="button" class="qz-back" data-q="back" title="${t('Zurück')} (Z)">${icon('left')}</button>` : ''}<button type="button" data-q="noface" title="${t('Kein Gesicht')}">${icon('face-x')}<span>${t('Kein Gesicht')}</span></button><button type="button" data-q="nonenamed" title="${t('Keine der Personen mit Namen')}">${icon('user-q')}<span>${t('Unbekannt')}</span></button><button type="button" class="qz-no" data-q="no" title="${t('Jemand anders')} (N, ←)">${icon('user')}<span>${t('Jemand anders …')}</span></button><button type="button" data-q="skip" title="S">${icon('right')}<span>${t('Überspringen')}</span></button></div>`;
     },
 
     // no, it is the other person offered: "no" to the name shown and that name, one step
@@ -4096,8 +4096,8 @@
         // a row of equal buttons (the back arrow only as a symbol)
         acts.innerHTML = `${cover.size ? '<div class="qz-chips"></div>' : ''}
           <form class="qz-form"><input class="qz-name" list="qzNames" placeholder="${t('Name eingeben …')}" autocomplete="off" enterkeyhint="done"><datalist id="qzNames">${names.map((n) => `<option value="${esc(n)}">`).join('')}</datalist><button class="btn primary" title="Enter">${icon('check')}</button></form>
-          <div class="qz-more">${this.done.length ? `<button type="button" class="qz-back" data-q="back" title="${t('Zurück')} (Z)">${icon('left')}</button>` : ''}${this.mode === 'name'
-            ? `<button type="button" data-q="noface" title="${t('Kein Gesicht')}">${icon('face-x')}<span>${t('Kein Gesicht')}</span></button><button type="button" data-q="hide" title="${t('Ausblenden')}">${icon('eye-off')}<span>${t('Ausblenden')}</span></button>` : ''}${named.length
+          <div class="qz-more">${this.done.length ? `<button type="button" class="qz-back" data-q="back" title="${t('Zurück')} (Z)">${icon('left')}</button>` : ''}<button type="button" data-q="noface" title="${t('Kein Gesicht')}">${icon('face-x')}<span>${t('Kein Gesicht')}</span></button>${this.mode === 'name'
+            ? `<button type="button" data-q="hide" title="${t('Ausblenden')}">${icon('eye-off')}<span>${t('Ausblenden')}</span></button>` : ''}${named.length
             ? `<button type="button" data-q="nonenamed" title="${this.mode === 'name' ? t('Unbekannt: keine der Personen mit Namen (die ganze Gruppe)') : t('Keine der Personen mit Namen')}">${icon('user-q')}<span>${t('Unbekannt')}</span></button>` : ''}<button type="button" data-q="skip">${icon('right')}<span>${this.mode === 'name' ? t('Überspringen') : t('Weiter')}</span></button></div>`;
         const form = $('.qz-form', acts), inp = $('.qz-name', acts), row = $('.qz-chips', acts);
         // a mouse wheel scrolls the names sideways

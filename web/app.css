@@ -1640,7 +1640,7 @@ body.side-mini #sideToggle { position: static; margin: -6px auto 10px; }
 .qz-q { font-size: 20px; text-align: center; }
 .qz-q b { color: var(--accent); }
 .qz-sub { color: rgba(255, 255, 255, .62); font-size: 13px; text-align: center; margin-top: -6px; }
-.qz-acts { width: min(100%, 560px); display: grid; gap: 10px; }
+.qz-acts { width: min(100%, 560px); display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; } /* rows no wider than the screen: long words shrink */
 .qz-yesno { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .qz-yesno button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 56px; border-radius: 14px; border: 1px solid #333; background: #1c1d20; color: #fff; font-size: 17px; font-weight: 650; cursor: pointer; }
 .qz-yesno .i { width: 22px; height: 22px; stroke-width: 2.6; }
@@ -1684,4 +1684,8 @@ body.side-mini #sideToggle { position: static; margin: -6px auto 10px; }
 @media (max-width: 480px) {
   .qz-more :is([data-q="noface"], [data-q="hide"], [data-q="nonenamed"]) { flex: 0 0 52px; padding: 0; }
   .qz-more :is([data-q="noface"], [data-q="hide"], [data-q="nonenamed"]) span { display: none; }
+  /* approving, five buttons: skipping as a symbol too, "Jemand anders …" keeps its words */
+  .qz-more:has(.qz-no):has(.qz-back) { gap: 6px; }
+  .qz-more:has(.qz-no):has(.qz-back) :is(.qz-back, [data-q="noface"], [data-q="nonenamed"], [data-q="skip"]) { flex: 0 0 44px; padding: 0; }
+  .qz-more:has(.qz-no):has(.qz-back) [data-q="skip"] span { display: none; }
 }
