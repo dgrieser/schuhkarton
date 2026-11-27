@@ -13,7 +13,7 @@ func TestQuizRounds(t *testing.T) {
 	for i := range 7 {
 		files = append(files, fmt.Sprintf("p%d.jpg", i))
 	}
-	l, _ := testLib(t, files...)
+	l, _ := testLib(t, append(files, "lone.jpg", "blur.jpg")...)
 	l.faces = &listFaces{}
 	x, y := []float32{1, 0, 0, 0}, []float32{0, 1, 0, 0}
 	wobble := func(e []float32, k int) []float32 {
@@ -23,6 +23,7 @@ func TestQuizRounds(t *testing.T) {
 	for _, f := range files {
 		items[f] = byRel(l, f)
 	}
+	lone, blur := byRel(l, "lone.jpg"), byRel(l, "blur.jpg")
 	l.mu.Lock()
 	for i, f := range files {
 		e := x // four photos of one person, three of another
@@ -33,6 +34,12 @@ func TestQuizRounds(t *testing.T) {
 		it.Faces = []Face{{X: .3, Y: .3, W: .3, H: .3, Score: .99, Emb: wobble(e, i)}}
 		it.FacesDone = true
 	}
+	// a face alike no other, clear; and one too small to ask for
+	lone.W, lone.H = 1000, 1000
+	lone.Faces = []Face{{X: .3, Y: .3, W: .3, H: .3, Score: .99, Emb: []float32{0, 0, 1, 0}}}
+	blur.W, blur.H = 1000, 1000
+	blur.Faces = []Face{{X: .3, Y: .3, W: .02, H: .02, Score: .5, Emb: []float32{0, 0, 0, 1}}}
+	lone.FacesDone, blur.FacesDone = true, true
 	l.mu.Unlock()
 	l.recluster()
 
@@ -40,7 +47,8 @@ func TestQuizRounds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(q) != 2 || q[0].Photos != 4 || q[1].Photos != 3 {
+	// the groups first, then the round filled with the clear face alike no other
+	if len(q) != 3 || q[0].Photos != 4 || q[1].Photos != 3 || q[2].Item != lone.ID || q[2].Person != "" {
 		t.Fatalf("name round: %+v", q)
 	}
 	// named with the group: the other faces of the group follow, not approved
@@ -64,7 +72,7 @@ func TestQuizRounds(t *testing.T) {
 	if named != 4 {
 		t.Errorf("%d faces named Xaver, want 4", named)
 	}
-	if q, _ := l.QuizFaces("name", 5); len(q) != 1 || q[0].Photos != 3 {
+	if q, _ := l.QuizFaces("name", 5); len(q) != 2 || q[0].Photos != 3 || q[1].Item != lone.ID {
 		t.Errorf("name round after naming: %+v", q)
 	}
 

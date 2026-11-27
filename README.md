@@ -55,7 +55,8 @@ or another one.
   details or in its name sheet, or the round tick of a named face beside its
   name on the picture and on its picture in the details) or all faces of a photo at once (*Bestätigen* next to
   *Personen*, also for a photo without faces, or *Alle bestätigen* on the
-  picture while its faces are shown). Faces framed by hand and faces
+  picture while its faces are shown; approving the last face not approved
+  approves the photo as a whole too). Faces framed by hand and faces
   with a name, hidden or "no face" count as approved already ("not this
   person" does not: who it is stays open). Two jobs in the *Gesichter* menu of the people page (admins) run in the background over
   what is not approved:
@@ -89,13 +90,15 @@ or another one.
   rounds of a handful of faces, each zoomed to the face, chosen for the most
   gain per answer. Naming shows one typical, clear face of each of the
   largest groups without a name; the name goes to that face and, not
-  approved, to the rest of its group. Approving shows faces with a name that
+  approved, to the rest of its group; with fewer groups than the round is
+  long, clear faces alike no other fill it. Approving shows faces with a name that
   are not approved where the recognition is least sure (close to
   `named_threshold`, or another person about as alike), weighed by how many
   similar faces each stands for, people with few approved faces first (they
   are recognised far worse), spread over people and photos. The buttons are
   the name it has (yes), the other person it looks most like (no, that one),
-  *Jemand anders …* (no, then the right name) and skip; keys J/A/N/S, a
+  *Jemand anders …* (no, then the right name) and skip; *Kein Gesicht* and
+  *Unbekannt* are in both rounds (naming also has *Ausblenden*); keys J/A/N/S, a
   swipe on a phone, Z to go back. The date and place are on the
   picture; the magnifier (key V) shows the whole photo instead of the face.
   A name just given is offered to choose at once, here and in the name
@@ -343,7 +346,9 @@ turns a kept one into the only one kept (the others back after delete and
 keep again) and deletes the one kept alone;
 deleting every copy of a group is allowed. The top line shows resolution,
 format, size and whether it has a location; the corner button opens it in
-the viewer (to rotate it, say; a turned copy stays in its group). *Schnell prüfen* goes through up to 12
+the viewer (to rotate it, say; a turned copy stays in its group). Deciding
+there goes on to the next group in full screen; closing it returns to the
+comparison of the group it was on. *Schnell prüfen* goes through up to 12
 groups that way (another round takes the next ones, the groups put off
 come last): "Keine Duplikate", "Später" or delete, and the next group
 is there at once; the files move in the background, a failed group comes

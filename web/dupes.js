@@ -100,15 +100,17 @@
   // minutes, longer than a proxy keeps a request open, and the page shows
   // how far it got
   const BATCH = 25;
+  // sent: called once the server has the work (queued there in order): the next decision can go
+  // while the files still move; only the message waits for them
   let busy = false;
-  async function apply(groups, { bulk = false } = {}) {
+  async function apply(groups, { bulk = false, sent = null } = {}) {
     const todo = groups.map((g) => {
       const keep = bulk ? bulkKeep(g) : keepOf(g);
       return { g, r: { keep: [...keep], remove: g.items.filter((id) => !keep.has(id)) } };
     }).filter((x) => x.r.remove.length);
     if (!todo.length) { toast(t('Nichts zu löschen')); return false; }
-    if (busy) return false;
-    busy = true;
+    if (bulk && busy) return false;
+    if (bulk) busy = true;
     if (bulk) clearTimeout(pollT); // the list must not be drawn anew meanwhile (draw arms it again)
     const r = { changed: 0, freed: 0, entries: [], warnings: [] };
     const done = new Set();
@@ -121,7 +123,11 @@
         const part = todo.slice(i, i + BATCH);
         let a = null;
         try {
-          a = await api('/api/admin/dupes/resolve', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ groups: part.map((x) => x.r) }) });
+          // moving files on a share can take longer than the server waits: then the work is
+          // queued, and what it did (the count, the space freed) comes when it is done
+          const first = await api('/api/admin/dupes/resolve', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ groups: part.map((x) => x.r) }) });
+          sent?.();
+          a = await ui.untilDone(first);
           if (!a.ok) err = a.error || t('Fehler');
         } catch (e) {
           err = String(e.message || e).replace(/^\d{3} /, '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 160) || t('Fehler');
@@ -135,7 +141,8 @@
         r.warnings.push(...(a.warnings || []));
       }
     } finally {
-      busy = false;
+      sent?.();
+      if (bulk) busy = false;
     }
     if (!done.size) {
       ui.snack(t('Fehler: {e}', { e: t(err) }), '', null, 8000);
@@ -192,7 +199,10 @@
   function resolveSoon(g) {
     if (!removeOf(g).length) { toast(t('Nichts zu löschen')); return false; }
     const at = take(g);
-    later(async () => settle(g, at, await apply([g]).catch(() => false)));
+    // the queue goes on once the server has it; the group settles when its files moved
+    later(() => new Promise((sent) => {
+      apply([g], { sent }).catch(() => false).then((ok) => { sent(); settle(g, at, ok); });
+    }));
     return true;
   }
   function ignoreSoon(g) {
@@ -357,6 +367,9 @@
         return `<tr class="${cls}"><th>${esc(row[0])}</th><td>${esc(val(x))}</td></tr>`;
       };
       const removeN = removeOf(g).length;
+      // the same group drawn anew (a copy kept or not): the cards stay where they were scrolled to
+      const was = $('.dp-cards', el);
+      const scroll = was && was.dataset.g === g.id ? [was.scrollLeft, was.scrollTop] : null;
       el.innerHTML = `
         <header class="dp-top">
           <button class="btn ghost icon" data-close title="${esc(t('Schließen (Esc)'))}">${icon('x')}</button>
@@ -367,7 +380,7 @@
           <button class="btn ghost icon" data-next ${i >= list.length - 1 ? 'disabled' : ''} title="${esc(t('Nächste Gruppe (→)'))}">${icon('right')}</button>
         </header>
         <p class="dp-how">${esc(single ? t('Tippe auf „Behalten“ bei der Kopie, die bleiben soll – vorgeschlagen ist die beste.') : t('Behalte so viele, wie du willst; der Rest kommt in den Papierkorb.'))}</p>
-        <div class="dp-cards">${g.items.map((id, n) => {
+        <div class="dp-cards" data-g="${esc(g.id)}">${g.items.map((id, n) => {
           const x = m(id), kept = k.has(id);
           const why = g.reasons?.[id];
           return `<article class="dp-card ${kept ? 'keep' : 'drop'}" data-id="${esc(id)}">
@@ -385,6 +398,7 @@
           <button class="btn" data-skip title="${esc(t('Später entscheiden (→)'))}">${esc(t('Später'))}</button>
           <button class="btn primary" data-apply ${!removeN ? 'disabled' : ''} title="${esc(t('Übernehmen (Enter)'))}">${icon('trash')}<span>${esc(removeN ? t('{n} löschen', { n: num(removeN) }) : t('Übernehmen'))}</span></button>
         </footer>`;
+      if (scroll) { const c = $('.dp-cards', el); c.scrollLeft = scroll[0]; c.scrollTop = scroll[1]; }
       $('[data-close]', el).onclick = close;
       $('[data-prev]', el).onclick = () => next(-1);
       $('[data-next]', el).onclick = () => next(1);
@@ -395,7 +409,16 @@
       for (const c of $$('.dp-card', el)) {
         const id = c.dataset.id;
         $('[data-keep]', c).onclick = () => { if (toggleKeep(g, id)) render(); };
-        $('[data-zoom]', c).onclick = () => fullView([g.id], 0, { member: Math.max(0, g.items.indexOf(id)), onClose: render });
+        // full screen goes on through the following groups; back here on the group it was on
+        $('[data-zoom]', c).onclick = () => fullView(list.map((x) => x.id), i, {
+          member: Math.max(0, g.items.indexOf(id)),
+          onClose: (rest) => {
+            const live = visible();
+            const at = rest.map((gid) => live.findIndex((x) => x.id === gid)).find((n) => n >= 0);
+            if (at !== undefined) i = at;
+            render();
+          },
+        });
       }
     };
     redraws.add(render);
@@ -419,8 +442,8 @@
 
   // ---------------------------------------------------------------------------
   // full screen: one copy at a time, as big as it goes; a tap shows the next copy in
-  // the same place, without a transition, so differences jump out. As a quick round
-  // (round) it goes through the groups ids; from a group's comparison only that one.
+  // the same place, without a transition, so differences jump out. It goes through the
+  // groups ids: a quick round (round), or the groups from a comparison on.
   // ---------------------------------------------------------------------------
   let full = null;
   function fullView(ids, at, { round = false, member = 0, onClose = null } = {}) {
@@ -470,7 +493,7 @@
       redraws.delete(render);
       full = null;
       if (!cmp) document.body.classList.remove('locked');
-      if (onClose) onClose();
+      if (onClose) onClose(ids.slice(pos)); // the group shown and the ones after it
       else redraw();
     };
     SK.layer(el, close);
